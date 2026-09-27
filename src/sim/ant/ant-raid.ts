@@ -43,6 +43,8 @@ import { AntTask, ChamberType, FightingSubState } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
 import {
   chamberStock,
+  colonyFoodCapacity,
+  colonyFoodTotal,
   colonyHasNoDepositTarget,
   depositCarriedFood,
   depositIntoPool,
@@ -250,9 +252,13 @@ function hostileInReach(world: WorldState, id: number, gridColonyId: number, R: 
  *     automatic on a rally into an enemy nest);
  *   - it is empty-handed, not in a duel, and not hungry (a hungry fighter walks
  *     home to eat first, D11 — fighterIsHungry);
- *   - V53+: its own colony has somewhere to store food (not
- *     `colonyHasNoDepositTarget`, D14). A full larder at home gains nothing from
- *     loot: the raider hunts instead, and one already Looting stops;
+ *   - V53+: its own colony has room for the loot (D14). To START, the colony's
+ *     free capacity (`colonyFoodCapacity - colonyFoodTotal`) less what its raids
+ *     have already committed (loads its haulers carry, plus one RAID_CARRY_FP per
+ *     fighter of it already Looting) must be at least RAID_CARRY_FP. One already
+ *     Looting keeps on until the colony has nowhere at all to put food
+ *     (`colonyHasNoDepositTarget`), then stops. Either way it hunts instead: a
+ *     full larder at home gains nothing from loot;
  *   - a FoodStorage chamber of that nest holds food and is reachable from it (the
  *     stock flow field; the entrance pool is never raided, D3);
  *   - no hostile (enemy worker or queen) within RAID_ENGAGE_RADIUS_TILES path
@@ -288,21 +294,61 @@ function lootVerdict(world: WorldState, colony: ColonyRecord, id: number): numbe
   if (gridColony === undefined || !rallyOnEntranceOf(colony, gridColony)) return NOT_A_RAIDER;
   if (ants.foodCarrying[id] !== 0 || ants.combatOpponentId[id] !== -1) return NOT_A_RAIDER;
   if (fighterIsHungry(world, id)) return NOT_A_RAIDER;
-  if (
-    world.simVersion >= SIM_VERSION_V53_NO_LOOT_WHEN_FULL &&
-    colonyHasNoDepositTarget(world, colony)
-  ) {
-    return NOT_A_RAIDER;
+  const looting = ants.subTask[id] === FightingSubState.Looting;
+  if (world.simVersion >= SIM_VERSION_V53_NO_LOOT_WHEN_FULL) {
+    if (looting ? colonyHasNoDepositTarget(world, colony) : !roomForALoad(world, colony)) {
+      return NOT_A_RAIDER;
+    }
   }
   // Hysteresis: a fighter not yet looting starts only for a reachable chamber
   // holding a full load and with nothing hostile within the wider start radius;
   // one looting keeps on while any food is reachable and nothing is in reach.
-  const looting = ants.subTask[id] === FightingSubState.Looting;
   const dir = stockStepDir(world, id, !looting);
   if (dir < -1) return NOT_A_RAIDER;
   const radius = looting ? RAID_ENGAGE_RADIUS_TILES : RAID_START_CLEAR_RADIUS_TILES;
   const blocker = hostileInReach(world, id, gridColonyId, radius);
   return blocker >= 0 ? blocker : LOOT;
+}
+
+/**
+ * V53 — the per-colony committed raid food (see `ScratchArena.raid.committedFp`),
+ * rebuilt from the ant store: every live Hauling fighter's load plus RAID_CARRY_FP
+ * per Looting fighter. Ascending id order; integers only.
+ */
+function rebuildCommittedFp(world: WorldState): Map<number, number> {
+  const raid = getScratch(world).raid;
+  const committed = raid.committedFp;
+  committed.clear();
+  const ants = world.ants;
+  for (let id = 0; id < world.nextEntityId; id++) {
+    if (ants.alive[id] !== 1 || ants.task[id] !== AntTask.Fighting) continue;
+    const sub = ants.subTask[id]!;
+    let fp = 0;
+    if (sub === FightingSubState.Hauling) fp = ants.foodCarrying[id]!;
+    else if (sub === FightingSubState.Looting) fp = RAID_CARRY_FP;
+    if (fp === 0) continue;
+    const c = ants.colonyId[id]!;
+    committed.set(c, (committed.get(c) ?? 0) + fp);
+  }
+  return committed;
+}
+
+/** V53 — adjust colony `c`'s committed raid food by `fp` (a fighter starts or stops looting). */
+function addCommittedFp(world: WorldState, c: number, fp: number): void {
+  const committed = getScratch(world).raid.committedFp;
+  committed.set(c, (committed.get(c) ?? 0) + fp);
+}
+
+/**
+ * V53 — the raid START gate: `colony`'s free capacity, less the food its raids
+ * have already committed to bring home, holds at least one more full load.
+ */
+function roomForALoad(world: WorldState, colony: ColonyRecord): boolean {
+  const raid = getScratch(world).raid;
+  const committed =
+    raid.committedTick === world.tick ? raid.committedFp : rebuildCommittedFp(world);
+  const free = colonyFoodCapacity(colony) - colonyFoodTotal(world, colony);
+  return free - (committed.get(colony.colonyId) ?? 0) >= RAID_CARRY_FP;
 }
 
 /**
@@ -322,7 +368,15 @@ export function updateRaiders(world: WorldState): void {
   // The stock field is recomputed this step whatever a between-ticks caller (a
   // fighterMayLoot query from render or tooling) may have cached: steps 3 and 10b
   // can have moved food or dug since.
-  getScratch(world).raid.stockFieldTick.clear();
+  const raid = getScratch(world).raid;
+  raid.stockFieldTick.clear();
+  // V53: the committed raid food is built once here and kept current through the
+  // loop as fighters start and stop looting (so a later raider sees less room).
+  const v53 = world.simVersion >= SIM_VERSION_V53_NO_LOOT_WHEN_FULL;
+  if (v53) {
+    rebuildCommittedFp(world);
+    raid.committedTick = world.tick;
+  }
   for (let id = 0; id < world.nextEntityId; id++) {
     if (ants.alive[id] !== 1 || ants.task[id] !== AntTask.Fighting) continue;
     const colonyId = ants.colonyId[id]!;
@@ -341,12 +395,17 @@ export function updateRaiders(world: WorldState): void {
     }
     const verdict = lootVerdict(world, colony, id);
     if (verdict === LOOT) {
+      // V53: a raider starting now commits a load (later raiders see less room).
+      if (v53 && sub !== FightingSubState.Looting) addCommittedFp(world, colonyId, RAID_CARRY_FP);
       ants.subTask[id] = FightingSubState.Looting;
       ants.targetPosX[id] = -1;
       ants.targetPosY[id] = -1;
       continue;
     }
-    if (sub === FightingSubState.Looting) ants.subTask[id] = FightingSubState.MovingToRally;
+    if (sub === FightingSubState.Looting) {
+      ants.subTask[id] = FightingSubState.MovingToRally;
+      if (v53) addCommittedFp(world, colonyId, -RAID_CARRY_FP);
+    }
     if (verdict >= 0) {
       // A hostile in reach stopped it: go at THAT one (step 16's invader hunt
       // follows this target; without one it takes the nearest hostile in the nest).
@@ -354,6 +413,9 @@ export function updateRaiders(world: WorldState): void {
       ants.targetPosY[id] = ants.posY[verdict]!;
     }
   }
+  // Outside this pass (a between-ticks fighterMayLoot query) the committed food is
+  // rebuilt on every call, so it can never be read stale.
+  raid.committedTick = -1;
 }
 
 /** Target (tile centre) the open entrance of `colony` nearest to ant `id`

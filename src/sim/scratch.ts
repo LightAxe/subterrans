@@ -152,6 +152,16 @@ export interface ScratchArena {
     reachCurrent: number;
     /** hostileInReach's candidates (hostiles within Manhattan R), refilled per call. */
     reachCand: number[];
+    /**
+     * V53 — per colony, the food (fp) its raids have already committed to bring
+     * home: the loads its live haulers carry plus RAID_CARRY_FP for each fighter
+     * of it that is Looting. Built at the start of each step-10e pass and kept
+     * current through it as fighters start and stop looting; `committedTick` is
+     * the tick of the pass in progress, -1 outside it (a between-ticks
+     * fighterMayLoot query rebuilds it per call).
+     */
+    committedFp: Map<number, number>;
+    committedTick: number;
   };
 }
 
@@ -220,6 +230,8 @@ export function getScratch(world: WorldState): ScratchArena {
         reachQ: new Int32Array(RAID_REACH_WINDOW_CELLS),
         reachCurrent: 0,
         reachCand: [],
+        committedFp: new Map(),
+        committedTick: -1,
       },
     };
     SCRATCH.set(world, a);

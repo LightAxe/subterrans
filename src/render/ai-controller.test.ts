@@ -35,6 +35,7 @@ import {
   createWorldState,
   allocateEntityId,
   SIM_VERSION_V39_SPIDER_TIEBREAK,
+  SIM_VERSION_V52_RAIDING,
 } from '../sim/types.js';
 import { initAnt } from '../sim/ant/ant-store.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
@@ -630,6 +631,25 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const offCadence = { ...world, tick: 1 } as unknown as WorldState;
       aiChamberPlacement(offCadence, colony);
       expect(fsCommands(offCadence)).toHaveLength(0);
+    });
+
+    it('is off below V53: a V52 world never gets the extra chamber', () => {
+      const { world, colony } = settledColony(CAP_ONE_CHAMBER);
+      expect(aiExtraFoodStorageWanted(world, colony)).toBe(true);
+      world.simVersion = SIM_VERSION_V52_RAIDING;
+      expect(aiExtraFoodStorageWanted(world, colony)).toBe(false);
+      aiChamberPlacement(world, colony);
+      expect(fsCommands(world)).toHaveLength(0);
+    });
+
+    it('the near-full threshold is 90 %: 6452 fp of 7168 qualifies, 6451 does not', () => {
+      // Absolute numbers, not derived from the constant: pool 2048 + one chamber
+      // 5120 = 7168 fp capacity; 90 % of it is 6451.2 fp.
+      expect(AI_EXTRA_FOOD_STORAGE_FULL_PCT).toBe(90);
+      const high = settledColony(6452);
+      expect(aiExtraFoodStorageWanted(high.world, high.colony)).toBe(true);
+      const low = settledColony(6451);
+      expect(aiExtraFoodStorageWanted(low.world, low.colony)).toBe(false);
     });
 
     it('is deterministic: the same world yields the same command', () => {
