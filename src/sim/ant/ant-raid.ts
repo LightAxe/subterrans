@@ -255,9 +255,9 @@ function hostileInReach(world: WorldState, id: number, gridColonyId: number, R: 
  *   - V53+: its own colony has room for the loot (D14). To START, the colony's
  *     free capacity (`colonyFoodCapacity - colonyFoodTotal`) less what its raids
  *     have already committed (loads its haulers carry, plus one RAID_CARRY_FP per
- *     fighter of it already Looting) must be at least RAID_CARRY_FP. One already
- *     Looting keeps on until the colony has nowhere at all to put food
- *     (`colonyHasNoDepositTarget`), then stops. Either way it hunts instead: a
+ *     fighter of it already Looting) must be at least RAID_CARRY_FP, and the colony
+ *     must have somewhere to deposit (not `colonyHasNoDepositTarget`). One already
+ *     Looting keeps on until the colony has nowhere at all to put food, then stops. Either way it hunts instead: a
  *     full larder at home gains nothing from loot;
  *   - a FoodStorage chamber of that nest holds food and is reachable from it (the
  *     stock flow field; the entrance pool is never raided, D3);
@@ -296,7 +296,11 @@ function lootVerdict(world: WorldState, colony: ColonyRecord, id: number): numbe
   if (fighterIsHungry(world, id)) return NOT_A_RAIDER;
   const looting = ants.subTask[id] === FightingSubState.Looting;
   if (world.simVersion >= SIM_VERSION_V53_NO_LOOT_WHEN_FULL) {
-    if (looting ? colonyHasNoDepositTarget(world, colony) : !roomForALoad(world, colony)) {
+    // Stop: nowhere at all to put food. Start also needs room for a whole load.
+    // Both gates must hold to start: with 3+ FoodStorage chambers each can sit
+    // under its 512 fp deposit hysteresis while the total free space still holds
+    // a load, and a start the stop gate refuses next tick would flip every tick.
+    if (colonyHasNoDepositTarget(world, colony) || (!looting && !roomForALoad(world, colony))) {
       return NOT_A_RAIDER;
     }
   }

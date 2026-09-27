@@ -1127,7 +1127,8 @@ export const SIM_VERSION_V52_RAIDING = 52 as const;
  *   - to START, the colony's free capacity (`colonyFoodCapacity - colonyFoodTotal`)
  *     less what its raids have already committed (the loads its haulers carry,
  *     plus RAID_CARRY_FP per fighter of it already Looting, kept current through
- *     the step-10e pass) must hold one more full load (RAID_CARRY_FP);
+ *     the step-10e pass) must hold one more full load (RAID_CARRY_FP), and some
+ *     store must accept a deposit (not `colonyHasNoDepositTarget`);
  *   - one already Looting keeps on until the colony has nowhere at all to put
  *     food (`colonyHasNoDepositTarget`), then stops at its next step-10e decision.
  * A fighter that may not loot hunts, as a raider with an empty larder does (D10).
