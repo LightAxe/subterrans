@@ -30,11 +30,17 @@
 // depend only on Layer 0 (ant-motion/ant-store) and are consumed through the
 // ant-system.ts barrel. `despawnAnt` depends on NO Layer-0 module and on six root ones
 // (telemetry, food-system, pheromone/*, ai-state, constants, types); its production
-// callers are combat.ts and colony/{colony,lifecycle}-system.ts, none of which imports
-// the ant barrel. Moving it under ant/ would pull telemetry/ai-state/food-system into
-// the ant subsystem and make the colony subsystem import the ant public surface to
-// kill an ant. It also has no intra-ant imports, so check-ant-cycles.ts (which guards
-// the ant/ graph) has nothing to say about it either way.
+// callers are combat.ts and colony/{colony,lifecycle}-system.ts. Moving it under ant/
+// would pull telemetry/ai-state/food-system into the ant subsystem and make the colony
+// subsystem import the ant public surface to kill an ant.
+//
+// From V52 (#290 PR 5) it also calls the ant subsystem once, `dropHaulerLoad`, and does
+// so through the ant-system.ts barrel (#212). That import closes a runtime module cycle:
+// ant-death -> ant/ant-system -> ant/ant-nursing -> colony/colony-system -> ant-death.
+// It is harmless because every binding crossing it is a function declaration called only
+// during a tick, never while modules load. Keep it that way: nothing in this cycle may
+// read an imported value at module top level. check-ant-cycles.ts guards only the ant/
+// graph, so it does not see this root-level cycle.
 //
 // MUST NOT import Phaser, DOM, or any non-sim module.
 
@@ -54,7 +60,7 @@ import { depositDangerCross } from './pheromone/danger.js';
 import { KILL_ALARM_DANGER_DEPOSIT } from './constants.js';
 import { isInCohort } from './ai-state.js';
 // #290 PR 5 (V52) — a hauler's load on death (the raid policy owns the rule).
-import { dropHaulerLoad } from './ant/ant-raid.js';
+import { dropHaulerLoad } from './ant/ant-system.js';
 
 /**
  * How an ant died. `kill` carries the attacker, which the combat_kill event, the
