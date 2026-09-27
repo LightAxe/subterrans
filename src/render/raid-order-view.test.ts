@@ -34,7 +34,7 @@ import { contextMenuState, hideContextMenu } from './context-menu-state.js';
 import { handleSetRallyPoint, tryOpenRaidMenu } from '../input/surface-input.js';
 import { RaidType } from '../sim/enums.js';
 import { createScenario } from '../sim/scenario.js';
-import { SIM_VERSION_V57_ROUTED_TO_ENTRANCE, type WorldState } from '../sim/types.js';
+import { SIM_VERSION_V59_INVADER_RETARGET, type WorldState } from '../sim/types.js';
 import { ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
 import { makeCameraView } from './camera-adapter.js';
 import type { ViewState } from './camera.js';
@@ -164,7 +164,7 @@ describe('the order caption', () => {
     );
     expect(raidOrderOfRally(w, PLAYER_COLONY_ID, cmd({ raidType: 7 as RaidType }))).toBeNull();
     expect(raidOrderOfRally(w, PLAYER_COLONY_ID, cmd({ tileX: d.x - 20 }))).toBeNull();
-    w.simVersion = SIM_VERSION_V57_ROUTED_TO_ENTRANCE;
+    w.simVersion = SIM_VERSION_V59_INVADER_RETARGET;
     expect(raidOrderOfRally(w, PLAYER_COLONY_ID, cmd({}))).toBeNull();
   });
 });
@@ -185,7 +185,7 @@ describe('activeRaidOrder and the rally badge', () => {
     c.rallyPoint = { tileX: own.surfaceTileX, tileY: own.surfaceTileY };
     expect(activeRaidOrder(w, PLAYER_COLONY_ID)).toBeNull(); // own entrance: tunnel defence
     c.rallyPoint = { tileX: d.x, tileY: d.y };
-    w.simVersion = SIM_VERSION_V57_ROUTED_TO_ENTRANCE;
+    w.simVersion = SIM_VERSION_V59_INVADER_RETARGET;
     expect(activeRaidOrder(w, PLAYER_COLONY_ID)).toBeNull();
   });
 
@@ -279,7 +279,7 @@ describe('input: opening the raid menu and sending the pick', () => {
     expect(
       tryOpenRaidMenu(w, { ...surfaceView(), activeView: 'underground' }, 0, 0, d.x, d.y),
     ).toBe(false);
-    w.simVersion = SIM_VERSION_V57_ROUTED_TO_ENTRANCE;
+    w.simVersion = SIM_VERSION_V59_INVADER_RETARGET;
     expect(tryOpenRaidMenu(w, surfaceView(), 0, 0, d.x, d.y)).toBe(false);
     expect(contextMenuState.pendingShow).toBe(false);
   });

@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { serializeWorldState, deserializeWorldState } from './save.js';
 import type { SerializedWorldState } from './save.js';
 import { createScenario } from '../sim/scenario.js';
-import { SIM_VERSION_V57_ROUTED_TO_ENTRANCE } from '../sim/types.js';
+import { SIM_VERSION_V59_INVADER_RETARGET } from '../sim/types.js';
 import { ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
 import { RaidType } from '../sim/enums.js';
 
@@ -46,11 +46,11 @@ describe('#352 (V60) — ColonyRecord.raidType save field', () => {
 
   it('a pre-V60 save (no field anywhere) loads, every colony Loot', () => {
     const world = createScenario(7);
-    world.simVersion = SIM_VERSION_V57_ROUTED_TO_ENTRANCE;
+    world.simVersion = SIM_VERSION_V59_INVADER_RETARGET;
     const { save, colonies } = raw(world);
     for (const c of Object.values(colonies)) expect('raidType' in c).toBe(false);
     const loaded = deserializeWorldState(save);
-    expect(loaded.simVersion).toBe(SIM_VERSION_V57_ROUTED_TO_ENTRANCE);
+    expect(loaded.simVersion).toBe(SIM_VERSION_V59_INVADER_RETARGET);
     for (const c of Object.values(loaded.colonies)) expect(c.raidType).toBe(RaidType.Loot);
   });
 
@@ -65,7 +65,7 @@ describe('#352 (V60) — ColonyRecord.raidType save field', () => {
 
   it('rejects a non-Loot raid type in a pre-V60 save', () => {
     const world = createScenario(7);
-    world.simVersion = SIM_VERSION_V57_ROUTED_TO_ENTRANCE;
+    world.simVersion = SIM_VERSION_V59_INVADER_RETARGET;
     const { save, colonies } = raw(world);
     colonies[String(PLAYER_COLONY_ID)]!['raidType'] = RaidType.Deny;
     expect(() => deserializeWorldState(save)).toThrow(/before V60/);

@@ -14,7 +14,7 @@ import { tick } from './tick.js';
 import {
   copyWorldState,
   createWorldState,
-  SIM_VERSION_V57_ROUTED_TO_ENTRANCE,
+  SIM_VERSION_V59_INVADER_RETARGET,
   SIM_VERSION_V60_RAID_ORDERS,
   type WorldState,
 } from './types.js';
@@ -184,7 +184,7 @@ describe('the raid order on the colony (V60)', () => {
   it('below V60 the raid type is ignored: the rally is set, the colony stays Loot', () => {
     const r = raidWorld();
     const w = r.world;
-    w.simVersion = SIM_VERSION_V57_ROUTED_TO_ENTRANCE;
+    w.simVersion = SIM_VERSION_V59_INVADER_RETARGET;
     const at = { colonyId: P, tileX: r.enemyDoor.x, tileY: r.enemyDoor.y, issuedAtTick: 0 };
     tick(w, [{ type: 'SetRallyPoint', ...at, raidType: RaidType.Spoil }]);
     expect(r.player.rallyPoint).toEqual({ tileX: r.enemyDoor.x, tileY: r.enemyDoor.y });
@@ -974,7 +974,7 @@ describe('Blockade (V60)', () => {
     const r = raidWorld(3000);
     const w = r.world;
     order(r, RaidType.Blockade);
-    w.simVersion = SIM_VERSION_V57_ROUTED_TO_ENTRANCE;
+    w.simVersion = SIM_VERSION_V59_INVADER_RETARGET;
     const [id] = blockaders(r, 1);
     expect(run(w, 300, () => w.ants.zone[id!] === Zone.Underground)).toBeGreaterThan(0);
     const w2 = raidWorld(3000);

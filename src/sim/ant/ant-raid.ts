@@ -521,9 +521,14 @@ export function updateRaiders(world: WorldState): void {
  * #352 (V60) — the queen fighter `id` of `colony` goes for on an Assault, or -1:
  * its colony's raid type is Assault, it is below ground in a FOREIGN nest whose
  * open entrance its colony is rallied on, it is not in a duel (a fight it is in
- * comes first: with no target, step 16's hunt takes the nearest hostile, which is
- * the one on its tile), and that nest's queen is alive and below ground in it. A
- * hungry one step 10c sent home to eat walks out before step 16 reads a target.
+ * comes first: with no target, step 16's hunt fights the foe it is paired with),
+ * and that nest's queen is alive and below ground in it. A hungry one step 10c
+ * sent home to eat walks out before step 16 reads a target.
+ *
+ * Deliberately NOT filtered by #364's saturation rule (tileSaturatedFor): the order
+ * is "go for the queen", so assaulters converge on her tile even while a friend
+ * holds the duel there, and queue for her rather than turning to free enemy
+ * workers (an aimed raider follows its aim, not the V59 hunt).
  */
 function assaultQueenOf(world: WorldState, colony: ColonyRecord, id: number): number {
   if (colonyRaidType(world, colony) !== RaidType.Assault) return -1;

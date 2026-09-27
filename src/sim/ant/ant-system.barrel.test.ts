@@ -52,7 +52,7 @@ describe('ant-system barrel public API (#212)', () => {
     });
   }
 
-  it('exports EXACTLY the 33 public functions (no accidental widening or narrowing)', () => {
+  it('exports EXACTLY the 34 public functions (no accidental widening or narrowing)', () => {
     const exportedFns = Object.keys(barrel)
       .filter((k) => typeof (barrel as Record<string, unknown>)[k] === 'function')
       .sort();
