@@ -136,6 +136,7 @@ export function invaderHuntStep(
   // Pass 2 — the tiles holding a hostile (`anyHostile`), and of those the ones not
   // saturated for it (`hostile`, free).
   let hostiles = 0;
+  let free = 0;
   for (let o = 0; o < ants.alive.length; o++) {
     if (ants.alive[o] !== 1) continue;
     const cid = ants.colonyId[o]!;
@@ -151,6 +152,7 @@ export function invaderHuntStep(
     hostiles++;
     if (cell === start ? ownTileHeld : friend[cell] === stamp) continue;
     hostile[cell] = stamp;
+    free++;
   }
   if (hostiles === 0) return NO_FREE_HOSTILE;
 
@@ -173,6 +175,9 @@ export function invaderHuntStep(
     head++;
     const cell = cy * width + cx;
     if (hostile[cell] === stamp) return firstStep[cell]!;
+    // With no free hostile at all, the nearest queue is the answer (see the order
+    // below): stop at it rather than search the whole nest.
+    if (free === 0 && queueStep !== NO_FREE_HOSTILE) return queueStep;
     if (anyHostile[cell] === stamp && queueStep === NO_FREE_HOSTILE) queueStep = firstStep[cell]!;
     for (let i = 0; i < DIR_DX.length; i++) {
       const nx = cx + DIR_DX[i]!;
@@ -206,6 +211,9 @@ export function invaderHuntStep(
   // fresh `seen` stamp, `hostile`/`anyHostile` keep this call's.)
   let freeBeyond = false;
   let anyBeyond = false;
+  // (With no free hostile, only anyBeyond matters and only without a queue; with
+  // a queue, only freeBeyond.)
+  if (free === 0 && queueStep !== NO_FREE_HOSTILE) return queueStep;
   if (blocked && rt.stamp < 0x7fffffff) {
     const reach = (rt.stamp += 1);
     seen[start] = reach;
@@ -213,13 +221,20 @@ export function invaderHuntStep(
     queueY[0] = selfY;
     head = 0;
     tail = 1;
-    while (head < tail && !freeBeyond) {
+    while (head < tail) {
       const cx = queueX[head]!;
       const cy = queueY[head]!;
       head++;
       const cell = cy * width + cx;
-      if (hostile[cell] === stamp) freeBeyond = true;
-      if (anyHostile[cell] === stamp) anyBeyond = true;
+      if (hostile[cell] === stamp) {
+        freeBeyond = true;
+        break;
+      }
+      if (anyHostile[cell] === stamp) {
+        anyBeyond = true;
+        // With no free hostile anywhere, freeBeyond cannot follow: settled.
+        if (free === 0) break;
+      }
       for (let i = 0; i < DIR_DX.length; i++) {
         const nx = cx + DIR_DX[i]!;
         const ny = cy + DIR_DY[i]!;
