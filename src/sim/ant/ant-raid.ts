@@ -43,8 +43,7 @@ import { AntTask, ChamberType, FightingSubState } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
 import {
   chamberStock,
-  colonyFoodCapacity,
-  colonyFoodTotal,
+  colonyDepositableRoom,
   colonyHasNoDepositTarget,
   depositCarriedFood,
   depositIntoPool,
@@ -252,13 +251,15 @@ function hostileInReach(world: WorldState, id: number, gridColonyId: number, R: 
  *     automatic on a rally into an enemy nest);
  *   - it is empty-handed, not in a duel, and not hungry (a hungry fighter walks
  *     home to eat first, D11 — fighterIsHungry);
- *   - V53+: its own colony has room for the loot (D14). To START, the colony's
- *     free capacity (`colonyFoodCapacity - colonyFoodTotal`) less what its raids
- *     have already committed (loads its haulers carry, plus one RAID_CARRY_FP per
- *     fighter of it already Looting) must be at least RAID_CARRY_FP, and the colony
- *     must have somewhere to deposit (not `colonyHasNoDepositTarget`). One already
- *     Looting keeps on until the colony has nowhere at all to put food, then stops. Either way it hunts instead: a
- *     full larder at home gains nothing from loot;
+ *   - V53+: its own colony has room for the loot (D14). To START, the room it can
+ *     actually deposit into (`colonyDepositableRoom`: pool headroom plus the free
+ *     space of each chamber that accepts a deposit) less what its raids have
+ *     already committed (loads its haulers carry, plus one RAID_CARRY_FP per
+ *     fighter of it already Looting) must be at least RAID_CARRY_FP, and the
+ *     colony must have somewhere to deposit (not `colonyHasNoDepositTarget`). One
+ *     already Looting keeps on until the colony has nowhere at all to put food,
+ *     then stops. Either way it hunts instead: a full larder at home gains nothing
+ *     from loot;
  *   - a FoodStorage chamber of that nest holds food and is reachable from it (the
  *     stock flow field; the entrance pool is never raided, D3);
  *   - no hostile (enemy worker or queen) within RAID_ENGAGE_RADIUS_TILES path
@@ -344,15 +345,18 @@ function addCommittedFp(world: WorldState, c: number, fp: number): void {
 }
 
 /**
- * V53 — the raid START gate: `colony`'s free capacity, less the food its raids
- * have already committed to bring home, holds at least one more full load.
+ * V53 — the raid START gate: the room `colony` can actually deposit into
+ * (`colonyDepositableRoom`: pool headroom plus the free space of each chamber
+ * that accepts a deposit — raw free capacity would count chambers under the
+ * deposit hysteresis, which take nothing), less the food its raids have already
+ * committed to bring home, holds at least one more full load.
  */
 function roomForALoad(world: WorldState, colony: ColonyRecord): boolean {
   const raid = getScratch(world).raid;
   const committed =
     raid.committedTick === world.tick ? raid.committedFp : rebuildCommittedFp(world);
-  const free = colonyFoodCapacity(colony) - colonyFoodTotal(world, colony);
-  return free - (committed.get(colony.colonyId) ?? 0) >= RAID_CARRY_FP;
+  const room = colonyDepositableRoom(world, colony);
+  return room - (committed.get(colony.colonyId) ?? 0) >= RAID_CARRY_FP;
 }
 
 /**

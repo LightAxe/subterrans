@@ -225,9 +225,10 @@ chamber's **stock** and **hauls** it (`Hauling`): out of the enemy nest, home
 across the surface, down its own entrance, into its own FoodStorage chamber (or
 pool), then back to its rally point. A hostile in reach is fought first; once the
 chambers are empty the fighters go for the queen. From V53 a fighter loots only if
-its **own** colony has room for the loot: it starts only when the free space left
-after the loads its colony's raiders already carry or are going for holds one more
-load, and a looter stops once there is nowhere at all to put food. Otherwise it
+its **own** colony has room for the loot: it starts only when the space its stores
+can still take in (the pool's headroom plus each FoodStorage chamber that still
+accepts deposits; a nearly full chamber takes none), after the loads its colony's
+raiders already carry or are going for, holds one more load, and a looter stops once there is nowhere at all to put food. Otherwise it
 hunts instead; a hauler already carrying still brings its load home. The entrance **pool** is never
 raided. A hauler that dies drops its load (on the surface as a food pile; in the
 enemy nest into that colony's pool). Every "may this fighter loot?" rule lives in

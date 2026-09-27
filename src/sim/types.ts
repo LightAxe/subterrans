@@ -1124,10 +1124,12 @@ export const SIM_VERSION_V52_RAIDING = 52 as const;
 /**
  * #290 PR 6b (V53) — owner decision D14: a fighter loots only when its own colony
  * has room for the loot (`lootVerdict`, ant-raid.ts):
- *   - to START, the colony's free capacity (`colonyFoodCapacity - colonyFoodTotal`)
- *     less what its raids have already committed (the loads its haulers carry,
- *     plus RAID_CARRY_FP per fighter of it already Looting, kept current through
- *     the step-10e pass) must hold one more full load (RAID_CARRY_FP), and some
+ *   - to START, the room the colony can actually deposit into
+ *     (`colonyDepositableRoom`: pool headroom plus the free space of each
+ *     FoodStorage chamber that accepts a deposit), less what its raids have
+ *     already committed (the loads its haulers carry, plus RAID_CARRY_FP per
+ *     fighter of it already Looting, kept current through the step-10e pass),
+ *     must hold one more full load (RAID_CARRY_FP), and some
  *     store must accept a deposit (not `colonyHasNoDepositTarget`);
  *   - one already Looting keeps on until the colony has nowhere at all to put
  *     food (`colonyHasNoDepositTarget`), then stops at its next step-10e decision.

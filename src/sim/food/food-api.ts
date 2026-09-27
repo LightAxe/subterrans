@@ -110,6 +110,29 @@ export function colonyFoodCapacity(colony: ColonyRecord): number {
 }
 
 /**
+ * #290 PR 6b (V53) — room (fp) that carried food can actually be deposited into,
+ * by the rules of `depositCarriedFood`: the entrance pool's headroom (it takes any
+ * amount up to BASE_FOOD_STORAGE_CAPACITY) plus the whole free space of each
+ * DEPOSITABLE FoodStorage chamber (`isFoodChamberDepositable`: at least
+ * FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP free; one that is takes up to its full free
+ * space). A chamber under the hysteresis accepts nothing, so its free space does
+ * not count. Integer-only; no allocation.
+ */
+export function colonyDepositableRoom(world: WorldState, colony: ColonyRecord): number {
+  let room = 0;
+  if (colony.poolSlot >= 0) {
+    const poolFree = BASE_FOOD_STORAGE_CAPACITY - colonyPoolFood(world, colony);
+    if (poolFree > 0) room += poolFree;
+  }
+  for (let c = 0; c < colony.chambers.length; c++) {
+    const ch = colony.chambers[c]!;
+    if (isFoodChamberDepositable(world, ch))
+      room += FOOD_CHAMBER_CAPACITY - chamberStock(world, ch);
+  }
+  return room;
+}
+
+/**
  * Food in the colony's entrance pool (fp). Deposits cap it at
  * BASE_FOOD_STORAGE_CAPACITY; only the test/bench setter can push it past that.
  */

@@ -35,6 +35,9 @@ import { Zone } from './terrain.js';
 import { FP_SHIFT } from './fixed.js';
 import {
   chamberStock,
+  colonyDepositableRoom,
+  colonyFoodCapacity,
+  colonyFoodTotal,
   colonyHasNoDepositTarget,
   colonyPoolFood,
   pileAmountFp,
@@ -1061,7 +1064,11 @@ describe('no loot while the raider’s own stores are full (V53, D14)', () => {
 
   /** Raid world whose player owns three FoodStorage chambers, each held at
    *  `freeEach` fp below cap every tick (pool full, player queen and larvae fed). */
-  function threeChamberWorld(freeEach: number): { r: RaidWorld; freeze: () => void } {
+  function threeChamberWorld(freeEach: number | readonly [number, number, number]): {
+    r: RaidWorld;
+    freeze: () => void;
+  } {
+    const frees = typeof freeEach === 'number' ? [freeEach, freeEach, freeEach] : freeEach;
     const r = raidWorld(3000);
     const w = r.world;
     const extra = [0, 1].map((i) =>
@@ -1081,14 +1088,49 @@ describe('no loot while the raider’s own stores are full (V53, D14)', () => {
     );
     const freeze = (): void => {
       setPoolFoodForTest(w, r.player, BASE_FOOD_STORAGE_CAPACITY);
-      for (const ch of [r.playerLarder, ...extra]) {
-        setChamberStockForTest(w, r.player, ch, FOOD_CHAMBER_CAPACITY - freeEach);
-      }
+      [r.playerLarder, ...extra].forEach((ch, i) =>
+        setChamberStockForTest(w, r.player, ch, FOOD_CHAMBER_CAPACITY - frees[i]!),
+      );
       w.ants.lastMealTick[r.player.queenEntityId] = w.tick;
       for (const l of r.player.larvae) w.ants.lastMealTick[l] = w.tick;
     };
     return { r, freeze };
   }
+
+  it('counts only room a deposit can use: pool full, chambers 512 + 256 + 256 free → no start', () => {
+    // Codex P2 (PR #351): raw free capacity is 1024 = RAID_CARRY_FP, but the two
+    // 256-fp chambers are under the 512-fp deposit hysteresis and take nothing,
+    // so a load would store 512 and park the rest.
+    const { r, freeze } = threeChamberWorld([512, 256, 256]);
+    const w = r.world;
+    rallyOn(r.player, r.enemyDoor);
+    const id = addFighter(w, P, 100, 6, E);
+    freeze();
+    expect(colonyFoodCapacity(r.player) - colonyFoodTotal(w, r.player)).toBe(RAID_CARRY_FP);
+    expect(colonyDepositableRoom(w, r.player)).toBe(512);
+    expect(colonyHasNoDepositTarget(w, r.player)).toBe(false); // the stop gate alone passes
+    expect(fighterMayLoot(w, r.player, id)).toBe(false);
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).not.toBe(FightingSubState.Looting);
+  });
+
+  it('… while 512 + 512 + 0 free (both depositable, 1024 usable) starts', () => {
+    const { r, freeze } = threeChamberWorld([512, 512, 0]);
+    const w = r.world;
+    rallyOn(r.player, r.enemyDoor);
+    const id = addFighter(w, P, 100, 6, E);
+    freeze();
+    expect(colonyDepositableRoom(w, r.player)).toBe(RAID_CARRY_FP);
+    expect(fighterMayLoot(w, r.player, id)).toBe(true);
+  });
+
+  it('colonyDepositableRoom: pool headroom plus each depositable chamber’s whole free space', () => {
+    const { r, freeze } = threeChamberWorld([600, 511, 0]);
+    const w = r.world;
+    freeze();
+    setPoolFoodForTest(w, r.player, BASE_FOOD_STORAGE_CAPACITY - 7);
+    expect(colonyDepositableRoom(w, r.player)).toBe(7 + 600); // 511 < hysteresis: none
+  });
 
   it('3 chambers each under the deposit hysteresis (1200 fp free in all): no start, it hunts', () => {
     // Regression (PR 6b review): every chamber refuses a deposit (< 512 fp free)
