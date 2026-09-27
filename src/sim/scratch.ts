@@ -106,14 +106,15 @@ export interface ScratchArena {
     >;
     /** #364 (V59) — invader-retarget.ts's per-call buffers, sized to the largest
      *  nest grid seen: a cell equal to `stamp` holds a friend (`friend`), is
-     *  claimed by a lower-id friend (`block`), holds a free hostile (`hostile`) or
-     *  was reached by the BFS (`seen`) THIS call;
+     *  claimed by a lower-id friend (`block`), holds any hostile (`anyHostile`) or
+     *  a free one (`hostile`), or was reached by the BFS (`seen`) THIS call;
      *  `firstStep` is the reached cell's first step. Stamps, not clears: each call
      *  bumps `stamp`. */
     retarget: {
       friend: Int32Array;
       block: Int32Array;
       hostile: Int32Array;
+      anyHostile: Int32Array;
       seen: Int32Array;
       firstStep: Int32Array;
       queueX: Int32Array;
@@ -228,6 +229,7 @@ export function getScratch(world: WorldState): ScratchArena {
           friend: new Int32Array(0),
           block: new Int32Array(0),
           hostile: new Int32Array(0),
+          anyHostile: new Int32Array(0),
           seen: new Int32Array(0),
           firstStep: new Int32Array(0),
           queueX: new Int32Array(0),

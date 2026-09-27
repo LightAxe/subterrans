@@ -22,14 +22,18 @@
 // isOccupancyExempt): the occupancy pass runs in id order, so the lower id keeps
 // the tile and the invader would be bumped back off it. (A higher-id friend's
 // tile is a way through: that friend is the one bumped. Lower ids have already
-// moved this tick, so their tiles are the ones the occupancy pass will see.) When
-// friends block every way to a free hostile the tunnels do reach, the invader
-// holds its place; with none reachable through the tunnels at all it hunts as
-// before V59 (the nearest hostile by Manhattan, the wall-aware step): it keeps
-// its place in the queue.
+// moved this tick, so their tiles are the ones the occupancy pass will see.)
+// With no free hostile it can reach past its friends, it keeps to the same path
+// metric: it holds its place when the tunnels reach a free hostile beyond its
+// friends; else it walks to the nearest QUEUE by path (a saturated hostile's
+// tile, or the tile beside one a friend's claim keeps it off); else, with hostiles
+// only beyond its friends, it holds. Only with no hostile the tunnels reach at all
+// does it hunt as before V59 (the nearest by Manhattan, the wall-aware step).
 //
 // Cost: two passes over the ants (friends, then hostiles) and one BFS that stops
-// at the first free hostile — in place of V58's one pass and one BFS to the target.
+// at the first free hostile — in place of V58's one pass and one BFS to the target
+// — plus, only when a friend was in the way and no free hostile was reached, one
+// walls-only BFS.
 // Deterministic: id-order scans, fixed N/E/S/W expansion.
 import { AntTask } from '../enums.js';
 import { FP_SHIFT } from '../fixed.js';
@@ -44,7 +48,7 @@ import {
   packStep,
 } from './ant-motion.js';
 
-/** invaderHuntStep's result when no free hostile is reachable (or below V59). */
+/** invaderHuntStep's result when the tunnels reach no hostile at all (or below V59). */
 export const NO_FREE_HOSTILE = -1;
 
 /**
@@ -53,12 +57,12 @@ export const NO_FREE_HOSTILE = -1;
  * tile is not saturated for it (tileSaturatedFor's rule). Hostiles are the ants of
  * any other non-neutral colony in the nest — workers, the queen and brood, the set
  * pickNearestHostileUnderground hunts (brood included; the raid reach check,
- * ant-raid.ts hostileInReach, counts adults only). (0, 0) when such a hostile shares
- * its own tile, or when the tunnels reach one but lower-id friends block every way
- * to it (it holds its place). NO_FREE_HOSTILE when there is none, none is reachable through
- * the tunnels, the nest has no grid, or below V59. `claimsNoTile` is the
- * occupancy pass's per-ant rule (ant-movement.ts): a friend it holds for neither
- * bumps nor blocks.
+ * ant-raid.ts hostileInReach, counts adults only). With none it can reach past its
+ * friends: (0, 0) when the tunnels reach a free one beyond them; else a step toward
+ * the nearest queue by path (0, 0 beside it); else (0, 0) when hostiles lie only
+ * beyond its friends. NO_FREE_HOSTILE when the tunnels reach no hostile at all,
+ * the nest has no grid, or below V59. `claimsNoTile` is the occupancy pass's
+ * per-ant rule (ant-movement.ts): a friend it holds for neither bumps nor blocks.
  */
 export function invaderHuntStep(
   world: WorldState,
@@ -83,6 +87,7 @@ export function invaderHuntStep(
     rt.friend = new Int32Array(cells);
     rt.block = new Int32Array(cells);
     rt.hostile = new Int32Array(cells);
+    rt.anyHostile = new Int32Array(cells);
     rt.seen = new Int32Array(cells);
     rt.firstStep = new Int32Array(cells);
     rt.queueX = new Int32Array(cells);
@@ -93,6 +98,7 @@ export function invaderHuntStep(
     rt.friend.fill(0);
     rt.block.fill(0);
     rt.hostile.fill(0);
+    rt.anyHostile.fill(0);
     rt.seen.fill(0);
     rt.stamp = 0;
   }
@@ -100,6 +106,7 @@ export function invaderHuntStep(
   const friend = rt.friend;
   const block = rt.block;
   const hostile = rt.hostile;
+  const anyHostile = rt.anyHostile;
   const seen = rt.seen;
   const firstStep = rt.firstStep;
   const queueX = rt.queueX;
@@ -126,8 +133,9 @@ export function invaderHuntStep(
       if (!claimsNoTile(world, o)) block[cell] = stamp;
     }
   }
-  // Pass 2 — the tiles holding a hostile that are not saturated for it.
-  let free = 0;
+  // Pass 2 — the tiles holding a hostile (`anyHostile`), and of those the ones not
+  // saturated for it (`hostile`, free).
+  let hostiles = 0;
   for (let o = 0; o < ants.alive.length; o++) {
     if (ants.alive[o] !== 1) continue;
     const cid = ants.colonyId[o]!;
@@ -139,16 +147,20 @@ export function invaderHuntStep(
     const hy = ants.posY[o]! >> FP_SHIFT;
     if (hx < 0 || hy < 0 || hx >= width || hy >= height) continue;
     const cell = hy * width + hx;
+    anyHostile[cell] = stamp;
+    hostiles++;
     if (cell === start ? ownTileHeld : friend[cell] === stamp) continue;
     hostile[cell] = stamp;
-    free++;
   }
-  if (free === 0) return NO_FREE_HOSTILE;
+  if (hostiles === 0) return NO_FREE_HOSTILE;
 
   // Pass 3 — BFS from its tile, fixed N/E/S/W order, through tiles a fighter can
   // enter and no lower-id friend claims (unless friends stack there), to the first
   // tile holding a free hostile; each cell carries the first step of the path to it.
+  // On the way it notes the nearest QUEUE: the first saturated hostile's tile it
+  // reaches, or the tile next to the first one a friend's claim keeps it off.
   let blocked = false;
+  let queueStep = NO_FREE_HOSTILE;
   seen[start] = stamp;
   firstStep[start] = packStep(0, 0);
   queueX[0] = selfX;
@@ -161,6 +173,7 @@ export function invaderHuntStep(
     head++;
     const cell = cy * width + cx;
     if (hostile[cell] === stamp) return firstStep[cell]!;
+    if (anyHostile[cell] === stamp && queueStep === NO_FREE_HOSTILE) queueStep = firstStep[cell]!;
     for (let i = 0; i < DIR_DX.length; i++) {
       const nx = cx + DIR_DX[i]!;
       const ny = cy + DIR_DY[i]!;
@@ -176,6 +189,9 @@ export function invaderHuntStep(
         !isOccupancyExempt(world, gridColonyId, Zone.Underground, nx, ny)
       ) {
         blocked = true;
+        if (anyHostile[ncell] === stamp && queueStep === NO_FREE_HOSTILE) {
+          queueStep = firstStep[cell]!; // up to the tile beside it, then hold
+        }
         continue;
       }
       firstStep[ncell] = cell === start ? packStep(DIR_DX[i]!, DIR_DY[i]!) : firstStep[cell]!;
@@ -184,31 +200,44 @@ export function invaderHuntStep(
       tail++;
     }
   }
-  if (!blocked) return NO_FREE_HOSTILE;
-  // Friends were in the way. If a free hostile lies beyond them (the tunnels reach
-  // one when friends are ignored), hold its place until they move on; else hunt
-  // as before V59. (A fresh `seen` stamp; `hostile` keeps this call's.)
-  if (rt.stamp >= 0x7fffffff) return NO_FREE_HOSTILE; // defensive: stamp exhausted
-  const reach = (rt.stamp += 1);
-  seen[start] = reach;
-  head = 0;
-  tail = 1;
-  while (head < tail) {
-    const cx = queueX[head]!;
-    const cy = queueY[head]!;
-    head++;
-    if (hostile[cy * width + cx] === stamp) return packStep(0, 0);
-    for (let i = 0; i < DIR_DX.length; i++) {
-      const nx = cx + DIR_DX[i]!;
-      const ny = cy + DIR_DY[i]!;
-      if (!canEnterUndergroundTile(grid, nx, ny, AntTask.Fighting)) continue;
-      const ncell = ny * width + nx;
-      if (seen[ncell] === reach) continue;
-      seen[ncell] = reach;
-      queueX[tail] = nx;
-      queueY[tail] = ny;
-      tail++;
+
+  // No free hostile it can reach past its friends. Which hostiles do the tunnels
+  // reach when friends are ignored? (Only asked when a friend was in the way; a
+  // fresh `seen` stamp, `hostile`/`anyHostile` keep this call's.)
+  let freeBeyond = false;
+  let anyBeyond = false;
+  if (blocked && rt.stamp < 0x7fffffff) {
+    const reach = (rt.stamp += 1);
+    seen[start] = reach;
+    queueX[0] = selfX;
+    queueY[0] = selfY;
+    head = 0;
+    tail = 1;
+    while (head < tail && !freeBeyond) {
+      const cx = queueX[head]!;
+      const cy = queueY[head]!;
+      head++;
+      const cell = cy * width + cx;
+      if (hostile[cell] === stamp) freeBeyond = true;
+      if (anyHostile[cell] === stamp) anyBeyond = true;
+      for (let i = 0; i < DIR_DX.length; i++) {
+        const nx = cx + DIR_DX[i]!;
+        const ny = cy + DIR_DY[i]!;
+        if (!canEnterUndergroundTile(grid, nx, ny, AntTask.Fighting)) continue;
+        const ncell = ny * width + nx;
+        if (seen[ncell] === reach) continue;
+        seen[ncell] = reach;
+        queueX[tail] = nx;
+        queueY[tail] = ny;
+        tail++;
+      }
     }
   }
+  // A free hostile beyond its friends: hold its place until they move on.
+  if (freeBeyond) return packStep(0, 0);
+  // Else the nearest queue by path (one metric throughout, V59).
+  if (queueStep !== NO_FREE_HOSTILE) return queueStep;
+  // Hostiles only beyond its friends: hold.
+  if (anyBeyond) return packStep(0, 0);
   return NO_FREE_HOSTILE;
 }

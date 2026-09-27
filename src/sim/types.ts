@@ -1280,8 +1280,9 @@ export const SIM_VERSION_V58_STARVING_FIGHTER_EATS = 58 as const;
  *   - an invader on the hunt steps toward the nearest hostile BY PATH on a tile not
  *     saturated for it (`invaderHuntStep`, invader-retarget.ts), not routing
  *     through tiles lower-id friends hold where the occupancy pass would bump it
- *     back (with friends in every way, it holds); with no free hostile reachable it
- *     hunts as before (it keeps its place in the queue);
+ *     back. With none it can reach past them it holds (a free one lies beyond its
+ *     friends) or walks to the nearest queue by path; only with no hostile the
+ *     tunnels reach at all does it hunt as before;
  *   - a raider's reach check (ant-raid.ts hostileInReach) ignores hostiles on
  *     tiles saturated for it, so a duel a friend holds neither stops its looting
  *     nor draws it in to queue. Step 10e's aim, which an aimed raider follows

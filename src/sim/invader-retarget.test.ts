@@ -260,14 +260,16 @@ describe('#364 — the hunt goes for the nearest FREE hostile by path (invaderHu
     const { world, b, second } = duelAtA(V59);
     const later = addInvader(world, b);
     expect(later).toBeGreaterThan(second);
-    expect(hunt(world, second)).toBe(NO_FREE_HOSTILE);
+    // Every hostile saturated: it keeps its place in the queue beside A's duel.
+    expect(stepOf(hunt(world, second))).toEqual([0, 0]);
   });
 
   it('a free hostile it cannot reach does not pull it off the queue', () => {
     const { world, at, grid, second } = duelAtA(V59);
     const cut = at(3, 1);
     ugSet(grid, cut.x, cut.y, UndergroundTileState.Solid); // the branch cut off
-    expect(hunt(world, second)).toBe(NO_FREE_HOSTILE);
+    // B out of reach: it keeps its place in the queue beside A's duel.
+    expect(stepOf(hunt(world, second))).toEqual([0, 0]);
   });
 
   /** duelAtA, but with a LOWER-id friend than `second` standing at the branch
@@ -338,9 +340,74 @@ describe('#364 — the hunt goes for the nearest FREE hostile by path (invaderHu
     expect(stepOf(hunt(world, second))).toEqual([0, 1]);
   });
 
+  it('with every hostile saturated, it goes to the nearest queue BY PATH (one metric, not Manhattan)', () => {
+    for (const dir of [1, -1] as const) {
+      const { world, at, open } = nest(V59, dir);
+      // D at the corridor's far end, its duel held by a lower-id friend; a pocket
+      // defender P 4 above the queue's mouth (Manhattan 4 from `me`; D is 9), P's
+      // tile held by a higher-id friend, reached only the long way round (path 10;
+      // D's queue is 8 along the corridor).
+      const d = at(12);
+      addDefender(world, d);
+      const pocket = at(3, -4);
+      for (let k = 0; k <= 3; k++) open(at(k, -4));
+      addDefender(world, pocket);
+      addInvader(world, d); // lower id than `me`
+      const me = addInvader(world, at(3));
+      addInvader(world, pocket); // higher id: saturates P for `me`, does not block
+      expect(stepOf(hunt(world, me))).toEqual([dir, 0]); // along the corridor to D's queue
+    }
+  });
+
+  it('a queue it can walk to: a saturated hostile whose friend is a higher id (no block)', () => {
+    const { world, at } = nest(V59);
+    const b = at(8, 3);
+    addDefender(world, b);
+    const me = addInvader(world, at(3));
+    addInvader(world, b); // higher id: saturates B for `me`, does not block
+    expect(stepOf(hunt(world, me))).toEqual([0, 1]); // down the branch to B's queue
+  });
+
+  /** `me` at the branch mouth's corridor tile with a LOWER-id friend at the branch
+   *  mouth, and D at the corridor's far end with its duel held by a lower-id friend
+   *  (D's queue lies east, along the corridor). */
+  function mouthHeld() {
+    const n = nest(V59);
+    const d = n.at(12);
+    addDefender(n.world, d);
+    addInvader(n.world, d);
+    const blocker = addInvader(n.world, n.at(3, 1));
+    return { ...n, blocker };
+  }
+
+  it('a free hostile beyond its friends comes first: it holds rather than walk to a queue', () => {
+    const { world, at } = mouthHeld();
+    addDefender(world, at(8, 3)); // B, free, down the branch past the blocker
+    const me = addInvader(world, at(3));
+    expect(stepOf(hunt(world, me))).toEqual([0, 0]);
+  });
+
+  it('a free hostile walled off beyond its friends does not hold it: it walks to the queue', () => {
+    const { world, grid, at } = mouthHeld();
+    addDefender(world, at(8, 3));
+    const cut = at(3, 2);
+    ugSet(grid, cut.x, cut.y, UndergroundTileState.Solid); // B cut off below the blocker
+    const me = addInvader(world, at(3));
+    expect(stepOf(hunt(world, me))).toEqual([1, 0]); // east, to D's queue
+  });
+
+  it('hostiles only beyond its friends (no queue to walk to): it holds', () => {
+    const { world, at } = mouthHeld();
+    addInvader(world, at(4)); // a lower-id friend in the corridor too: D's queue is past it
+    const me = addInvader(world, at(3));
+    expect(stepOf(hunt(world, me))).toEqual([0, 0]);
+  });
+
   it('neutral ants are not hostiles', () => {
     const { world, defB, second } = duelAtA(V59);
     world.ants.colonyId[defB] = 0; // B neutral: no free hostile left
+    expect(stepOf(hunt(world, second))).toEqual([0, 0]); // the queue beside A
+    world.ants.colonyId[world.colonies[ENEMY_COLONY_ID]!.workers[0]!] = 0; // A neutral too
     expect(hunt(world, second)).toBe(NO_FREE_HOSTILE);
   });
 });
