@@ -150,6 +150,8 @@ export interface ScratchArena {
     reachDist: Int32Array;
     reachQ: Int32Array;
     reachCurrent: number;
+    /** hostileInReach's candidates (hostiles within Manhattan R), refilled per call. */
+    reachCand: number[];
   };
 }
 
@@ -217,6 +219,7 @@ export function getScratch(world: WorldState): ScratchArena {
         reachDist: new Int32Array(RAID_REACH_WINDOW_CELLS),
         reachQ: new Int32Array(RAID_REACH_WINDOW_CELLS),
         reachCurrent: 0,
+        reachCand: [],
       },
     };
     SCRATCH.set(world, a);

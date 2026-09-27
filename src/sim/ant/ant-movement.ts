@@ -907,12 +907,13 @@ export function tickAntMovement(
         } else {
           // V52 (#290 PR 5): step 10e aimed a raider stopped by a hostile in reach
           // at THAT hostile (target set only by 10e; step 10c clears an invader's
-          // target every tick, so below V52 it is always -1 here). Scalars, not an
+          // target every tick; the read is also gated on V52, so a V51 world never
+          // depends on that tick order). Scalars, not an
           // object literal: this runs per fighter per tick (hot-loop rule).
           let haveHostile = false;
           let hostileX = 0;
           let hostileY = 0;
-          if (ants.targetPosX[id] !== -1) {
+          if (world.simVersion >= SIM_VERSION_V52_RAIDING && ants.targetPosX[id] !== -1) {
             haveHostile = true;
             hostileX = ants.targetPosX[id]!;
             hostileY = ants.targetPosY[id]!;

@@ -141,9 +141,9 @@ function stockStepDir(world: WorldState, id: number, start: boolean): number {
  * A hostile — an adult of another colony (a worker, fighter or nurse, or a queen;
  * brood does not count) — stands below ground in nest `gridColonyId` within
  * `R` PATH tiles of raider `id` (at most RAID_REACH_WINDOW_RADIUS): reached by a BFS through
- * tiles a fighter can enter, bounded to that radius. A cheap Manhattan pass runs
- * first (path distance is never shorter), so the BFS runs only with a candidate
- * near. Returns that hostile (the nearest by path; the first found on a tie), or
+ * tiles a fighter can enter, bounded to that radius. One Manhattan pass collects
+ * the candidates (path distance is never shorter), so the BFS runs only with a
+ * candidate near and the final pick reads only them. Returns that hostile (the nearest by path; the first found on a tie), or
  * -1 if none is in reach. Allocation-free (scratch window).
  */
 function hostileInReach(world: WorldState, id: number, gridColonyId: number, R: number): number {
@@ -152,30 +152,31 @@ function hostileInReach(world: WorldState, id: number, gridColonyId: number, R: 
   const tx = ants.posX[id]! >> FP_SHIFT;
   const ty = ants.posY[id]! >> FP_SHIFT;
 
-  // Pass 1 — any hostile within Manhattan R?
-  let near = -1;
+  // Pass 1 — the hostiles within Manhattan R (path distance is never shorter), in
+  // colony order, queen first then workers: the only ones that can be in reach.
+  const raid = getScratch(world).raid;
+  const cand = raid.reachCand;
+  cand.length = 0;
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
     const c = world.colonies[key as unknown as keyof typeof world.colonies]!;
     if (c.colonyId === self) continue;
-    for (let w = -1; w < c.workers.length && near < 0; w++) {
+    for (let w = -1; w < c.workers.length; w++) {
       const o = w < 0 ? c.queenEntityId : c.workers[w]!;
       if (o < 0 || ants.alive[o] !== 1) continue;
       if (ants.zone[o] !== Zone.Underground || ants.currentGridColonyId[o] !== gridColonyId)
         continue;
       const dx = (ants.posX[o]! >> FP_SHIFT) - tx;
       const dy = (ants.posY[o]! >> FP_SHIFT) - ty;
-      if ((dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy) <= R) near = o;
+      if ((dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy) <= R) cand.push(o);
     }
-    if (near >= 0) break;
   }
-  if (near < 0) return -1;
+  if (cand.length === 0) return -1;
 
   // Pass 2 — bounded BFS (depth R) over the (2W+1)² window centred on the raider.
   const W = RAID_REACH_WINDOW_RADIUS;
   const grid = world.undergroundGrids[gridColonyId];
-  if (grid === undefined) return near; // defensive: no grid to path through, call it in reach
-  const raid = getScratch(world).raid;
+  if (grid === undefined) return cand[0]!; // defensive: no grid to path through, call it in reach
   const S = RAID_REACH_WINDOW_SIDE;
   const stampArr = raid.reachStamp;
   const dist = raid.reachDist;
@@ -218,26 +219,18 @@ function hostileInReach(world: WorldState, id: number, gridColonyId: number, R: 
     }
   }
 
-  // Pass 3 — the hostile on a reached cell nearest by path (first found on a tie).
+  // Pass 3 — of those, the one on a reached cell nearest by path (first on a tie).
   let best = -1;
   let bestDist = R + 1;
-  for (const key in world.colonies) {
-    if (!Object.hasOwn(world.colonies, key)) continue;
-    const c = world.colonies[key as unknown as keyof typeof world.colonies]!;
-    if (c.colonyId === self) continue;
-    for (let w = -1; w < c.workers.length; w++) {
-      const o = w < 0 ? c.queenEntityId : c.workers[w]!;
-      if (o < 0 || ants.alive[o] !== 1) continue;
-      if (ants.zone[o] !== Zone.Underground || ants.currentGridColonyId[o] !== gridColonyId)
-        continue;
-      const wx = (ants.posX[o]! >> FP_SHIFT) - ox;
-      const wy = (ants.posY[o]! >> FP_SHIFT) - oy;
-      if (wx < 0 || wy < 0 || wx >= S || wy >= S) continue;
-      const cell = wy * S + wx;
-      if (stampArr[cell] === stamp && dist[cell]! < bestDist) {
-        bestDist = dist[cell]!;
-        best = o;
-      }
+  for (let i = 0; i < cand.length; i++) {
+    const o = cand[i]!;
+    const wx = (ants.posX[o]! >> FP_SHIFT) - ox;
+    const wy = (ants.posY[o]! >> FP_SHIFT) - oy;
+    if (wx < 0 || wy < 0 || wx >= S || wy >= S) continue;
+    const cell = wy * S + wx;
+    if (stampArr[cell] === stamp && dist[cell]! < bestDist) {
+      bestDist = dist[cell]!;
+      best = o;
     }
   }
   return best;
@@ -363,7 +356,9 @@ function pointAtNearestOpenEntrance(world: WorldState, colony: ColonyRecord, id:
   for (let e = 0; e < ents.length; e++) {
     const ent = ents[e]!;
     if (!ent.isOpen) continue;
-    const d = Math.abs(ent.surfaceTileX - tx) + Math.abs(ent.surfaceTileY - ty);
+    const ex = ent.surfaceTileX - tx;
+    const ey = ent.surfaceTileY - ty;
+    const d = (ex < 0 ? -ex : ex) + (ey < 0 ? -ey : ey);
     if (best < 0 || d < bestDist || (d === bestDist && ent.entranceId < bestId)) {
       best = e;
       bestDist = d;

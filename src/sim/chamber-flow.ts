@@ -179,6 +179,36 @@ export function computeFoodChamberFlowField(
 }
 
 /**
+ * Seed every Open, not-yet-seeded tile of `chamber`'s footprint into `out` (-1)
+ * and `queue` (row-major), starting at `queue[tail]`; returns the new tail.
+ * Shared by the chamber / food / stock flow fields (allocation-free).
+ */
+function seedFootprint(
+  underground: UndergroundGrid,
+  chamber: ChamberRecord,
+  out: Int32Array,
+  queue: Int32Array,
+  tail: number,
+): number {
+  const { data, width, height } = underground;
+  const baseX = chamber.posX >> FP_SHIFT;
+  const baseY = chamber.posY >> FP_SHIFT;
+  for (let ty = 0; ty < chamber.height; ty++) {
+    for (let tx = 0; tx < chamber.width; tx++) {
+      const cx = baseX + tx;
+      const cy = baseY + ty;
+      if (cx < 0 || cx >= width || cy < 0 || cy >= height) continue;
+      const idx = cy * width + cx;
+      if (data[idx] !== UndergroundTileState.Open) continue;
+      if (out[idx] !== -2) continue;
+      out[idx] = -1;
+      queue[tail++] = idx;
+    }
+  }
+  return tail;
+}
+
+/**
  * #290 PR 5 (V52) — the STOCK flow field of one nest: toward the nearest Open tile
  * of a FoodStorage chamber holding at least `minStockFp` (default 1: any food;
  * ant-raid.ts also asks for RAID_LOOT_START_STOCK_FP), for raiders
@@ -202,20 +232,7 @@ export function computeStockFlowField(
     const chamber = chambers[c]!;
     if (chamber.chamberType !== ChamberType.FoodStorage) continue;
     if (chamberStock(world, chamber) < minStockFp) continue;
-    const baseX = chamber.posX >> FP_SHIFT;
-    const baseY = chamber.posY >> FP_SHIFT;
-    for (let ty = 0; ty < chamber.height; ty++) {
-      for (let tx = 0; tx < chamber.width; tx++) {
-        const cx = baseX + tx;
-        const cy = baseY + ty;
-        if (cx < 0 || cx >= width || cy < 0 || cy >= height) continue;
-        const idx = cy * width + cx;
-        if (data[idx] !== UndergroundTileState.Open) continue;
-        if (out[idx] !== -2) continue;
-        out[idx] = -1;
-        queue[tail++] = idx;
-      }
-    }
+    tail = seedFootprint(underground, chamber, out, queue, tail);
   }
   bfsExpandSeededField(out, queue, tail, data, width, height);
 }
@@ -248,20 +265,7 @@ function seedChamberFlowField(
     if (!matches) continue;
     if (foodWorld !== null && !isFoodChamberDepositable(foodWorld, chamber)) continue;
 
-    const baseX = chamber.posX >> FP_SHIFT;
-    const baseY = chamber.posY >> FP_SHIFT;
-    for (let ty = 0; ty < chamber.height; ty++) {
-      for (let tx = 0; tx < chamber.width; tx++) {
-        const cx = baseX + tx;
-        const cy = baseY + ty;
-        if (cx < 0 || cx >= width || cy < 0 || cy >= height) continue;
-        const idx = cy * width + cx;
-        if (data[idx] !== UndergroundTileState.Open) continue;
-        if (out[idx] !== -2) continue;
-        out[idx] = -1;
-        queue[tail++] = idx;
-      }
-    }
+    tail = seedFootprint(underground, chamber, out, queue, tail);
   }
 
   bfsExpandSeededField(out, queue, tail, data, width, height);
