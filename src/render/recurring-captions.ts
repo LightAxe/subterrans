@@ -17,8 +17,15 @@
 //     ends as soon as the spider diverts to chase a nearby ant, often within a
 //     second or two, and at 4x speed a start and that divert can land in the
 //     same render frame. The spider is then still hunting, so the warning is
-//     still true. It goes stale only when the spider has eaten (Feeding), been
-//     driven off (Retreating) or is gone, or when the window runs out.
+//     still true. It goes stale only when the spider has eaten, been driven off
+//     (Retreating) or is gone, or when the window runs out. "Has eaten" is read
+//     from its hunger, not its state: a kill always resets hungerTicks to 0, but
+//     a kill made while a fighter is still adjacent does not enter Feeding (the
+//     spider stays in its state and keeps fighting). Without a meal hungerTicks
+//     never decreases, so it falling below its value at the rampage start means the
+//     spider has eaten by some path. The owed window (RAMPAGE_CAPTION_OWED_TICKS)
+//     is far shorter than any hunger threshold, so a spider that ate cannot grow
+//     back past that value before the warning expires anyway.
 //
 // GameScene offers the owed rampage warning before raid news each frame, so a
 // rampage outranks raid news when both wait on the same idle queue.
@@ -61,28 +68,39 @@ export function offerRecurringCaption(
  */
 export const RAMPAGE_CAPTION_OWED_TICKS = 200;
 
-/** Spider states in which the warning is stale: it has eaten or been driven off. */
+/** Spider states in which the warning is stale: it is eating or has been driven
+ *  off. A meal is also detected from hunger (see offerOwedRampageCaption). */
 const RAMPAGE_OVER_STATES: ReadonlySet<SpiderBehaviorState> = new Set(['Feeding', 'Retreating']);
 
 export interface RampageCaptionState {
   /** world.tick of a spider_rampage_start whose warning has not shown yet
    *  (-Infinity: none owed). */
   owedSinceTick: number;
+  /** The spider's hungerTicks at that rampage start (from the event payload).
+   *  Hunger below this means the spider has eaten since. */
+  owedHungerTicks: number;
 }
 
 export function createRampageCaptionState(): RampageCaptionState {
-  return { owedSinceTick: -Infinity };
+  return { owedSinceTick: -Infinity, owedHungerTicks: 0 };
 }
 
 /** New round or loaded save: nothing owed. */
 export function resetRampageCaptionState(state: RampageCaptionState): void {
   state.owedSinceTick = -Infinity;
+  state.owedHungerTicks = 0;
 }
 
-/** A spider_rampage_start event at `tick`: the warning is owed until it shows.
- *  A later rampage while one is still owed restarts the window. */
-export function noteRampageStart(state: RampageCaptionState, tick: number): void {
+/** A spider_rampage_start event at `tick`, with the spider's hungerTicks from its
+ *  payload: the warning is owed until it shows. A later rampage while one is
+ *  still owed restarts the window. */
+export function noteRampageStart(
+  state: RampageCaptionState,
+  tick: number,
+  hungerTicks: number,
+): void {
   state.owedSinceTick = tick;
+  state.owedHungerTicks = hungerTicks;
 }
 
 /**
@@ -102,6 +120,7 @@ export function offerOwedRampageCaption(
   if (
     world.spider === null ||
     RAMPAGE_OVER_STATES.has(world.spider.state) ||
+    world.spider.hungerTicks < state.owedHungerTicks || // it has eaten since
     world.tick - state.owedSinceTick > RAMPAGE_CAPTION_OWED_TICKS ||
     text === null
   ) {
@@ -138,7 +157,7 @@ export function routeEventCaption(
   screenY: number,
 ): void {
   if (ev.type === 'spider_rampage_start') {
-    noteRampageStart(rampage, ev.tick);
+    noteRampageStart(rampage, ev.tick, ev.payload.hungerTicks);
     return;
   }
   const key = oneShotKeyForEvent(ev.type);

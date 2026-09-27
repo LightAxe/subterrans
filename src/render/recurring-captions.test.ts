@@ -51,9 +51,16 @@ class FakeUi implements RecurringCaptionSink {
 
 type RampageWorld = Pick<WorldState, 'spider' | 'tick'>;
 const T0 = 2000;
-/** A world at `tick` whose spider is in `state` (null: no spider). */
-const at = (tick: number, state: string | null = 'Rampaging'): RampageWorld =>
-  ({ tick, spider: state === null ? null : { state } }) as unknown as RampageWorld;
+/** The spider's hungerTicks at the rampage start (past every tier's threshold). */
+const H0 = 1500;
+/** A world at `tick` whose spider is in `state` (null: no spider). By default the
+ *  spider has not eaten since T0: its hunger has grown one per tick from H0. */
+const at = (
+  tick: number,
+  state: string | null = 'Rampaging',
+  hungerTicks: number = H0 + Math.max(0, tick - T0),
+): RampageWorld =>
+  ({ tick, spider: state === null ? null : { state, hungerTicks } }) as unknown as RampageWorld;
 
 describe('offerRecurringCaption (#350)', () => {
   it('enters an idle queue at once', () => {
@@ -87,7 +94,7 @@ describe('spider-rampage warning (#350)', () => {
   it('shows at once on an idle queue', () => {
     const s = createRampageCaptionState();
     const ui = new FakeUi();
-    noteRampageStart(s, T0);
+    noteRampageStart(s, T0, H0);
     expect(offerOwedRampageCaption(s, at(T0), ui, 0, 0)).toBe(true);
     expect(ui.begun).toEqual([RAMPAGE_TEXT]);
     // Shown once, not every frame.
@@ -99,7 +106,7 @@ describe('spider-rampage warning (#350)', () => {
     const s = createRampageCaptionState();
     const ui = new FakeUi();
     ui.showCaption('rally raid', 0, 0, 'rallyRaid'); // active
-    noteRampageStart(s, T0);
+    noteRampageStart(s, T0, H0);
     // Frame 1: the queue is busy, so the warning waits (owed)...
     const tookIt = offerOwedRampageCaption(s, at(T0), ui, 0, 0);
     // ...and a one-shot arriving next takes the pending slot instead of being dropped.
@@ -130,7 +137,7 @@ describe('spider-rampage warning (#350)', () => {
     for (const state of ['Chasing', 'Patrolling', 'Hunting', 'Striking']) {
       const s = createRampageCaptionState();
       const ui = new FakeUi();
-      noteRampageStart(s, T0);
+      noteRampageStart(s, T0, H0);
       expect(offerOwedRampageCaption(s, at(T0 + 1, state), ui, 0, 0)).toBe(true);
       expect(ui.begun).toEqual([RAMPAGE_TEXT]);
     }
@@ -141,7 +148,7 @@ describe('spider-rampage warning (#350)', () => {
       const s = createRampageCaptionState();
       const ui = new FakeUi();
       ui.showCaption('rally raid', 0, 0, 'rallyRaid');
-      noteRampageStart(s, T0);
+      noteRampageStart(s, T0, H0);
       expect(offerOwedRampageCaption(s, at(T0), ui, 0, 0)).toBe(false);
       ui.finish(); // idle now, but the warning is stale
       expect(offerOwedRampageCaption(s, at(T0 + 10, state), ui, 0, 0)).toBe(false);
@@ -150,15 +157,45 @@ describe('spider-rampage warning (#350)', () => {
     }
   });
 
+  it('is dropped once the spider has eaten, even without entering Feeding (defended kill)', () => {
+    // tickSpiderV23 step 3: a kill resets hungerTicks to 0, but with a fighter
+    // still adjacent the spider does not enter Feeding; it stays in its state
+    // (Rampaging, Chasing, ...) and keeps fighting. It has eaten all the same.
+    for (const state of ['Rampaging', 'Chasing', 'Patrolling']) {
+      const s = createRampageCaptionState();
+      const ui = new FakeUi();
+      ui.showCaption('rally raid', 0, 0, 'rallyRaid');
+      noteRampageStart(s, T0, H0);
+      expect(offerOwedRampageCaption(s, at(T0), ui, 0, 0)).toBe(false); // busy
+      ui.finish(); // idle now
+      // Killed an ant at T0 + 5; five ticks of hunger since.
+      expect(offerOwedRampageCaption(s, at(T0 + 10, state, 5), ui, 0, 0)).toBe(false);
+      expect(offerOwedRampageCaption(s, at(T0 + 11, state), ui, 0, 0)).toBe(false); // not revived
+      expect(ui.begun).toEqual(['rally raid']);
+    }
+  });
+
+  it('still shows while the same rampage is ongoing and the spider has not eaten', () => {
+    const s = createRampageCaptionState();
+    const ui = new FakeUi();
+    ui.showCaption('rally raid', 0, 0, 'rallyRaid');
+    noteRampageStart(s, T0, H0);
+    expect(offerOwedRampageCaption(s, at(T0 + 10, 'Rampaging', H0 + 10), ui, 0, 0)).toBe(false);
+    ui.finish();
+    // Hunger equal to or above its value at the start: no meal since.
+    expect(offerOwedRampageCaption(s, at(T0 + 20, 'Rampaging', H0), ui, 0, 0)).toBe(true);
+    expect(ui.begun).toEqual(['rally raid', RAMPAGE_TEXT]);
+  });
+
   it('is dropped once RAMPAGE_CAPTION_OWED_TICKS pass; a new rampage restarts the window', () => {
     const s = createRampageCaptionState();
     const ui = new FakeUi();
     ui.showCaption('rally raid', 0, 0, 'rallyRaid');
-    noteRampageStart(s, T0);
+    noteRampageStart(s, T0, H0);
     ui.finish();
     // Last tick of the window: still offered (queue idle now), so it shows.
     const edge = createRampageCaptionState();
-    noteRampageStart(edge, T0);
+    noteRampageStart(edge, T0, H0);
     expect(
       offerOwedRampageCaption(edge, at(T0 + RAMPAGE_CAPTION_OWED_TICKS), new FakeUi(), 0, 0),
     ).toBe(true);
@@ -168,7 +205,7 @@ describe('spider-rampage warning (#350)', () => {
     );
     expect(ui.begun).toEqual(['rally raid']);
     // A later rampage owes it again from its own start.
-    noteRampageStart(s, T0 + 500);
+    noteRampageStart(s, T0 + 500, H0);
     expect(offerOwedRampageCaption(s, at(T0 + 500 + RAMPAGE_CAPTION_OWED_TICKS), ui, 0, 0)).toBe(
       true,
     );
@@ -177,7 +214,7 @@ describe('spider-rampage warning (#350)', () => {
   it('fails closed without captionQueueIdle, staying owed', () => {
     const s = createRampageCaptionState();
     const shown: string[] = [];
-    noteRampageStart(s, T0);
+    noteRampageStart(s, T0, H0);
     const sink: RecurringCaptionSink = {
       showCaption: (text) => {
         shown.push(text);
@@ -195,7 +232,7 @@ describe('spider-rampage warning (#350)', () => {
     const s = createRampageCaptionState();
     const ui = new FakeUi();
     expect(offerOwedRampageCaption(s, at(T0), ui, 0, 0)).toBe(false);
-    noteRampageStart(s, T0);
+    noteRampageStart(s, T0, H0);
     resetRampageCaptionState(s);
     expect(offerOwedRampageCaption(s, at(T0), ui, 0, 0)).toBe(false);
     expect(ui.begun).toEqual([]);
@@ -209,7 +246,7 @@ describe('routeEventCaption — GameScene event captions (#350)', () => {
     ({
       tick,
       type: 'spider_rampage_start',
-      payload: { lairTile: { x: 0, y: 0 }, hungerTicks: 0 },
+      payload: { lairTile: { x: 0, y: 0 }, hungerTicks: H0 },
     }) as unknown as SimEvent;
   const invasionStart = (tick: number): SimEvent =>
     ({
@@ -254,6 +291,7 @@ describe('routeEventCaption — GameScene event captions (#350)', () => {
     routeEventCaption(rampageStart(T0), s, null, 0, 0);
     routeEventCaption(invasionStart(T0), s, null, 0, 0);
     expect(s.owedSinceTick).toBe(T0);
+    expect(s.owedHungerTicks).toBe(H0); // from the event payload
     expect(triggered.get('aiInvading')).toBe(true);
   });
 
