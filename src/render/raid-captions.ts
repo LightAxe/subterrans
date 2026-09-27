@@ -99,8 +99,9 @@ export function resetRaidCaptionState(
  * inside the cooldown is absorbed (never shown late). An owed caption is returned
  * on every call — first by the order raided, looting, hauled — until the caller
  * reports the caption queue took it (`markRaidCaptionShown`, which starts the
- * cooldown) or RAID_CAPTION_OWED_TICKS pass. So a caption the queue drops while
- * busy (a rally caption showing, another queued) is retried rather than lost.
+ * cooldown) or RAID_CAPTION_OWED_TICKS pass. The caller offers it only while the
+ * caption queue is idle, so while another caption is showing it waits and is
+ * retried rather than lost.
  *
  * A counter can fall (a hauler dying in the victim's nest hands its load back to
  * the victim's pool, which lowers both sides); a fall only moves the baseline.

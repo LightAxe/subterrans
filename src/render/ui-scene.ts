@@ -1885,8 +1885,8 @@ export class UIScene extends Phaser.Scene {
     this.captionsShownLog = [];
   }
 
-  /** #290 PR 6 — true while the caption queue's pending slot is empty, so a
-   *  recurring caption (raid news) can wait instead of taking the slot a one-shot
+  /** #290 PR 6 — true while nothing is showing and nothing is pending, so a
+   *  recurring caption (raid news) waits instead of taking the slot a one-shot
    *  caption would need. */
   captionQueueIdle(): boolean {
     return recurringCaptionMayEnter(this.captionState);

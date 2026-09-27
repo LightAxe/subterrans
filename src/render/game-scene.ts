@@ -294,7 +294,8 @@ interface UIScenePhase9 {
   hudButtonGeometry?(): HudButtonGeometry[];
   // #290 PR 6 — Dev/E2E observability for __phase9_test.getCaptionsShown().
   captionsShown?(): string[];
-  // #290 PR 6 — true while the caption queue's single pending slot is empty.
+  // #290 PR 6 — true while nothing is showing and nothing is pending, so recurring
+  // raid news may enter without taking the slot a one-shot caption would need.
   captionQueueIdle?(): boolean;
 }
 
@@ -1633,12 +1634,13 @@ export class GameScene extends Phaser.Scene {
     // pending). Taking the pending slot behind an active caption would make an
     // arriving one-shot caption (rallyRaid, queen damage, invasion) get dropped,
     // so raid news waits instead; it stays owed (up to RAID_CAPTION_OWED_TICKS)
-    // and is retried each frame until then.
+    // and is retried each frame until then. The check fails closed: a UIScene
+    // without captionQueueIdle shows no raid news rather than skipping the gate.
     const raidCaption = nextRaidCaption(this.raidCaptions, this.world, PLAYER_COLONY_ID);
     if (
       raidCaption !== null &&
       uiScene &&
-      uiScene.captionQueueIdle?.() !== false &&
+      uiScene.captionQueueIdle?.() === true &&
       uiScene.showCaption(RAID_CAPTION_TEXTS[raidCaption], this.layout.w / 2, 60)
     ) {
       markRaidCaptionShown(this.raidCaptions, this.world, raidCaption);
