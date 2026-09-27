@@ -16,6 +16,8 @@ import { PLAYER_COLONY_ID } from '../sim/constants.js';
 import { UndergroundTileState, ugGet } from '../sim/terrain.js';
 import type { WorldState } from '../sim/types.js';
 import { pileSlotById, pileTileX, pileTileY } from '../sim/food/food-api.js';
+import type { RaidType } from '../sim/enums.js';
+import { activeRaidOrder } from './raid-order-view.js';
 
 /** Shape of a `world.pendingChambers` value (derived; avoids a cross-module type import). */
 type PendingChamber = NonNullable<WorldState['pendingChambers'][string]>;
@@ -65,6 +67,17 @@ export interface GhostDelta {
    * (plan §B12; ship-review LOW: a queued entrance was previously not ghosted at all).
    */
   readonly pendingEntrances: readonly TileRef[];
+  /**
+   * #352 — the raid order the player's queue will give (the projected colony's order on
+   * an enemy entrance, raid-order-view.ts activeRaidOrder) when it differs from the
+   * committed one — a new order on the same entrance, or a rally on a new one — with its
+   * rally tile, so the overlay draws a faded badge there; null when unchanged or none.
+   * `overCommitted` — the committed badge still sits on that tile (a type change), so
+   * the faded one stacks above it rather than over it.
+   */
+  readonly pendingRaidOrder:
+    | (TileRef & { readonly raidType: RaidType; readonly overCommitted: boolean })
+    | null;
 }
 
 const EMPTY: GhostDelta = {
@@ -78,6 +91,7 @@ const EMPTY: GhostDelta = {
   pendingFoodMark: null,
   foodMarkCleared: null,
   pendingEntrances: [],
+  pendingRaidOrder: null,
 };
 
 // Chamber-diff identity includes the SHAPE (chamberType + footprint), not just the anchor (Codex
@@ -169,6 +183,25 @@ export function computeGhostDelta(world: WorldState, projection: WorldState): Gh
     rallyCleared = { tileX: wRally.tileX, tileY: wRally.tileY };
   }
 
+  // --- raid order (#352, per-colony, player): the projected order when it differs
+  //     from the committed one (a new type on the same entrance, or a rally moved to
+  //     another enemy entrance). ---
+  let pendingRaidOrder: GhostDelta['pendingRaidOrder'] = null;
+  const pOrder = activeRaidOrder(projection, PLAYER_COLONY_ID);
+  if (pOrder !== null && pRally !== null) {
+    const wOrder = activeRaidOrder(world, PLAYER_COLONY_ID);
+    const sameTile =
+      wRally !== null && wRally.tileX === pRally.tileX && wRally.tileY === pRally.tileY;
+    if (!sameTile || wOrder !== pOrder) {
+      pendingRaidOrder = {
+        tileX: pRally.tileX,
+        tileY: pRally.tileY,
+        raidType: pOrder,
+        overCommitted: sameTile && wOrder !== null,
+      };
+    }
+  }
+
   // --- food mark (per-colony, player): the projected priority pile, resolved to its
   //     tile, when the queue newly sets/redirects it (committed id differs). A toggle-off
   //     (projected null) or a redirect to a now-depleted pile leaves pendingFoodMark null.
@@ -234,5 +267,6 @@ export function computeGhostDelta(world: WorldState, projection: WorldState): Gh
     pendingFoodMark,
     foodMarkCleared,
     pendingEntrances,
+    pendingRaidOrder,
   };
 }

@@ -37,7 +37,7 @@ export const RAID_ORDER_OPTIONS: readonly RaidOrderOption[] = [
   {
     raidType: RaidType.Loot,
     label: 'Loot',
-    blurb: 'Fighters take the enemy’s food while your stores have room.',
+    blurb: 'Fighters steal food while your stores have room.',
     stripeColor: 0x4a3a1a,
     badgeColor: 0xe8c060,
     glyph: ['#....', '#....', '#....', '#....', '#####'],
@@ -45,7 +45,7 @@ export const RAID_ORDER_OPTIONS: readonly RaidOrderOption[] = [
   {
     raidType: RaidType.Deny,
     label: 'Deny',
-    blurb: 'Fighters take the enemy’s food; what your stores can’t hold is left by your entrance.',
+    blurb: 'Fighters steal food; what won’t fit is left by your entrance.',
     stripeColor: 0x4a2a1a,
     badgeColor: 0xf09040,
     glyph: ['####.', '#...#', '#...#', '#...#', '####.'],
@@ -53,7 +53,7 @@ export const RAID_ORDER_OPTIONS: readonly RaidOrderOption[] = [
   {
     raidType: RaidType.Spoil,
     label: 'Spoil',
-    blurb: 'Fighters destroy the food in the enemy’s larder.',
+    blurb: 'Fighters destroy the enemy’s stored food.',
     stripeColor: 0x3a3a1a,
     badgeColor: 0xa0c040,
     glyph: ['.####', '#....', '.###.', '....#', '####.'],
@@ -61,7 +61,7 @@ export const RAID_ORDER_OPTIONS: readonly RaidOrderOption[] = [
   {
     raidType: RaidType.Blockade,
     label: 'Blockade',
-    blurb: 'Fighters hold the ground round this entrance and attack every enemy ant.',
+    blurb: 'Fighters guard this entrance and attack all who come near.',
     stripeColor: 0x1a2a4a,
     badgeColor: 0x70a0f0,
     glyph: ['####.', '#...#', '####.', '#...#', '####.'],
@@ -69,7 +69,7 @@ export const RAID_ORDER_OPTIONS: readonly RaidOrderOption[] = [
   {
     raidType: RaidType.Assault,
     label: 'Assault',
-    blurb: 'Fighters ignore the food and go for the queen.',
+    blurb: 'Fighters ignore food and go for the queen.',
     stripeColor: 0x4a1a1a,
     badgeColor: 0xf05050,
     glyph: ['.###.', '#...#', '#####', '#...#', '#...#'],
@@ -156,13 +156,20 @@ const RAID_BADGE_CELL_PX = 2;
  * Draw the raid-order badge for the rally tile whose top-left world pixel is
  * (wx, wy): a dark square just above the tile holding the order's letter.
  */
-export function drawRaidOrderBadge(gfx: GfxLike, wx: number, wy: number, type: RaidType): void {
+export function drawRaidOrderBadge(
+  gfx: GfxLike,
+  wx: number,
+  wy: number,
+  type: RaidType,
+  /** 1 for the committed order; the ghost alpha for a queued one (paused). */
+  alpha = 1,
+): void {
   const o = raidOrderOption(type);
   const bx = wx + ((TILE_SIZE_PX - RAID_BADGE_SIZE_PX) >> 1);
   const by = wy - RAID_BADGE_SIZE_PX - 1;
-  gfx.fillStyle(0x101010, 0.9);
+  gfx.fillStyle(0x101010, 0.9 * alpha);
   gfx.fillRect(bx, by, RAID_BADGE_SIZE_PX, RAID_BADGE_SIZE_PX);
-  gfx.fillStyle(o.badgeColor, 1);
+  gfx.fillStyle(o.badgeColor, alpha);
   for (let row = 0; row < o.glyph.length; row++) {
     const line = o.glyph[row]!;
     for (let col = 0; col < line.length; col++) {

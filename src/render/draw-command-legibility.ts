@@ -13,6 +13,7 @@ import { chamberSeed, chamberPerimeterPoints } from './chamber-shape.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
 import type { GfxLike } from './draw-surface.js';
 import type { GhostDelta } from './command-ghosts.js';
+import { RAID_BADGE_SIZE_PX, drawRaidOrderBadge } from './raid-order-view.js';
 import type { FeedforwardOutcome } from './command-feedforward.js';
 
 // --- UAT-tunable visual constants ---------------------------------------------
@@ -158,6 +159,14 @@ export function drawGhostDelta(
       gfx.fillRect(wx + 1, wy + 7, t - 2, 2); // horizontal bar
       gfx.fillRect(wx + 7, wy + 1, 2, t - 2); // vertical bar
       gfx.fillRect(wx + 6, wy + 6, 4, 4); // center accent
+    }
+    // #352 — a queued raid order: its badge, faded, over the rally tile (stacked above
+    // the committed badge when only the type changes).
+    if (delta.pendingRaidOrder !== null) {
+      const t = TILE_SIZE_PX;
+      const o = delta.pendingRaidOrder;
+      const lift = o.overCommitted ? RAID_BADGE_SIZE_PX + 1 : 0;
+      drawRaidOrderBadge(gfx, o.tileX * t, o.tileY * t - lift, o.raidType, GHOST_ALPHA);
     }
     // A queued ClearRallyPoint: the committed white crosshair (draw-surface.ts) still sits
     // on this tile while paused, so tint a removal crosshair over it as the "pending removal"
