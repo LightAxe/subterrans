@@ -300,8 +300,10 @@ _Avoid_: mode.
 **Probe / invasion**:
 The two AI operation **kinds** — `Probe` (a small attack) vs `Invasion` (a full
 committed attack); while one runs, the colony is in the corresponding AI state
-`Probing` / `Invading`. Both rally the AI's fighters on the player's entrance, so
-from V52 both **raid** the player's FoodStorage chambers (see **Raid**).
+`Probing` / `Invading`. A probe rallies its fighters on a surface food pile (the
+player's marked pile, or one near a player entrance); an invasion rallies them on
+the player's entrance, so from V52 only an invasion **raids** the player's
+FoodStorage chambers (see **Raid**).
 _Avoid_: "attack" used alone (ambiguous); don't conflate the operation kind
 (`Probe`/`Invasion`) with the AI state (`Probing`/`Invading`).
 
