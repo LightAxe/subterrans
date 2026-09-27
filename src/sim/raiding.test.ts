@@ -32,7 +32,6 @@ import {
 } from './food/food-api.js';
 import { setChamberStockForTest, setPoolFoodForTest } from './food/food-test-utils.js';
 import { phGet, pheromoneGridKey } from './pheromone/pheromone-store.js';
-import { isSurfaceTileInComponent } from './surface-features.js';
 import { FIGHTER_HUNGER } from './hunger.js';
 import { computeStockFlowField } from './chamber-flow.js';
 import { getScratch } from './scratch.js';
@@ -59,6 +58,8 @@ import {
   raidWorld,
   rallyOn,
   type RaidWorld,
+  addHauler,
+  freeSurfaceTile,
 } from './raid-test-utils.js';
 
 const E = ENEMY_COLONY_ID;
@@ -179,22 +180,30 @@ describe('fighterMayLoot — the raid predicate (V52)', () => {
     expect(fighterMayLoot(w, r.player, id)).toBe(true);
   });
 
-  it('no toggling at the reach edge: a hostile pacing between 4 and 6 tiles neither starts nor stops it', () => {
+  it('no toggling at the reach edge: a hostile pacing through the hysteresis band neither starts nor stops it', () => {
     const r = raidWorld();
     const w = r.world;
     const id = raiderInEnemyNest(r, 100);
     w.ants.speed[id] = 0; // hold it in place: only the hostile moves
-    const h = addEnemyWorker(w, 94, 6);
-    // Not looting, hostile 6 away: does not start, however the hostile paces 5↔6.
-    for (let t = 0; t < 6; t++) {
-      w.ants.posX[h] = centre(t % 2 === 0 ? 95 : 94);
+    // The band: farther than the stay radius, no farther than the start radius.
+    const inner = RAID_ENGAGE_RADIUS_TILES + 1;
+    const outer = RAID_START_CLEAR_RADIUS_TILES;
+    expect(outer).toBeGreaterThanOrEqual(inner); // the band is not empty
+    const h = addEnemyWorker(w, 100 - outer, 6);
+    // Pace in along row 6 (path distance = x distance), inner..outer and back.
+    const pace: number[] = [];
+    for (let d = outer; d >= inner; d--) pace.push(d);
+    for (let d = inner; d <= outer; d++) pace.push(d);
+    // Not looting: never starts while the hostile is anywhere in the band.
+    for (const d of pace) {
+      w.ants.posX[h] = centre(100 - d);
       updateRaiders(w);
       expect(w.ants.subTask[id]).not.toBe(FightingSubState.Looting);
     }
-    // Looting, hostile 5↔6 away: keeps looting throughout.
+    // Looting: keeps looting throughout.
     w.ants.subTask[id] = FightingSubState.Looting;
-    for (let t = 0; t < 6; t++) {
-      w.ants.posX[h] = centre(t % 2 === 0 ? 95 : 94);
+    for (const d of pace) {
+      w.ants.posX[h] = centre(100 - d);
       updateRaiders(w);
       expect(w.ants.subTask[id]).toBe(FightingSubState.Looting);
     }
@@ -462,19 +471,11 @@ describe('the raid loop through tick() (V52)', () => {
 });
 
 describe('a hauler that dies drops its load (V52, D13)', () => {
-  function laden(r: RaidWorld, x: number, y: number, grid: number | null, load: number): number {
-    const id = addFighter(r.world, P, x, y, grid);
-    r.world.ants.subTask[id] = FightingSubState.Hauling;
-    r.world.ants.foodCarrying[id] = load;
-    return id;
-  }
-
   it('on the surface: a corpse pile of whole pickups at its tile', () => {
     const r = raidWorld();
     const w = r.world;
-    let x = 60;
-    while (!isSurfaceTileInComponent(w, x, 40) || pileAtTile(w, x, 40) >= 0) x += 1;
-    const id = laden(r, x, 40, null, 1000);
+    const x = freeSurfaceTile(w, 40);
+    const id = addHauler(r.world, P, x, 40, null, 1000);
     despawnAnt(w, id, { cause: 'starvation' });
     const slot = pileAtTile(w, x, 40);
     expect(slot).toBeGreaterThanOrEqual(0);
@@ -485,9 +486,8 @@ describe('a hauler that dies drops its load (V52, D13)', () => {
   it('on the surface under one whole pickup: no pile at all (save round-trip: raid-replay.test.ts)', () => {
     const r = raidWorld();
     const w = r.world;
-    let x = 60;
-    while (!isSurfaceTileInComponent(w, x, 40) || pileAtTile(w, x, 40) >= 0) x += 1;
-    const id = laden(r, x, 40, null, FOOD_PICKUP_AMOUNT - 1);
+    const x = freeSurfaceTile(w, 40);
+    const id = addHauler(r.world, P, x, 40, null, FOOD_PICKUP_AMOUNT - 1);
     const piles = pileCount(w);
     const nextId = w.nextEntityId;
     despawnAnt(w, id, { cause: 'starvation' });
@@ -499,8 +499,7 @@ describe('a hauler that dies drops its load (V52, D13)', () => {
   it('a sub-pickup drop onto an existing pile leaves it untouched (no zero top-up)', () => {
     const r = raidWorld();
     const w = r.world;
-    let x = 60;
-    while (!isSurfaceTileInComponent(w, x, 41) || pileAtTile(w, x, 41) >= 0) x += 1;
+    const x = freeSurfaceTile(w, 41);
     topUpOrSpawnCorpsePile(w, x, 41, FOOD_PICKUP_AMOUNT);
     const slot = pileAtTile(w, x, 41);
     topUpOrSpawnCorpsePile(w, x, 41, FOOD_PICKUP_AMOUNT - 1);
@@ -515,7 +514,7 @@ describe('a hauler that dies drops its load (V52, D13)', () => {
     setPoolFoodForTest(w, r.enemy, BASE_FOOD_STORAGE_CAPACITY - 300);
     r.player.foodRaidedFp = 2000;
     r.enemy.foodLostToRaidsFp = 2000;
-    const id = laden(r, 100, 6, E, 1000);
+    const id = addHauler(r.world, P, 100, 6, E, 1000);
     despawnAnt(w, id, { cause: 'kill', killerKind: 'Ant', killerColonyId: E, killerId: null });
     expect(colonyPoolFood(w, r.enemy)).toBe(BASE_FOOD_STORAGE_CAPACITY);
     expect(r.player.foodRaidedFp).toBe(1700);
@@ -526,7 +525,7 @@ describe('a hauler that dies drops its load (V52, D13)', () => {
     const r = raidWorld();
     const w = r.world;
     setPoolFoodForTest(w, r.player, 0);
-    const id = laden(r, 30, 6, P, 800);
+    const id = addHauler(r.world, P, 30, 6, P, 800);
     despawnAnt(w, id, { cause: 'starvation' });
     expect(colonyPoolFood(w, r.player)).toBe(800);
     expect(r.player.foodRaidedFp).toBe(0);
@@ -535,7 +534,7 @@ describe('a hauler that dies drops its load (V52, D13)', () => {
   it('is inert below V52 and for an empty-handed fighter', () => {
     const r = raidWorld();
     const w = r.world;
-    const id = laden(r, 30, 6, P, 800);
+    const id = addHauler(r.world, P, 30, 6, P, 800);
     const latest = w.simVersion;
     w.simVersion = SIM_VERSION_V51_UNIFIED_HUNGER;
     expect(dropHaulerLoad(w, id)).toBe(false);
@@ -631,17 +630,10 @@ describe('computeStockFlowField (V52)', () => {
 });
 
 describe('hauling edge cases (V52)', () => {
-  function hauler(r: RaidWorld, x: number, y: number, grid: number | null, load: number): number {
-    const id = addFighter(r.world, P, x, y, grid);
-    r.world.ants.subTask[id] = FightingSubState.Hauling;
-    r.world.ants.foodCarrying[id] = load;
-    return id;
-  }
-
   it('a full deposit ends the haul on that very tick (trip counted, back to the rally)', () => {
     const r = raidWorld();
     const w = r.world;
-    const id = hauler(r, 36, 6, P, 700);
+    const id = addHauler(r.world, P, 36, 6, P, 700);
     tickRaidActions(w);
     expect(chamberStock(w, r.playerLarder)).toBe(700);
     expect(w.ants.foodCarrying[id]).toBe(0);
@@ -653,7 +645,7 @@ describe('hauling edge cases (V52)', () => {
     const r = raidWorld();
     const w = r.world;
     setPoolFoodForTest(w, r.player, BASE_FOOD_STORAGE_CAPACITY - 100);
-    const id = hauler(r, r.playerDoor.x, 0, P, 300);
+    const id = addHauler(r.world, P, r.playerDoor.x, 0, P, 300);
     tickRaidActions(w);
     expect(colonyPoolFood(w, r.player)).toBe(BASE_FOOD_STORAGE_CAPACITY);
     expect(w.ants.foodCarrying[id]).toBe(200);
@@ -665,7 +657,7 @@ describe('hauling edge cases (V52)', () => {
     const r = raidWorld();
     const w = r.world;
     rallyOn(r.player, r.enemyDoor);
-    const id = hauler(r, r.enemyDoor.x, r.enemyDoor.y, null, RAID_CARRY_FP);
+    const id = addHauler(r.world, P, r.enemyDoor.x, r.enemyDoor.y, null, RAID_CARRY_FP);
     w.ants.speed[id] = 0; // stays on the door tile for the descent check
     tick(w, []);
     expect(w.ants.zone[id]).toBe(Zone.Surface);
@@ -680,7 +672,7 @@ describe('hauling edge cases (V52)', () => {
     carve(grid, 108, 6, 108, 12);
     carve(grid, 98, 12, 108, 12);
     rallyOn(r.player, r.enemyDoor);
-    const id = hauler(r, 98, 12, E, RAID_CARRY_FP);
+    const id = addHauler(r.world, P, 98, 12, E, RAID_CARRY_FP);
     expect(run(w, 200, () => w.ants.zone[id] === Zone.Surface)).toBeGreaterThan(0);
     expect(tileOf(w, id)).toEqual(r.enemyDoor);
   });
@@ -692,7 +684,7 @@ describe('hauling edge cases (V52)', () => {
     setChamberStockForTest(w, r.player, r.playerLarder, FOOD_CHAMBER_CAPACITY);
     setPoolFoodForTest(w, r.player, 0);
     rallyOn(r.player, r.playerDoor); // tunnel-defence rally (V44)
-    const id = hauler(r, 30, 6, P, 500);
+    const id = addHauler(r.world, P, 30, 6, P, 500);
     const done = run(w, 200, () => w.ants.subTask[id] !== FightingSubState.Hauling);
     expect(done).toBeGreaterThan(0);
     expect(r.player.raidTrips).toBe(1);
@@ -702,7 +694,7 @@ describe('hauling edge cases (V52)', () => {
     const r = raidWorld();
     const w = r.world;
     r.player.rallyPoint = null;
-    const h = hauler(r, r.playerDoor.x + 10, r.playerDoor.y - 10, null, RAID_CARRY_FP);
+    const h = addHauler(r.world, P, r.playerDoor.x + 10, r.playerDoor.y - 10, null, RAID_CARRY_FP);
     const sentry = addFighter(w, P, r.playerDoor.x + 1, r.playerDoor.y - 1, null);
     expect(h).toBeLessThan(sentry);
     updateFightAntTargets(w);
@@ -760,8 +752,7 @@ describe('review follow-ups (V52)', () => {
     const w = r.world;
     r.player.foodRaidedFp = 1024;
     r.enemy.foodLostToRaidsFp = 1024;
-    let x = 60;
-    while (!isSurfaceTileInComponent(w, x, 40) || pileAtTile(w, x, 40) >= 0) x += 1;
+    const x = freeSurfaceTile(w, 40);
     const id = addFighter(w, P, x, 40, null);
     w.ants.subTask[id] = FightingSubState.Hauling;
     w.ants.foodCarrying[id] = 1024;
@@ -773,13 +764,6 @@ describe('review follow-ups (V52)', () => {
 });
 
 describe('second review follow-ups (V52)', () => {
-  function hauler(r: RaidWorld, x: number, y: number, grid: number | null, load: number): number {
-    const id = addFighter(r.world, P, x, y, grid);
-    r.world.ants.subTask[id] = FightingSubState.Hauling;
-    r.world.ants.foodCarrying[id] = load;
-    return id;
-  }
-
   it('a surface hauler heads for an OPEN home entrance, never a closed nearer one', () => {
     const r = raidWorld();
     const w = r.world;
@@ -790,7 +774,7 @@ describe('second review follow-ups (V52)', () => {
       surfaceTileY: 40,
       isOpen: false,
     } as (typeof r.player.entrances)[number]);
-    const id = hauler(r, 72, 40, null, RAID_CARRY_FP);
+    const id = addHauler(r.world, P, 72, 40, null, RAID_CARRY_FP);
     updateRaiders(w);
     expect(w.ants.targetPosX[id]).toBe(centre(r.playerDoor.x));
     expect(w.ants.targetPosY[id]).toBe(centre(r.playerDoor.y));
@@ -800,12 +784,12 @@ describe('second review follow-ups (V52)', () => {
     const r = raidWorld(0);
     const w = r.world;
     setPoolFoodForTest(w, r.enemy, 0);
-    const onLarder = hauler(r, 88, 6, E, 700);
-    const onShaft = hauler(r, r.enemyDoor.x, 0, E, 700);
+    const onLarder = addHauler(r.world, P, 88, 6, E, 700);
+    const onShaft = addHauler(r.world, P, r.enemyDoor.x, 0, E, 700);
     // At the coordinates of its OWN larder and its OWN shaft top, but in the enemy
     // nest: still not a deposit site (sites are looked up in the nest it is in).
-    const atOwnLarderXY = hauler(r, 36, 6, E, 700);
-    const atOwnShaftXY = hauler(r, r.playerDoor.x, 0, E, 700);
+    const atOwnLarderXY = addHauler(r.world, P, 36, 6, E, 700);
+    const atOwnShaftXY = addHauler(r.world, P, r.playerDoor.x, 0, E, 700);
     setPoolFoodForTest(w, r.player, 0);
     tickRaidActions(w);
     expect(w.ants.foodCarrying[onLarder]).toBe(700);
@@ -828,7 +812,7 @@ describe('second review follow-ups (V52)', () => {
     const b2 = addFighter(w, P, x, 1, E);
     w.ants.speed[b1] = 0;
     w.ants.speed[b2] = 0;
-    const id = hauler(r, x, 3, E, RAID_CARRY_FP);
+    const id = addHauler(r.world, P, x, 3, E, RAID_CARRY_FP);
     expect(id).toBeGreaterThan(b2);
     expect(run(w, 60, () => w.ants.zone[id] === Zone.Surface)).toBeGreaterThan(0);
   });

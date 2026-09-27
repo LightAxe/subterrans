@@ -24,6 +24,8 @@ import { FP_ONE, FP_SHIFT } from './fixed.js';
 import { ENEMY_COLONY_ID, PLAYER_COLONY_ID, WORKER_BASE_SPEED } from './constants.js';
 import type { ChamberRecord, ColonyRecord } from './colony/colony-store.js';
 import { addChamberForTest, setPoolFoodForTest } from './food/food-test-utils.js';
+import { pileAtTile } from './food/food-api.js';
+import { isSurfaceTileInComponent } from './surface-features.js';
 
 export interface RaidWorld {
   world: WorldState;
@@ -182,4 +184,31 @@ export function addEnemyWorker(world: WorldState, x: number, y: number): number 
 /** Rally `colony`'s fighters on tile `t`. */
 export function rallyOn(colony: ColonyRecord, t: { x: number; y: number }): void {
   colony.rallyPoint = { tileX: t.x, tileY: t.y };
+}
+
+/** Add a fighter of `colonyId` already Hauling `load` fp (see {@link addFighter}). */
+export function addHauler(
+  world: WorldState,
+  colonyId: number,
+  x: number,
+  y: number,
+  grid: number | null,
+  load: number,
+): number {
+  const id = addFighter(world, colonyId, x, y, grid);
+  world.ants.subTask[id] = FightingSubState.Hauling;
+  world.ants.foodCarrying[id] = load;
+  return id;
+}
+
+/**
+ * The first surface tile on row `y`, scanning x from `x0` for at most `span`
+ * tiles, that is walkable and has no food pile. Throws if none (the fixture's
+ * open ground between the nests always has one).
+ */
+export function freeSurfaceTile(world: WorldState, y: number, x0 = 60, span = 40): number {
+  for (let x = x0; x < x0 + span; x++) {
+    if (isSurfaceTileInComponent(world, x, y) && pileAtTile(world, x, y) < 0) return x;
+  }
+  throw new Error(`no free surface tile on row ${y} in x ${x0}..${x0 + span - 1}`);
 }
