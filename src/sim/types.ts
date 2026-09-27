@@ -1202,7 +1202,24 @@ export const SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES = 54 as const;
  * UNCHANGED (V50).
  */
 export const SIM_VERSION_V55_ROUTED_HOMING = 55 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V55_ROUTED_HOMING;
+
+/**
+ * #347 (V56) — an AI colony's frontage check reads its OPPONENT's workers.
+ *
+ * Up to V55 the Peacetime→WarFooting frontage trigger (`AI_FRONTAGE_PLAYER_WORKERS_*`)
+ * always read the PLAYER colony's worker count, so a rule-based AI driving the
+ * player colony (`check:ai-economy --both-ai`, a future AI-vs-AI mode) compared its
+ * own workers with itself. From V56 it reads the opponent colony
+ * (`opponentColonyId`): the player for the enemy AI — the only AI in real play, for
+ * which nothing changes — and the enemy for a player-colony AI. The
+ * `ai_state_transition` event's `triggerValues.playerWorkerCount` reports the same
+ * number the check compared, at every version.
+ * No new serialized field, command, world.rngState draw, entity-ID advance or
+ * tick-order change. A V55 save replays byte-identically. MIN_ACCEPTED is
+ * UNCHANGED (V50).
+ */
+export const SIM_VERSION_V56_OPPONENT_FRONTAGE = 56 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V56_OPPONENT_FRONTAGE;
 
 /**
  * S2 — AI colony state machine states.

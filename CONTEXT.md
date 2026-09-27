@@ -329,6 +329,11 @@ _Avoid_: bot, CPU.
 The enemy's strategic phase. Transitions: `Peacetime → WarFooting`; then
 `WarFooting ↔ Probing` (a probe returns to WarFooting) and
 `WarFooting → Invading → Recovery → Peacetime`.
+An AI colony sizes itself against, probes and invades its **opponent** — the player,
+for the enemy (the only AI in play). When the controller also drives the player
+colony (`check:ai-economy --both-ai`), that colony's opponent is the enemy; since
+**#347 (simVersion V56)** its Peacetime→WarFooting frontage check reads the enemy's
+workers too (up to V55 it compared its workers with its own).
 _Avoid_: mode.
 
 **Probe / invasion**:

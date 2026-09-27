@@ -5,7 +5,12 @@
 import { describe, it, expect } from 'vitest';
 import { createWorldState } from './types.js';
 import type { WorldState } from './types.js';
-import { LATEST_SIM_VERSION, SIM_VERSION_V19_AI_STATE } from './types.js';
+import {
+  LATEST_SIM_VERSION,
+  SIM_VERSION_V19_AI_STATE,
+  SIM_VERSION_V55_ROUTED_HOMING,
+  SIM_VERSION_V56_OPPONENT_FRONTAGE,
+} from './types.js';
 import { applyCommands } from './tick.js';
 import type { SimCommand } from './commands.js';
 import {
@@ -17,6 +22,8 @@ import {
   createDefaultAIStateRecord,
   NORMAL_TIER_INDEX,
   tierIndex,
+  opponentColonyId,
+  frontageOpponentWorkerCount,
 } from './ai-state.js';
 import { killAnt } from './ant-death.js';
 import { colonyFoodCapacity } from './food/food-api.js';
@@ -559,5 +566,97 @@ describe('StartAIOperation validation (#226, V32 gate)', () => {
     ]);
     expect(getAIStateForColony(world, AI)!.state).toBe('Probing');
     expect(world.colonies[AI]!.rallyPoint).toEqual({ tileX: 50, tileY: 50 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #347 (V56) — a player-colony AI sizes itself against, and invades, its OPPONENT
+// ---------------------------------------------------------------------------
+
+describe('#347 — a player-colony AI reads its opponent (V56)', () => {
+  it('LATEST is V56', () => {
+    expect(LATEST_SIM_VERSION).toBe(SIM_VERSION_V56_OPPONENT_FRONTAGE);
+  });
+
+  it('opponentColonyId: player <-> enemy; null when there is no other colony', () => {
+    const world = makeMinimalWorld();
+    expect(opponentColonyId(world, PLAYER_COLONY_ID as ColonyId)).toBe(ENEMY_COLONY_ID);
+    expect(opponentColonyId(world, ENEMY_COLONY_ID as ColonyId)).toBe(PLAYER_COLONY_ID);
+    delete world.colonies[PLAYER_COLONY_ID as ColonyId];
+    expect(opponentColonyId(world, ENEMY_COLONY_ID as ColonyId)).toBeNull();
+  });
+
+  /**
+   * The PLAYER colony runs the AI, 10 workers of its own against an enemy of 40
+   * (>= AI_FRONTAGE_PLAYER_WORKERS_ABS and >= 1.3x). Before the age gate, only the
+   * frontage trigger can move it to WarFooting.
+   */
+  function playerAIWorld(simVersion: number): WorldState {
+    const world = makeMinimalWorld();
+    world.simVersion = simVersion;
+    world.aiState = [createDefaultAIStateRecord(PLAYER_COLONY_ID as ColonyId)];
+    world.tick = AI_WARFOOTING_MIN_TICK - 1; // NOT age ready
+    const player = world.colonies[PLAYER_COLONY_ID as ColonyId]!;
+    const enemy = world.colonies[ENEMY_COLONY_ID as ColonyId]!;
+    spawnFighters(world, PLAYER_COLONY_ID, AI_WARFOOTING_FIGHTER_THRESHOLD[NORMAL_TIER_INDEX], 10);
+    setPoolFoodForTest(
+      world,
+      player,
+      Math.ceil((colonyFoodCapacity(player) * AI_WARFOOTING_FOOD_FRAC_PCT) / 100), // eslint-disable-line no-restricted-syntax
+    );
+    player.workerCount = 10;
+    enemy.workerCount = 40;
+    expect(enemy.workerCount).toBeGreaterThanOrEqual(AI_FRONTAGE_PLAYER_WORKERS_ABS);
+    expect(enemy.workerCount * 100).toBeGreaterThanOrEqual(
+      AI_FRONTAGE_PLAYER_WORKERS_RATIO_X100 * player.workerCount,
+    );
+    return world;
+  }
+
+  it('V56: the player-colony AI reads the ENEMY worker count and goes to WarFooting early', () => {
+    const world = playerAIWorld(SIM_VERSION_V56_OPPONENT_FRONTAGE);
+    expect(frontageOpponentWorkerCount(world, PLAYER_COLONY_ID as ColonyId)).toBe(40);
+    const rec = advanceAIState(world, PLAYER_COLONY_ID as ColonyId);
+    expect(rec.state).toBe('WarFooting');
+    // The transition reports the number the check compared.
+    const evt = world.events.find((e) => e.type === 'ai_state_transition');
+    expect(evt?.type === 'ai_state_transition' && evt.payload.triggerValues.playerWorkerCount).toBe(
+      40,
+    );
+  });
+
+  it('V55 (pinned): the player-colony AI compares its own workers with itself — stays Peacetime', () => {
+    const world = playerAIWorld(SIM_VERSION_V55_ROUTED_HOMING);
+    expect(frontageOpponentWorkerCount(world, PLAYER_COLONY_ID as ColonyId)).toBe(10);
+    expect(advanceAIState(world, PLAYER_COLONY_ID as ColonyId).state).toBe('Peacetime');
+  });
+
+  it('the ENEMY AI reads the player count at V55 and V56 alike (real play unchanged)', () => {
+    for (const v of [SIM_VERSION_V55_ROUTED_HOMING, SIM_VERSION_V56_OPPONENT_FRONTAGE]) {
+      const world = makeMinimalWorld();
+      world.simVersion = v;
+      world.colonies[PLAYER_COLONY_ID as ColonyId]!.workerCount = 33;
+      world.colonies[ENEMY_COLONY_ID as ColonyId]!.workerCount = 7;
+      expect(frontageOpponentWorkerCount(world, ENEMY_COLONY_ID as ColonyId)).toBe(33);
+    }
+  });
+
+  it('invasion_start targets the opponent: the enemy for a player-colony AI', () => {
+    const world = makeMinimalWorld();
+    world.aiState.push(createDefaultAIStateRecord(PLAYER_COLONY_ID as ColonyId));
+    spawnFighters(world, PLAYER_COLONY_ID, 3, 10);
+    getAIStateForColony(world, PLAYER_COLONY_ID as ColonyId)!.state = 'Invading';
+    setAIRallyOperation(world, PLAYER_COLONY_ID as ColonyId, 104, 0, [10, 11, 12], 'Invasion');
+    const evt = world.events.find((e) => e.type === 'invasion_start');
+    expect(evt?.payload).toMatchObject({ colonyId: PLAYER_COLONY_ID, targetGrid: ENEMY_COLONY_ID });
+  });
+
+  it('invasion_start from the enemy AI still targets the player (unchanged)', () => {
+    const world = makeMinimalWorld();
+    spawnFighters(world, ENEMY_COLONY_ID, 3, 10);
+    getAIStateForColony(world, ENEMY_COLONY_ID as ColonyId)!.state = 'Invading';
+    setAIRallyOperation(world, ENEMY_COLONY_ID as ColonyId, 24, 0, [10, 11, 12], 'Invasion');
+    const evt = world.events.find((e) => e.type === 'invasion_start');
+    expect(evt?.payload).toMatchObject({ colonyId: ENEMY_COLONY_ID, targetGrid: PLAYER_COLONY_ID });
   });
 });

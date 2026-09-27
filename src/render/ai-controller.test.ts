@@ -29,6 +29,7 @@ import {
   AI_EXTRA_FOOD_STORAGE_FULL_PCT,
   AI_MAX_FOOD_STORAGE_CHAMBERS,
   aiExtraFoodStorageWanted,
+  aiSelectProbeTarget,
 } from './ai-controller.js';
 
 import { createWorldState, allocateEntityId, SIM_VERSION_V52_RAIDING } from '../sim/types.js';
@@ -47,6 +48,9 @@ import { serializeWorldState, deserializeWorldState } from '../platform/save.js'
 import {
   BASE_FOOD_STORAGE_CAPACITY,
   ENEMY_COLONY_ID,
+  ENEMY_START_X,
+  PLAYER_COLONY_ID,
+  PLAYER_START_X,
   FOOD_CHAMBER_CAPACITY,
   QUEEN_EGG_FOOD_THRESHOLD,
   STARTING_WORKERS,
@@ -56,6 +60,7 @@ import {
   addChamberForTest,
   setPoolFoodForTest,
   setChamberStockForTest,
+  setPilesForTest,
   type TestChamber,
 } from '../sim/food/food-test-utils.js';
 
@@ -1547,6 +1552,87 @@ describe('#293 survival mode', () => {
       const b = decisionAndCommands(loaded);
       expect(a.mode).toBe(true);
       expect(b).toEqual(a);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #347 — the probe's reference point is the AI's OWN side when it has no entrance
+// ---------------------------------------------------------------------------
+
+describe("#347 aiSelectProbeTarget — no-entrance fallback uses the AI colony's own start", () => {
+  /**
+   * An AI colony with no entrances of its own measures candidate piles from its
+   * start column. Two unmarked piles sit within AI_PROBE_FALLBACK_RADIUS_TILES of
+   * the opponent's one open entrance at `doorX`: one `near` tiles toward the AI's
+   * home side, one `far` tiles away from it. Measured from the AI's own start the
+   * home-side pile is the closer; measured from the OPPOSITE start (the pre-#347
+   * fallback for a player-colony AI) the away-side pile would be — so the pick
+   * says which side the fallback used.
+   */
+  function world2(aiColonyId: ColonyId): WorldState {
+    const world = createScenario(7, 'Normal');
+    const own = world.colonies[aiColonyId]!;
+    const opp =
+      world.colonies[
+        (aiColonyId === PLAYER_COLONY_ID ? ENEMY_COLONY_ID : PLAYER_COLONY_ID) as ColonyId
+      ]!;
+    own.entrances = [];
+    opp.priorityFoodPileId = null;
+    const doorX = aiColonyId === PLAYER_COLONY_ID ? ENEMY_START_X : PLAYER_START_X;
+    opp.entrances = [{ entranceId: 900, surfaceTileX: doorX, surfaceTileY: 0, isOpen: true }];
+    return world;
+  }
+
+  it('a PLAYER-colony AI measures from PLAYER_START_X (west of the enemy door)', () => {
+    const world = world2(PLAYER_COLONY_ID as ColonyId);
+    // Enemy door at x=104. West pile 94 (toward the player), east pile 110.
+    // From x=24: west 70+5, east 86+5 -> west. From x=104: west 15, east 11 -> east.
+    setPilesForTest(world, [
+      {
+        foodPileId: 501,
+        tileX: ENEMY_START_X - 10,
+        tileY: 5,
+        pickupsRemaining: 5,
+        pickupsInitial: 5,
+      },
+      {
+        foodPileId: 502,
+        tileX: ENEMY_START_X + 6,
+        tileY: 5,
+        pickupsRemaining: 5,
+        pickupsInitial: 5,
+      },
+    ]);
+    expect(aiSelectProbeTarget(world, PLAYER_COLONY_ID as ColonyId)).toEqual({
+      tileX: ENEMY_START_X - 10,
+      tileY: 5,
+    });
+  });
+
+  it('the ENEMY AI (real play) still measures from ENEMY_START_X — unchanged', () => {
+    const world = world2(ENEMY_COLONY_ID as ColonyId);
+    // Player door at x=24. East pile 34 (toward the enemy), west pile 18.
+    // From x=104: east 70+5, west 86+5 -> east.
+    setPilesForTest(world, [
+      {
+        foodPileId: 601,
+        tileX: PLAYER_START_X - 6,
+        tileY: 5,
+        pickupsRemaining: 5,
+        pickupsInitial: 5,
+      },
+      {
+        foodPileId: 602,
+        tileX: PLAYER_START_X + 10,
+        tileY: 5,
+        pickupsRemaining: 5,
+        pickupsInitial: 5,
+      },
+    ]);
+    expect(aiSelectProbeTarget(world, ENEMY_COLONY_ID as ColonyId)).toEqual({
+      tileX: PLAYER_START_X + 10,
+      tileY: 5,
     });
   });
 });

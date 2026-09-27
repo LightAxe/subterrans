@@ -22,7 +22,7 @@ import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 import {
   UNDERGROUND_CEILING_ROW_Y,
   PLAYER_COLONY_ID,
-  ENEMY_COLONY_ID,
+  PLAYER_START_X,
   ENEMY_START_X,
   AI_PROBE_INTERVAL_TICKS,
   AI_PROBE_FIGHTER_COUNT,
@@ -39,7 +39,7 @@ import {
   pileTileX,
   pileTileY,
 } from '../sim/food/food-api.js';
-import { aiFighterCount } from '../sim/ai-state.js';
+import { aiFighterCount, opponentColonyId } from '../sim/ai-state.js';
 
 import { AntTask } from '../sim/enums.js';
 
@@ -737,16 +737,16 @@ function _syncBehaviorRatioToAIState(
 /**
  * Attempt WarFooting→Probing transition with target selection.
  * Target selection is the guard: if no target, transition does NOT fire.
- * Q3 spec: pick closest player-marked food pile by ascending pile ID.
+ * Q3 spec: pick the opponent's marked food pile (ties by ascending pile ID).
  * Fallback: closest unmarked surface pile within AI_PROBE_FALLBACK_RADIUS_TILES
- * of any open player entrance.
+ * of any open opponent entrance.
  */
 function aiStateMachineTick_probeEntry(
   world: WorldState,
   aiColonyId: ColonyId,
   _colony: ColonyRecord,
 ): void {
-  const target = _selectProbeTarget(world, aiColonyId);
+  const target = aiSelectProbeTarget(world, aiColonyId);
   if (target === null) return; // no target → don't transition
 
   // Commit the closest 3 alive AI fighters by ascending ant index.
@@ -856,33 +856,30 @@ function aiInvasionTick(world: WorldState, aiColonyId: ColonyId): void {
 }
 
 /**
- * The colony an AI colony probes and invades: the player, or — when the rule-based
- * controller drives the PLAYER colony (the `check:ai-economy --both-ai` harness,
- * #290 PR 5) — the enemy. Unchanged for the enemy AI (the only one in play), which
- * always targets the player; before this the player AI "invaded" its own entrance.
+ * Select probe target (Q3 spec). The target colony is the AI's opponent
+ * (`opponentColonyId`, ai-state.ts): the player for the enemy AI, the enemy for a
+ * player-colony AI (#290 PR 5 — before that the player AI "invaded" its own
+ * entrance). Exported for tests.
  */
-function opponentColonyId(aiColonyId: ColonyId): ColonyId {
-  return aiColonyId === PLAYER_COLONY_ID
-    ? (ENEMY_COLONY_ID as ColonyId)
-    : (PLAYER_COLONY_ID as ColonyId);
-}
-
-/** Select probe target (Q3 spec). */
-function _selectProbeTarget(
+export function aiSelectProbeTarget(
   world: WorldState,
   aiColonyId: ColonyId,
 ): { tileX: number; tileY: number } | null {
-  // Priority 1: closest player-marked food pile by ascending pile ID for ties.
-  const playerColony = world.colonies[opponentColonyId(aiColonyId)];
-  if (playerColony === undefined) return null;
+  // Priority 1: the opponent's marked food pile (by ascending pile ID for ties).
+  const opponentId = opponentColonyId(world, aiColonyId);
+  const opponentColony = opponentId === null ? undefined : world.colonies[opponentId];
+  if (opponentColony === undefined) return null;
 
   let bestPile: { tileX: number; tileY: number; id: number; dist: number } | null = null;
   const aiCol = world.colonies[aiColonyId];
-  // We need a reference point: AI's entrance or colony start.
+  // We need a reference point: the AI's entrance, else its OWN colony's start
+  // column (#347: a player-colony AI used to fall back to the enemy's).
   const aiEntranceX =
     aiCol !== undefined && aiCol.entrances.length > 0
       ? aiCol.entrances[0]!.surfaceTileX
-      : ENEMY_START_X;
+      : aiColonyId === PLAYER_COLONY_ID
+        ? PLAYER_START_X
+        : ENEMY_START_X;
   const aiEntranceY =
     aiCol !== undefined && aiCol.entrances.length > 0 ? aiCol.entrances[0]!.surfaceTileY : 0; // surface row — all current entrances have surfaceTileY=0
 
@@ -890,7 +887,7 @@ function _selectProbeTarget(
   for (let o = 0; o < nPiles; o++) {
     const slot = pileSlotAt(world, o);
     const pileId = pileFoodId(world, slot);
-    const isMarked = playerColony.priorityFoodPileId === pileId;
+    const isMarked = opponentColony.priorityFoodPileId === pileId;
     if (!isMarked) continue;
     const px = pileTileX(world, slot);
     const py = pileTileY(world, slot);
@@ -906,15 +903,15 @@ function _selectProbeTarget(
   if (bestPile !== null) return { tileX: bestPile.tileX, tileY: bestPile.tileY };
 
   // Priority 2: closest unmarked surface pile within AI_PROBE_FALLBACK_RADIUS_TILES
-  // of any open player entrance.
+  // of any open opponent entrance.
   for (let o = 0; o < nPiles; o++) {
     const slot = pileSlotAt(world, o);
     const pileId = pileFoodId(world, slot);
     const px = pileTileX(world, slot);
     const py = pileTileY(world, slot);
-    // Check if within radius of any open player entrance.
+    // Check if within radius of any open opponent entrance.
     let withinRadius = false;
-    for (const entrance of playerColony.entrances) {
+    for (const entrance of opponentColony.entrances) {
       if (!entrance.isOpen) continue;
       const dist = Math.abs(px - entrance.surfaceTileX) + Math.abs(py - entrance.surfaceTileY);
       if (dist <= AI_PROBE_FALLBACK_RADIUS_TILES) {
@@ -963,14 +960,15 @@ function _selectAllFighters(world: WorldState, aiColonyId: ColonyId): number[] {
   return fighters;
 }
 
-/** Select invasion entrance (Q4): player entrance closest to AI's last probe target. Falls back to first open. */
+/** Select invasion entrance (Q4): opponent entrance closest to AI's last probe target. Falls back to first open. */
 function _selectInvasionEntrance(
   world: WorldState,
   aiState: import('../sim/types.js').AIStateRecord,
 ): import('../sim/colony/entrance.js').NestEntrance | null {
-  const playerColony = world.colonies[opponentColonyId(aiState.colonyId)];
-  if (playerColony === undefined) return null;
-  const openEntrances = playerColony.entrances.filter((e) => e.isOpen);
+  const opponentId = opponentColonyId(world, aiState.colonyId);
+  const opponentColony = opponentId === null ? undefined : world.colonies[opponentId];
+  if (opponentColony === undefined) return null;
+  const openEntrances = opponentColony.entrances.filter((e) => e.isOpen);
   if (openEntrances.length === 0) return null;
   if (openEntrances.length === 1) return openEntrances[0]!;
 
