@@ -116,7 +116,11 @@ export function colonyFoodCapacity(colony: ColonyRecord): number {
  * DEPOSITABLE FoodStorage chamber (`isFoodChamberDepositable`: at least
  * FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP free; one that is takes up to its full free
  * space). A chamber under the hysteresis accepts nothing, so its free space does
- * not count. Integer-only; no allocation.
+ * not count. Exact for one load; loads in flight together can over-promise by up
+ * to FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP − 1 per chamber a load part-fills (a
+ * chamber left under the hysteresis strands its remainder), so a later hauler
+ * can still park until the queen eats — accepted, as foragers already deposit
+ * uncounted. Integer-only; no allocation.
  */
 export function colonyDepositableRoom(world: WorldState, colony: ColonyRecord): number {
   let room = 0;
