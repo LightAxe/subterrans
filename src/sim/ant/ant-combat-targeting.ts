@@ -12,7 +12,13 @@ import {
   type WorldState,
 } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
-import { antIsAtHome, fighterIsHungry } from '../hunger.js';
+import {
+  antIsAtHome,
+  FIGHTER_HUNGER,
+  fighterIsHungry,
+  fighterIsStarving,
+  storesCanSpareMeal,
+} from '../hunger.js';
 import { isSurfaceTileInComponent } from '../surface-features.js';
 import { getScratch } from '../scratch.js';
 import { DIR_DX, DIR_DY, canEnterUndergroundTile, packStep } from './ant-motion.js';
@@ -332,11 +338,16 @@ export function fighterBarredFromForeignShaft(world: WorldState, id: number): bo
  * V51 (D11) — hungry fighter `id` below ground in a FOREIGN nest leaves to eat:
  * it is not fighting (no duel in progress and no hostile within
  * FIGHT_AGGRO_RADIUS of it in that grid). Combat comes first — an invader in a
- * fight stays in it.
+ * fight stays in it. From V58 (#363) a STARVING invader (fighterIsStarving)
+ * whose colony's stores can feed it leaves even from a fight.
  */
 function hungryInvaderLeaves(world: WorldState, id: number, gridColonyId: number): boolean {
   if (!fighterIsHungry(world, id)) return false;
   const ants = world.ants;
+  if (fighterIsStarving(world, id)) {
+    const own = world.colonies[ants.colonyId[id]!];
+    if (own !== undefined && storesCanSpareMeal(world, own, FIGHTER_HUNGER.mealFp)) return true;
+  }
   if (ants.combatOpponentId[id] !== -1) return false;
   // Any other colony's ant in this grid within FIGHT_AGGRO_RADIUS (Manhattan)?
   // The same candidates pickNearestHostileUnderground scans, allocation-free.
@@ -1525,16 +1536,31 @@ export function updateFightAntTargets(world: WorldState): void {
     // still hungry (the colony could not feed it), a fighter with a rally
     // elsewhere waits where it is (it still fights an enemy it sees); a sentry
     // or tunnel defender keeps to its ordinary routing, which is at home.
-    if (
+    // #363 (V58): a STARVING fighter away from home (starvingAway) walks home even
+    // from a fight: from a duel, past enemies in sight, and from under its
+    // colony's spider order (step 10d leaves a fighter walking home to eat alone).
+    // Only if home can feed it: in a famine the walk gains it nothing, and a
+    // fighter chasing out past home range and turning back in would flip every tick.
+    // (Read here, before next tick's meals and deposits: with the stores right at
+    // the line a fighter out of home range can switch for a tick or two. Rare.)
+    const starvingAway =
       ants.zone[id] === Zone.Surface &&
       hasEntrances &&
-      world.spiderPriorityColonyId !== colonyId &&
-      ants.combatOpponentId[id] === -1 &&
-      fighterIsHungry(world, id)
+      fighterIsStarving(world, id) &&
+      !antIsAtHome(world, id) &&
+      storesCanSpareMeal(world, colony, FIGHTER_HUNGER.mealFp);
+    if (
+      starvingAway ||
+      (ants.zone[id] === Zone.Surface &&
+        hasEntrances &&
+        world.spiderPriorityColonyId !== colonyId &&
+        ants.combatOpponentId[id] === -1 &&
+        fighterIsHungry(world, id))
     ) {
-      const away = !antIsAtHome(world, id);
+      const away = starvingAway || !antIsAtHome(world, id);
       if (away || (rp != null && defendedEntrance(world, colony) === null)) {
         if (
+          !starvingAway &&
           targetNearestHostileInSight(
             world,
             id,

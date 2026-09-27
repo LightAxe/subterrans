@@ -140,7 +140,10 @@ one of its own open entrances — or from the food it is carrying when away. The
 colony feeds the queen first, then larvae, then workers: a worker's meal is skipped
 if it would leave the colony's food below the queen's share
 (`QUEEN_MEAL_RESERVE_FP`). A **hungry** fighter away from home and not fighting
-walks home to eat, then goes back to its rally point or post. A starved ant leaves
+walks home to eat, then goes back to its rally point or post. Since **#363
+(simVersion V58)** a **starving** one — within 600 ticks of starvation
+(`FIGHTER_STARVING_TICKS`; not the hunger profile's lethal `'starving'` state) —
+walks home from a fight too, when home can feed it. A starved ant leaves
 no food behind. The spider keeps its own hunger clock and eats only its kills.
 _Avoid_: **upkeep**, **rations** (except for eating from a carried load), **stamina**.
 

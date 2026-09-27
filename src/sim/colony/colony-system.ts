@@ -34,14 +34,9 @@ import type { WorldState } from '../types.js';
 import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V51_UNIFIED_HUNGER } from '../types.js';
 import type { ColonyRecord } from './colony-store.js';
 import type { ColonyId } from './colony-store.js';
-import {
-  RECONCILE_INTERVAL_TICKS,
-  NURSE_MIN_WORKERS,
-  QUEEN_MEAL_RESERVE_FP,
-} from '../constants.js';
+import { RECONCILE_INTERVAL_TICKS, NURSE_MIN_WORKERS } from '../constants.js';
 import {
   clampColonyFoodStores,
-  colonyFoodTotal,
   createChamberStock,
   foodStoreHasFreeSlot,
   withdrawFood,
@@ -50,6 +45,7 @@ import {
   antIsAtHome,
   LARVA_HUNGER,
   QUEEN_HUNGER,
+  storesCanSpareMeal,
   ticksSinceMeal,
   workerHungerProfile,
   type HungerProfile,
@@ -170,7 +166,7 @@ function feedWorkerOrStarve(world: WorldState, colony: ColonyRecord, id: number)
   const meal = profile.mealFp;
   if (
     antIsAtHome(world, id) &&
-    colonyFoodTotal(world, colony) - meal >= QUEEN_MEAL_RESERVE_FP &&
+    storesCanSpareMeal(world, colony, meal) &&
     withdrawFood(world, colony, meal)
   ) {
     ants.lastMealTick[id] = world.tick;

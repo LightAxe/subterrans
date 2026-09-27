@@ -218,6 +218,29 @@ export const FIGHTER_WALK_HOME_BUDGET_TICKS = 1200;
 export const FIGHTER_WALK_HOME_HUNGER_TICKS =
   FIGHTER_STARVE_AFTER_TICKS - FIGHTER_WALK_HOME_BUDGET_TICKS;
 
+/**
+ * V58 (#363) — an empty-handed fighter is STARVING once this many ticks have
+ * passed since its last meal: 600 ticks (one meal interval) before it would
+ * starve. A starving fighter away from home, whose colony can feed it, drops any
+ * fight and walks home to eat; a merely hungry one (past
+ * FIGHTER_WALK_HOME_HUNGER_TICKS) still fights first. (The hunger profile's own
+ * 'starving' state, `hungerState`, is the starve-after itself — too late to walk
+ * anywhere.)
+ *
+ * The margin is a trade-off, not a worst-case bound. 600 ticks is 300 tiles in the
+ * open at WORKER_BASE_SPEED. It covers the fights that hold fighters in practice,
+ * at or near entrances: the two starting entrances are 80 tiles apart
+ * (PLAYER_START_X/ENEMY_START_X), 160 ticks in the open or ~240 with the walk-home
+ * budget's half again for detours and bumps, leaving ~360 ticks to climb out of an
+ * enemy nest first. It does not cover the worst case FIGHTER_WALK_HOME_BUDGET_TICKS
+ * allows for (1200: a far corner of the map, then out of a deep nest), so a
+ * fighter held that far from home can still starve on the way; one held nearer
+ * no longer starves in the fight. A larger margin would send fighters home from
+ * fights they could have finished; the hungry walk-home (2400) already starts
+ * with the full budget.
+ */
+export const FIGHTER_STARVING_TICKS = FIGHTER_STARVE_AFTER_TICKS - FIGHTER_MEAL_INTERVAL_TICKS;
+
 /** PRD §9c — Maximum food units (fp) a worker can carry. 1024 = 4 × FP_ONE. */
 export const WORKER_CARRY_CAPACITY = 1024; // 4 × FP_ONE
 

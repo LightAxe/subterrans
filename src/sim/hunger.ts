@@ -18,16 +18,20 @@
 // Determinism: integers only, no `/`, no allocation, no module-level mutable state.
 
 import type { EntityId, WorldState } from './types.js';
-import { SIM_VERSION_V51_UNIFIED_HUNGER } from './types.js';
+import type { ColonyRecord } from './colony/colony-store.js';
+import { SIM_VERSION_V51_UNIFIED_HUNGER, SIM_VERSION_V58_STARVING_FIGHTER_EATS } from './types.js';
 import { AntTask } from './enums.js';
 import { FP_SHIFT } from './fixed.js';
 import { Zone } from './terrain.js';
+import { colonyFoodTotal } from './food/food-api.js';
 import {
   FIGHTER_MEAL_FP,
   FIGHTER_MEAL_INTERVAL_TICKS,
   FIGHTER_STARVE_AFTER_TICKS,
+  FIGHTER_STARVING_TICKS,
   FIGHTER_WALK_HOME_HUNGER_TICKS,
   HOME_EAT_RADIUS_TILES,
+  QUEEN_MEAL_RESERVE_FP,
   LARVA_MEAL_FP,
   LARVA_MEAL_INTERVAL_TICKS,
   LARVA_STARVE_AFTER_TICKS,
@@ -133,6 +137,36 @@ export function fighterIsHungry(world: WorldState, id: EntityId): boolean {
     world.simVersion >= SIM_VERSION_V51_UNIFIED_HUNGER &&
     world.ants.foodCarrying[id] === 0 &&
     ticksSinceMeal(world, id) >= FIGHTER_WALK_HOME_HUNGER_TICKS
+  );
+}
+
+/**
+ * The V51 at-home meal rule, extracted by #363 (no new gate): `colony`'s stores
+ * can spare a worker's or fighter's meal of `mealFp` at
+ * home: taking it leaves at least QUEEN_MEAL_RESERVE_FP (the queen eats first).
+ * The stores half of the at-home meal (colony-system.ts feedWorkerOrStarve).
+ */
+export function storesCanSpareMeal(
+  world: WorldState,
+  colony: ColonyRecord,
+  mealFp: number,
+): boolean {
+  return colonyFoodTotal(world, colony) - mealFp >= QUEEN_MEAL_RESERVE_FP;
+}
+
+/**
+ * V58 (#363) — fighter `id` is STARVING: empty-handed, with FIGHTER_STARVING_TICKS
+ * or more since its last meal (600 ticks before it would starve). This is not the
+ * profile's lethal 'starving' state (`hungerState`, at the starve-after itself).
+ * The caller (ant-combat-targeting.ts) sends a starving fighter that is away from
+ * home, and whose colony can feed it, home to eat even from a fight. Implies
+ * fighterIsHungry. Always false below V58.
+ */
+export function fighterIsStarving(world: WorldState, id: EntityId): boolean {
+  return (
+    world.simVersion >= SIM_VERSION_V58_STARVING_FIGHTER_EATS &&
+    world.ants.foodCarrying[id] === 0 &&
+    ticksSinceMeal(world, id) >= FIGHTER_STARVING_TICKS
   );
 }
 
