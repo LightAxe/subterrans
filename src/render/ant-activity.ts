@@ -25,7 +25,10 @@
 //        "my foragers are delivering", which are meaningfully different.)
 //   - Digging.MovingToTile            -> digging.movingToSite
 //   - Digging.Excavating              -> digging.excavating
-//   - Fighting (any sub)              -> fighting
+//   - Fighting (any sub)              -> fighting, and of those
+//       Fighting.Looting              -> raiding  (#290 PR 6: heading for an
+//                                        enemy FoodStorage to take a load)
+//       Fighting.Hauling              -> hauling  (carrying raided food home)
 //   - Nursing (any sub)               -> nursing
 //   - Idle (or unknown task value)    -> idle
 //
@@ -41,7 +44,7 @@ import { SIM_VERSION_V51_UNIFIED_HUNGER } from '../sim/types.js';
 import { workerHungerProfile } from '../sim/hunger.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
 import { isAlive } from '../sim/ant/ant-store.js';
-import { AntTask, ForagingSubState, DiggingSubState } from '../sim/enums.js';
+import { AntTask, ForagingSubState, DiggingSubState, FightingSubState } from '../sim/enums.js';
 import type { HudRect } from './hud-layout.js';
 
 export interface ForagingBreakdown {
@@ -65,6 +68,10 @@ export interface AntActivity {
   foraging: ForagingBreakdown;
   digging: DiggingBreakdown;
   fighting: number;
+  /** Fighters looting an enemy larder (Fighting.Looting; V52 raids only). */
+  raiding: number;
+  /** Fighters carrying raided food home (Fighting.Hauling; V52 raids only). */
+  hauling: number;
   nursing: number;
   idle: number;
   totalWorkers: number;
@@ -86,6 +93,8 @@ export function computeAntActivity(world: WorldState, colony: ColonyRecord): Ant
   let movingToSite = 0;
   let excavating = 0;
   let fighting = 0;
+  let raiding = 0;
+  let hauling = 0;
   let nursing = 0;
   let idle = 0;
   let workers = 0;
@@ -125,6 +134,8 @@ export function computeAntActivity(world: WorldState, colony: ColonyRecord): Ant
       }
     } else if (task === AntTask.Fighting) {
       fighting += 1;
+      if (sub === FightingSubState.Looting) raiding += 1;
+      else if (sub === FightingSubState.Hauling) hauling += 1;
     } else if (task === AntTask.Nursing) {
       nursing += 1;
     } else {
@@ -145,6 +156,8 @@ export function computeAntActivity(world: WorldState, colony: ColonyRecord): Ant
     },
     digging: { movingToSite, excavating, total: movingToSite + excavating },
     fighting,
+    raiding,
+    hauling,
     nursing,
     idle,
     totalWorkers: workers,
@@ -180,6 +193,8 @@ export function formatAntActivityLines(a: AntActivity): string[] {
     `    moving:    ${a.digging.movingToSite}`,
     `    digging:   ${a.digging.excavating}`,
     `  Fighting: ${a.fighting}`,
+    `    raiding:   ${a.raiding}`,
+    `    hauling:   ${a.hauling}`,
     `  Nursing:  ${a.nursing}`,
     `  Idle:     ${a.idle}`,
     // V51: hunger (blank below V51, where workers do not eat).
@@ -196,9 +211,10 @@ export function formatAntActivityLines(a: AntActivity): string[] {
  * Fixed screen rect the popup renders into, derived from the passed stats rect
  * (hud.STATS). Anchored just below the stats bar (top-left), wide enough to hold
  * the longest formatted line without clipping (`  Hungry:   NN  starving: NN`
- * at 11px monospace), tall enough for the 21 lines in `formatAntActivityLines`
- * plus padding (19 until the V51 hunger line, #290 PR 4, added two). At the
- * default 800×592 layout (stats = {x:8, y:8, w:200, h:24}) this yields {x:8, y:36, w:220, h:290}.
+ * at 11px monospace), tall enough for the 23 lines in `formatAntActivityLines`
+ * plus padding (19 until the V51 hunger line, #290 PR 4, added two; the
+ * raiding/hauling lines, #290 PR 6, two more). At the default 800×592 layout
+ * (stats = {x:8, y:8, w:200, h:24}) this yields {x:8, y:36, w:220, h:320}.
  *
  * Used by `isPointerOverHUD` (camera-input) so clicks inside the panel don't
  * fall through to the world while it is visible.
@@ -208,7 +224,7 @@ export function antActivityPanelRect(stats: HudRect): HudRect {
     x: stats.x,
     y: stats.y + stats.h + 4,
     w: 220,
-    h: 290,
+    h: 320,
   };
 }
 

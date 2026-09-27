@@ -4,7 +4,13 @@
 // strings, the null-cause fallback, and the no-events base case.
 
 import { describe, it, expect } from 'vitest';
-import { buildOutcomeAttribution } from './summary-builder.js';
+import {
+  buildOutcomeAttribution,
+  buildPlaytraceSummary,
+  buildRaidAggregate,
+} from './summary-builder.js';
+import { ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
+import { raidWorld } from '../sim/raid-test-utils.js';
 import type { SimEvent } from '../sim/telemetry.js';
 
 // ---------------------------------------------------------------------------
@@ -219,5 +225,36 @@ describe('buildOutcomeAttribution — no events', () => {
     const result = buildOutcomeAttribution(events);
     expect(result.primaryCause).toBeNull();
     expect(result.narrativeSeed).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #290 PR 6 — raid aggregate (from the ColonyRecord counters)
+// ---------------------------------------------------------------------------
+
+describe('buildRaidAggregate', () => {
+  it('reports each colony’s raid counters, keyed by colony id', () => {
+    const { world } = raidWorld();
+    const p = world.colonies[PLAYER_COLONY_ID]!;
+    const e = world.colonies[ENEMY_COLONY_ID]!;
+    p.foodRaidedFp = 3072;
+    p.raidTrips = 2;
+    e.foodLostToRaidsFp = 3072;
+    e.foodRaidedFp = 1024;
+    p.foodLostToRaidsFp = 1024;
+    expect(buildRaidAggregate(world)).toEqual({
+      byColony: {
+        [String(PLAYER_COLONY_ID)]: { foodRaidedFp: 3072, foodLostToRaidsFp: 1024, raidTrips: 2 },
+        [String(ENEMY_COLONY_ID)]: { foodRaidedFp: 1024, foodLostToRaidsFp: 3072, raidTrips: 0 },
+      },
+    });
+  });
+
+  it('is part of the playtrace summary, and JSON-safe', () => {
+    const { world } = raidWorld();
+    world.colonies[PLAYER_COLONY_ID]!.foodRaidedFp = 512;
+    const summary = buildPlaytraceSummary(world, false);
+    const wire = JSON.parse(JSON.stringify(summary)) as typeof summary;
+    expect(wire.raidAggregate.byColony[String(PLAYER_COLONY_ID)]!.foodRaidedFp).toBe(512);
   });
 });

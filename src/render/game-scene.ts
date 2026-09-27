@@ -155,6 +155,7 @@ import {
   panInputState,
 } from '../input/camera-input.js';
 import { enqueueCommand } from '../input/command-queue.js';
+import { handleSetRallyPoint } from '../input/surface-input.js';
 import { SIM_VERSION_V42_COLONY_ALARM } from '../sim/types.js';
 import type { SimCommand } from '../sim/commands.js';
 import { registerGestureArbiter, type GestureArbiter } from '../input/gesture-arbiter.js';
@@ -183,6 +184,16 @@ import { canAcceptWorldHotkey, type HotkeyGamePhase } from '../input/hotkey-poli
 import { contextMenuState, hideContextMenu } from './context-menu-state.js';
 import { antActivityPanelState } from './ant-activity-panel-state.js';
 import { buildPlaytraceSummary, type GameOutcomeLabel } from './summary-builder.js';
+import { colonyFoodTotal } from '../sim/food/food-api.js';
+import {
+  RAID_CAPTION_TEXTS,
+  createRaidCaptionState,
+  markRaidCaptionShown,
+  nextRaidCaption,
+  finalRallyInBatch,
+  rallyTargetsEnemyEntrance,
+  resetRaidCaptionState,
+} from './raid-captions.js';
 import {
   captionForEvent,
   checkAndTrigger,
@@ -262,7 +273,8 @@ interface UIScenePhase9 {
   hideDifficultySelectOverlay(): void;
   // S6 — first-occurrence caption overlay (light onboarding). Optional captionKey
   // (Stage 3b #3) lets a dropped one-shot caption un-mark its trigger so it re-fires.
-  showCaption(text: string, screenX: number, screenY: number, captionKey?: CaptionKey): void;
+  /** Returns false iff the caption queue dropped the caption (overflow). */
+  showCaption(text: string, screenX: number, screenY: number, captionKey?: CaptionKey): boolean;
   // Stage 3b (issue #18, #3) — display a one-time first-use navigation hint via
   // the shared caption queue. UIScene satisfies first-use-hints' FirstUseHintSink.
   showFirstUseHint(id: HintFirstUseId, text: string): void;
@@ -281,6 +293,11 @@ interface UIScenePhase9 {
   flashPausedQueueFull?(paused: boolean): void;
   // #320 — Dev/E2E observability for __phase9_test.getHudButtonGeometry().
   hudButtonGeometry?(): HudButtonGeometry[];
+  // #290 PR 6 — Dev/E2E observability for __phase9_test.getCaptionsShown().
+  captionsShown?(): string[];
+  // #290 PR 6 — true while nothing is showing and nothing is pending, so recurring
+  // raid news may enter without taking the slot a one-shot caption would need.
+  captionQueueIdle?(): boolean;
 }
 
 // Re-export GamePhase for Plan 07 and other consumers
@@ -343,6 +360,25 @@ declare global {
        *  overlay up) WITHOUT touching the sim, so a spec can reach the Restart
        *  button deterministically. No-op unless Playing. Dev-build only. */
       forceGameOver(): void;
+      /** #290 PR 6 — the text of every caption that began displaying this round,
+       *  oldest first (UIScene.captionsShown). A caption is up for 1.5 s, so a
+       *  spec asserts on the log rather than racing the live Text. Dev-build only. */
+      getCaptionsShown?(): string[];
+      /** #290 PR 6 — issue a player rally on (tileX, tileY) through the exact
+       *  enqueue the surface Command tap uses (handleSetRallyPoint): a command, not
+       *  a state write, so the drain, the caption hook and the sim all run as for
+       *  a real click. Lets a spec rally on an enemy entrance without driving the
+       *  camera to it. Returns false if the command was dropped (paused cap). */
+      rallyPlayerAt?(tileX: number, tileY: number): boolean;
+      /** #290 PR 6 — the player colony's raid counters (food in fp: stolen by it,
+       *  stolen from it; completed raid hauls) and its food total, read-only, so a
+       *  spec can prove a raid moved food. Null before the first boot. */
+      getPlayerRaidStats?(): {
+        foodRaidedFp: number;
+        foodLostToRaidsFp: number;
+        raidTrips: number;
+        foodTotalFp: number;
+      } | null;
     };
   }
 }
@@ -602,6 +638,26 @@ export class GameScene extends Phaser.Scene {
       isPaused: (): boolean => isPausedByAny(this.pauseReasons),
       alarmHotkeyAccepts: (): number => this.alarmHotkeyAccepts,
       getTick: (): number => this.world?.tick ?? -1,
+      getCaptionsShown: (): string[] => this.getUIScene()?.captionsShown?.() ?? [],
+      rallyPlayerAt: (tileX: number, tileY: number): boolean =>
+        this.world !== undefined &&
+        !handleSetRallyPoint(
+          this.world,
+          tileX,
+          tileY,
+          PLAYER_COLONY_ID,
+          isPausedByAny(this.pauseReasons),
+        ),
+      getPlayerRaidStats: () => {
+        const c = this.world?.colonies[PLAYER_COLONY_ID];
+        if (c === undefined) return null;
+        return {
+          foodRaidedFp: c.foodRaidedFp,
+          foodLostToRaidsFp: c.foodLostToRaidsFp,
+          raidTrips: c.raidTrips,
+          foodTotalFp: colonyFoodTotal(this.world, c),
+        };
+      },
       getHudButtonGeometry: (): HudButtonGeometry[] =>
         this.getUIScene()?.hudButtonGeometry?.() ?? [],
       sampleArea: (x: number, y: number, w: number, h: number): Promise<number[]> => {
@@ -665,6 +721,9 @@ export class GameScene extends Phaser.Scene {
   private lastProcessedEventTick = -1; // tick-based cursor for consumeEventsForRender
   private prevQueenCombinedHp: number | null = null; // queen HP tracking for damage pulse
   private queenStarvationTriggered = false; // starvation onset caption/pulse guard
+  // #290 PR 6 — raid captions: last-seen player raid counters + per-caption
+  // throttle. Re-baselined in finishBoot (fresh or loaded world).
+  private readonly raidCaptions = createRaidCaptionState();
   private renderFrame = 0; // frame counter for glow fade maps
   private readonly contestedGlowFrames: Map<number, number> = new Map(); // surface glow fade
   private readonly undergroundGlowFrames: Map<number, number> = new Map(); // underground glow fade
@@ -1567,6 +1626,26 @@ export class GameScene extends Phaser.Scene {
         uiScene.showCaption(captionText, this.layout.w / 2, 60, 'spiderPriority');
       }
     }
+
+    // #290 PR 6 — raid captions (being raided / raiding / a haul home), driven by
+    // the player colony's raid counters and throttled per caption (raid-captions.ts).
+    // Recurring: no one-shot key.
+    // The cooldown starts only once the queue has taken the caption. An owed
+    // caption is offered only while the queue is fully idle (nothing showing or
+    // pending). Taking the pending slot behind an active caption would make an
+    // arriving one-shot caption (rallyRaid, queen damage, invasion) get dropped,
+    // so raid news waits instead; it stays owed (up to RAID_CAPTION_OWED_TICKS)
+    // and is retried each frame until then. The check fails closed: a UIScene
+    // without captionQueueIdle shows no raid news rather than skipping the gate.
+    const raidCaption = nextRaidCaption(this.raidCaptions, this.world, PLAYER_COLONY_ID);
+    if (
+      raidCaption !== null &&
+      uiScene &&
+      uiScene.captionQueueIdle?.() === true &&
+      uiScene.showCaption(RAID_CAPTION_TEXTS[raidCaption], this.layout.w / 2, 60)
+    ) {
+      markRaidCaptionShown(this.raidCaptions, this.world, raidCaption);
+    }
   }
 
   private bootFresh(difficulty: 'Easy' | 'Normal' | 'Hard'): void {
@@ -1774,6 +1853,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   private finishBoot(): void {
+    // #290 PR 6 — only raid-counter increases from here on raise a caption (a
+    // loaded save's earlier raids must not).
+    resetRaidCaptionState(this.raidCaptions, this.world, PLAYER_COLONY_ID);
     // Stage 2 §B: a fresh/loaded world must rebake every allocated terrain RT (the prior
     // session's RTs are stale). Optional chaining — finishBoot can run before create() has
     // instantiated the cache in some boot orderings; the first frame then lazily bakes.
@@ -1823,11 +1905,26 @@ export class GameScene extends Phaser.Scene {
             const text = checkAndTrigger('foodMark');
             if (text && uiScene)
               uiScene.showCaption(text, this.layout.w / 2, this.layout.h - 80, 'foodMark');
-          } else if (cmd.type === 'SetRallyPoint') {
-            const text = checkAndTrigger('rally');
-            if (text && uiScene)
-              uiScene.showCaption(text, this.layout.w / 2, this.layout.h - 80, 'rally');
           }
+        }
+        // #290 PR 6: rally captions follow only the rally the batch leaves in
+        // effect (tick() applies the drained rally commands in order), so a set
+        // overridden in the same batch never consumes a one-shot caption. A rally
+        // on an enemy's open entrance sends the fighters in to raid; it has its own
+        // one-shot key, so it shows even after the generic rally caption has.
+        const rally = finalRallyInBatch(cmds, PLAYER_COLONY_ID);
+        if (rally !== null) {
+          const key: CaptionKey = rallyTargetsEnemyEntrance(
+            this.world,
+            PLAYER_COLONY_ID,
+            rally.tileX,
+            rally.tileY,
+          )
+            ? 'rallyRaid'
+            : 'rally';
+          const text = checkAndTrigger(key);
+          if (text && uiScene)
+            uiScene.showCaption(text, this.layout.w / 2, this.layout.h - 80, key);
         }
       },
       onTickOutcome: (outcome) => this.enterGameOver(outcome),

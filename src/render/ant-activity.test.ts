@@ -228,6 +228,31 @@ describe('computeAntActivity — hunger (V51, #290 PR 4)', () => {
   });
 });
 
+describe('computeAntActivity — raiders (#290 PR 6)', () => {
+  it('counts looting fighters as raiding and laden ones as hauling, all within Fighting', () => {
+    const { world, colony } = setupWorld();
+    spawnWorker(world, colony, AntTask.Fighting, FightingSubState.MovingToRally);
+    spawnWorker(world, colony, AntTask.Fighting, FightingSubState.Looting);
+    spawnWorker(world, colony, AntTask.Fighting, FightingSubState.Looting);
+    spawnWorker(world, colony, AntTask.Fighting, FightingSubState.Hauling);
+    const a = computeAntActivity(world, colony);
+    expect(a.fighting).toBe(4);
+    expect(a.raiding).toBe(2);
+    expect(a.hauling).toBe(1);
+    const text = formatAntActivityLines(a).join('\n');
+    expect(text).toContain('    raiding:   2');
+    expect(text).toContain('    hauling:   1');
+  });
+
+  it('the panel is tall enough for every formatted line at 11 px monospace', () => {
+    const { world, colony } = setupWorld();
+    const lines = formatAntActivityLines(computeAntActivity(world, colony)).length;
+    const panel = antActivityPanelRect(buildHudLayout(DEFAULT_LAYOUT).STATS);
+    // Phaser's 11 px monospace line is ~13 px; 8 px padding top and bottom.
+    expect(panel.h).toBeGreaterThanOrEqual(lines * 13 + 16);
+  });
+});
+
 describe('antActivityPanelRect layout', () => {
   it('anchors below the stats bar and fits within the 800x592 canvas', () => {
     const panel = antActivityPanelRect(buildHudLayout(DEFAULT_LAYOUT).STATS);

@@ -173,6 +173,16 @@ pool is a `Pool` record (`colony.poolSlot`), a chamber's stock a `Stock` record
 write them only through the food facade (`src/sim/food/food-api.ts`).
 _Avoid_: stockpile, reserve.
 
+**Food store / stock** (#290):
+The **food store** is where every unit of food lives (`world.food`): one record
+per colony's entrance **pool**, per FoodStorage chamber and per surface **food
+pile** (piles belong to no colony). A FoodStorage chamber's **stock** is the food held in that chamber; a
+colony's food total is its pool plus its stocks. Food is only ever in the store or
+in an ant's carried load.
+_Avoid_: **food store** for the FoodStorage chamber itself (that is a chamber; its
+contents are its stock); inventory, bank. **Larder** is player-facing caption copy
+for an enemy's FoodStorage chambers ("raid the larder"), not a code term.
+
 ## Foraging & pheromones
 
 **Pheromone**:
@@ -228,7 +238,9 @@ chambers are empty the fighters go for the queen. The entrance **pool** is never
 raided. A hauler that dies drops its load (on the surface as a food pile; in the
 enemy nest into that colony's pool). Every "may this fighter loot?" rule lives in
 one predicate (`fighterMayLoot`, `src/sim/ant/ant-raid.ts`), so an explicit raid
-order would change only that.
+order would change only that. The player sees raids through **captions** (being
+raided, raiding, a haul home), a **carried-food** crumb on every laden ant, and the
+raiding / hauling counts in the ant-activity panel.
 _Avoid_: **raid** for an AI `Probe` (a probe is a small attack, below); **plunder**,
 **pillage**, **steal order**.
 
@@ -266,7 +278,8 @@ Site a chamber for excavation.
 _Avoid_: build, construct.
 
 **Rally point** (`SetRallyPoint`):
-A surface location fighters converge on.
+A surface location fighters converge on. A rally on an enemy's open entrance sends
+them into that nest, where they fight and **raid** (see **Raid**).
 _Avoid_: waypoint, muster, target.
 
 **Behavior ratio** (`SetBehaviorRatio`):

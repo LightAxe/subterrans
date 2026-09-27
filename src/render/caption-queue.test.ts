@@ -7,6 +7,7 @@ import {
   completeCaption,
   clearPendingFirstUse,
   createCaptionQueueState,
+  recurringCaptionMayEnter,
   type CaptionRequest,
 } from './caption-queue.js';
 
@@ -131,5 +132,30 @@ describe('clearPendingFirstUse', () => {
     admitCaption(s, evt('queen-damage')); // pending EVENT caption
     clearPendingFirstUse(s);
     expect(s.pending?.text).toBe('queen-damage'); // survives the first-use reset
+  });
+});
+
+describe('recurringCaptionMayEnter (#290 PR 6)', () => {
+  it('only when nothing is showing and nothing is pending', () => {
+    const s = createCaptionQueueState();
+    expect(recurringCaptionMayEnter(s)).toBe(true);
+    admitCaption(s, evt('active'));
+    expect(recurringCaptionMayEnter(s)).toBe(false); // active, pending free
+    admitCaption(s, evt('pending'));
+    expect(recurringCaptionMayEnter(s)).toBe(false);
+  });
+
+  it('why: recurring news in the pending slot would drop an arriving one-shot', () => {
+    const s = createCaptionQueueState();
+    admitCaption(s, evt('queen damage'));
+    // Were raid news admitted behind the active caption...
+    admitCaption(s, evt('raid news'));
+    // ...a one-shot event arriving next overflows and is lost.
+    expect(admitCaption(s, evt('rally raid')).dropped?.text).toBe('rally raid');
+    // With the gate, raid news waits, and the one-shot takes the slot instead.
+    const g = createCaptionQueueState();
+    admitCaption(g, evt('queen damage'));
+    if (recurringCaptionMayEnter(g)) admitCaption(g, evt('raid news'));
+    expect(admitCaption(g, evt('rally raid')).queued?.text).toBe('rally raid');
   });
 });

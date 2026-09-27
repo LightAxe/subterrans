@@ -39,6 +39,14 @@ import {
   COLOR_RALLY_POINT,
 } from './sprites.js';
 import { buildHudLayout } from './hud-layout.js';
+import {
+  CARRIED_FOOD_HEAD_OFFSET_PX,
+  CARRIED_FOOD_SCALE,
+  FOOD_CACHE_SPRITE_WIDTH,
+  WORKER_SPRITE_HEIGHT,
+  WORKER_SPRITE_WIDTH,
+  carriedFoodPosition,
+} from './ant-sprite-layer.js';
 import { DEFAULT_LAYOUT } from './layout.js';
 
 // #238: the HUD anchor table moved to hud-layout.ts. These structural/relational
@@ -178,5 +186,29 @@ describe('COLOR_* palette range', () => {
   it.each(allColors)('$name is in range 0x000000–0xffffff', ({ value }) => {
     expect(value).toBeGreaterThanOrEqual(0x000000);
     expect(value).toBeLessThanOrEqual(0xffffff);
+  });
+});
+
+// #290 PR 6 — the carried-food crumb sits over the head (the SVGs face -x) and,
+// scaled with the ant, stays inside the ant's own footprint.
+describe('carriedFoodPosition (#290 PR 6)', () => {
+  const out = { x: 0, y: 0 };
+  it('native pose: the crumb is toward -x of the centre', () => {
+    carriedFoodPosition(100, 50, 0, 1, out);
+    expect(out.x).toBeCloseTo(100 - CARRIED_FOOD_HEAD_OFFSET_PX);
+    expect(out.y).toBeCloseTo(50);
+  });
+
+  it('follows the rotation and the scale', () => {
+    // rotation π/2: the head faces -y.
+    carriedFoodPosition(0, 0, Math.PI / 2, 1.25, out);
+    expect(out.x).toBeCloseTo(0);
+    expect(out.y).toBeCloseTo(-CARRIED_FOOD_HEAD_OFFSET_PX * 1.25);
+  });
+
+  it('the crumb fits within the worker footprint', () => {
+    const half = (FOOD_CACHE_SPRITE_WIDTH * CARRIED_FOOD_SCALE) / 2;
+    expect(CARRIED_FOOD_HEAD_OFFSET_PX + half).toBeLessThanOrEqual(WORKER_SPRITE_WIDTH / 2);
+    expect(half).toBeLessThanOrEqual(WORKER_SPRITE_HEIGHT / 2);
   });
 });

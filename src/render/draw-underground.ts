@@ -130,6 +130,7 @@ const scratchAntOptsUg: AntSpriteDrawOptions = {
   tint: 0,
   rotation: 0,
   scale: 1,
+  carrying: false,
 };
 
 // #236 PR2 render-scratch: reset per use — SHARED by the food-cache and brood drawStatic
@@ -779,6 +780,8 @@ export function drawUndergroundEntities(
     scratchAntOptsUg.tint = isFighter2 && !isQueen ? COLOR_FIGHTER_TINT : tint;
     scratchAntOptsUg.rotation = rotation;
     scratchAntOptsUg.scale = scale;
+    // #290 PR 6: a laden ant (forager or raid hauler alike) carries a food crumb.
+    scratchAntOptsUg.carrying = curr.ants.foodCarrying[id]! > 0;
     sprites.drawAnt(scratchAntOptsUg);
   }
 

@@ -51,6 +51,16 @@ export function createCaptionQueueState(): CaptionQueueState {
 }
 
 /**
+ * #290 PR 6: may recurring news (raid captions) enter the queue now? Only when
+ * the queue is fully idle. Taking the single pending slot behind an active
+ * caption would make an arriving one-shot event (rally, queen damage, invasion)
+ * overflow and be dropped for good, so recurring news waits instead.
+ */
+export function recurringCaptionMayEnter(state: CaptionQueueState): boolean {
+  return state.active === null && state.pending === null;
+}
+
+/**
  * Outcome of admitting a request. Exactly one of begin/queued/coalesced/dropped
  * describes the incoming request; `droppedFirstUse`, when set, is a previously-
  * pending first-use that the incoming event evicted (UIScene clears any

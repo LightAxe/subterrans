@@ -15,6 +15,9 @@
 
 import * as Phaser from 'phaser';
 import {
+  CARRIED_FOOD_SCALE,
+  CARRIED_FOOD_TINT,
+  carriedFoodPosition,
   ANT_TEXTURE_QUEEN,
   ANT_TEXTURE_WORKER,
   EGG_TEXTURE,
@@ -33,6 +36,9 @@ const ANT_SPRITE_DEPTH = 50;
 // Static entities sit just below ants so a queen standing in the Nursery
 // still reads on top of its own eggs. Keeps Z order predictable.
 const STATIC_SPRITE_DEPTH = 48;
+// #290 PR 6 — a carried-food crumb sits on top of the ant carrying it (and below
+// the spider, SPIDER_SPRITE_DEPTH 52).
+const CARRIED_FOOD_DEPTH = 51;
 
 const STATIC_TEXTURES: Record<StaticSpriteKind, string> = {
   egg: EGG_TEXTURE,
@@ -43,6 +49,7 @@ const STATIC_TEXTURES: Record<StaticSpriteKind, string> = {
 export class AntSpritePool implements AntSpriteLayer {
   private readonly pool: Phaser.GameObjects.Image[] = [];
   private nextIdx = 0;
+  private readonly crumbPos = { x: 0, y: 0 };
 
   constructor(private readonly scene: Phaser.Scene) {}
 
@@ -69,6 +76,18 @@ export class AntSpritePool implements AntSpriteLayer {
     sprite.setScale(opts.scale ?? 1);
     sprite.setDepth(ANT_SPRITE_DEPTH);
     sprite.setVisible(true);
+    if (opts.carrying === true) {
+      const scale = opts.scale ?? 1;
+      const at = carriedFoodPosition(opts.x, opts.y, opts.rotation ?? 0, scale, this.crumbPos);
+      const crumb = this.acquire();
+      crumb.setTexture(FOOD_CACHE_TEXTURE);
+      crumb.setPosition(at.x, at.y);
+      crumb.setTint(CARRIED_FOOD_TINT);
+      crumb.setRotation(0);
+      crumb.setScale(CARRIED_FOOD_SCALE * scale);
+      crumb.setDepth(CARRIED_FOOD_DEPTH);
+      crumb.setVisible(true);
+    }
   }
 
   drawStatic(opts: StaticSpriteDrawOptions): void {

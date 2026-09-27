@@ -27,6 +27,7 @@ import type { WorldState, SpiderState } from '../sim/types.js';
 import { createWorldState } from '../sim/types.js';
 import { sgSet, SurfaceTileState } from '../sim/terrain.js';
 import { initAnt } from '../sim/ant/ant-store.js';
+import { AntTask, FightingSubState, ForagingSubState } from '../sim/enums.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import {
   PLAYER_COLONY_ID,
@@ -1613,5 +1614,56 @@ describe('spiderHungerFraction (D9 #290)', () => {
   it('tiers have distinct thresholds, so a wrong-tier denominator fails the pins above', () => {
     const [easy, normal, hard] = SPIDER_HUNGER_THRESHOLD_TICKS;
     expect(new Set([easy, normal, hard]).size).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #290 PR 6 — carried-food crumb: any laden ant (forager or raid hauler) is drawn
+// with `carrying: true`; an empty-handed ant is not. Keyed on the load, not the task.
+// ---------------------------------------------------------------------------
+
+describe('drawSurfaceEntities — carried food (#290 PR 6)', () => {
+  function worldWithAnt(task: number, subTask: number, load: number): WorldState {
+    const world = createWorldState(1);
+    const colony = createColonyRecord(PLAYER_COLONY_ID, 999);
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    world.colonies[PLAYER_COLONY_ID] = colony;
+    initAnt(world.ants, 0, {
+      colonyId: PLAYER_COLONY_ID,
+      posX: 5 << FP_SHIFT,
+      posY: 5 << FP_SHIFT,
+      zone: 0,
+      task,
+      subTask,
+    });
+    world.ants.foodCarrying[0] = load;
+    return world;
+  }
+
+  function drawn(world: WorldState): AntSpriteDrawOptions {
+    const sprites = new MockAntSprites();
+    drawSurfaceEntities(new MockGfx(), sprites, world, world, 0, makeCamera(5, 5));
+    expect(sprites.calls.length).toBe(1);
+    return sprites.calls[0]!;
+  }
+
+  it('a forager carrying food draws the crumb', () => {
+    const w = worldWithAnt(AntTask.Foraging, ForagingSubState.CarryingFood, 1024);
+    expect(drawn(w).carrying).toBe(true);
+  });
+
+  it('a fighter hauling raided food draws the crumb, like a forager', () => {
+    const w = worldWithAnt(AntTask.Fighting, FightingSubState.Hauling, 1024);
+    const opts = drawn(w);
+    expect(opts.carrying).toBe(true);
+    expect(opts.scale).toBe(1.25); // still drawn as a fighter
+  });
+
+  it('an empty-handed ant draws no crumb', () => {
+    expect(drawn(worldWithAnt(AntTask.Foraging, ForagingSubState.SearchingFood, 0)).carrying).toBe(
+      false,
+    );
+    expect(drawn(worldWithAnt(AntTask.Fighting, FightingSubState.Looting, 0)).carrying).toBe(false);
   });
 });
