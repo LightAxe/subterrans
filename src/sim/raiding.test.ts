@@ -8,7 +8,12 @@
 
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
-import { SIM_VERSION_V51_UNIFIED_HUNGER, type WorldState } from './types.js';
+import {
+  allocateEntityId,
+  SIM_VERSION_V51_UNIFIED_HUNGER,
+  SIM_VERSION_V52_RAIDING,
+  type WorldState,
+} from './types.js';
 import {
   fighterMayLoot,
   dropHaulerLoad,
@@ -19,18 +24,32 @@ import {
   updateRaiders,
 } from './ant/ant-system.js';
 import { despawnAnt } from './ant-death.js';
-import { AntTask, FightingSubState, ForagingSubState, PheromoneType } from './enums.js';
+import {
+  AntTask,
+  ChamberType,
+  FightingSubState,
+  ForagingSubState,
+  PheromoneType,
+} from './enums.js';
 import { Zone } from './terrain.js';
 import { FP_SHIFT } from './fixed.js';
 import {
   chamberStock,
+  colonyDepositableRoom,
+  colonyFoodCapacity,
+  colonyFoodTotal,
+  colonyHasNoDepositTarget,
   colonyPoolFood,
   pileAmountFp,
   pileAtTile,
   pileCount,
   topUpOrSpawnCorpsePile,
 } from './food/food-api.js';
-import { setChamberStockForTest, setPoolFoodForTest } from './food/food-test-utils.js';
+import {
+  addChamberForTest,
+  setChamberStockForTest,
+  setPoolFoodForTest,
+} from './food/food-test-utils.js';
 import { phGet, pheromoneGridKey } from './pheromone/pheromone-store.js';
 import { FIGHTER_HUNGER } from './hunger.js';
 import { computeStockFlowField } from './chamber-flow.js';
@@ -856,5 +875,422 @@ describe('hauler exit off the entrance flow field (V52, rebased on PR 4’s hung
     const w = r.world;
     expect(run(w, 200, () => w.ants.zone[id] === Zone.Surface)).toBeGreaterThan(0);
     expect(tileOf(w, id).x).toBe(r.enemyDoor.x);
+  });
+});
+
+describe('no loot while the raider’s own stores are full (V53, D14)', () => {
+  /** Fill the player's pool and larder to capacity and keep its queen and larvae
+   *  from eating, so the stores stay full across ticks. */
+  function fillPlayerStores(r: RaidWorld): void {
+    const w = r.world;
+    setPoolFoodForTest(w, r.player, BASE_FOOD_STORAGE_CAPACITY);
+    setChamberStockForTest(w, r.player, r.playerLarder, FOOD_CHAMBER_CAPACITY);
+    w.ants.lastMealTick[r.player.queenEntityId] = w.tick;
+    for (const l of r.player.larvae) w.ants.lastMealTick[l] = w.tick;
+  }
+
+  it('a fighter whose colony has nowhere to store food does not start looting', () => {
+    const r = raidWorld();
+    const id = raiderInEnemyNest(r);
+    expect(fighterMayLoot(r.world, r.player, id)).toBe(true);
+    fillPlayerStores(r);
+    expect(colonyHasNoDepositTarget(r.world, r.player)).toBe(true);
+    expect(fighterMayLoot(r.world, r.player, id)).toBe(false);
+    updateRaiders(r.world);
+    expect(r.world.ants.subTask[id]).not.toBe(FightingSubState.Looting);
+  });
+
+  it('to start, the free capacity must hold a full load: exactly RAID_CARRY_FP starts, one less does not', () => {
+    const r = raidWorld();
+    const w = r.world;
+    const id = raiderInEnemyNest(r);
+    fillPlayerStores(r);
+    // Capacity 2048 (pool) + 5120 (larder); pool full, so the larder sets the room.
+    setChamberStockForTest(w, r.player, r.playerLarder, FOOD_CHAMBER_CAPACITY - RAID_CARRY_FP);
+    expect(fighterMayLoot(w, r.player, id)).toBe(true);
+    setChamberStockForTest(w, r.player, r.playerLarder, FOOD_CHAMBER_CAPACITY - RAID_CARRY_FP + 1);
+    expect(colonyHasNoDepositTarget(w, r.player)).toBe(false); // a forager could still deposit
+    expect(fighterMayLoot(w, r.player, id)).toBe(false);
+  });
+
+  it('a chamberless colony whose queen nibbles its full pool never loots (no 2 fp start)', () => {
+    // Repro (PR 6b review): with no FoodStorage the queen eats from the pool at
+    // step 3, before step 10e, so the pool always sits just under cap and the old
+    // "no deposit target" gate never closed. Queen meals are not pinned here.
+    const r = raidWorld(3000);
+    const w = r.world;
+    r.player.chambers = r.player.chambers.filter((c) => c !== r.playerLarder);
+    const id = raiderInEnemyNest(r);
+    let looted = 0;
+    run(
+      w,
+      30,
+      () => {
+        const sub = w.ants.subTask[id];
+        if (sub === FightingSubState.Looting || sub === FightingSubState.Hauling) looted += 1;
+        return false;
+      },
+      () => setPoolFoodForTest(w, r.player, BASE_FOOD_STORAGE_CAPACITY),
+    );
+    expect(looted).toBe(0);
+    expect(r.player.foodRaidedFp).toBe(0);
+  });
+
+  it('loads already in flight count: two haulers filling the room block a third raider', () => {
+    const r = raidWorld();
+    const w = r.world;
+    const id = raiderInEnemyNest(r);
+    fillPlayerStores(r);
+    // Room for exactly three loads.
+    setChamberStockForTest(w, r.player, r.playerLarder, FOOD_CHAMBER_CAPACITY - 3 * RAID_CARRY_FP);
+    const x = freeSurfaceTile(w, r.playerDoor.y);
+    addHauler(w, P, x, r.playerDoor.y, null, RAID_CARRY_FP);
+    expect(fighterMayLoot(w, r.player, id)).toBe(true); // 3 − 1 = 2 loads free
+    addHauler(w, P, x, r.playerDoor.y, null, RAID_CARRY_FP);
+    expect(fighterMayLoot(w, r.player, id)).toBe(true); // 3 − 2 = 1 load free
+    const third = addHauler(w, P, x, r.playerDoor.y, null, 1);
+    expect(fighterMayLoot(w, r.player, id)).toBe(false); // 1 fp short of a load
+    w.ants.foodCarrying[third] = 0;
+    w.ants.subTask[third] = FightingSubState.MovingToRally;
+    expect(fighterMayLoot(w, r.player, id)).toBe(true);
+  });
+
+  it('raiders starting in one pass commit a load each: room for one → only the first starts', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    rallyOn(r.player, r.enemyDoor);
+    const a = addFighter(w, P, 100, 6, E);
+    const b = addFighter(w, P, 101, 6, E);
+    fillPlayerStores(r);
+    setChamberStockForTest(w, r.player, r.playerLarder, FOOD_CHAMBER_CAPACITY - RAID_CARRY_FP);
+    updateRaiders(w);
+    expect(w.ants.subTask[Math.min(a, b)]).toBe(FightingSubState.Looting);
+    expect(w.ants.subTask[Math.max(a, b)]).not.toBe(FightingSubState.Looting);
+    // With room for two, both start.
+    const r2 = raidWorld(3000);
+    rallyOn(r2.player, r2.enemyDoor);
+    const c = addFighter(r2.world, P, 100, 6, E);
+    const d = addFighter(r2.world, P, 101, 6, E);
+    fillPlayerStores(r2);
+    setChamberStockForTest(
+      r2.world,
+      r2.player,
+      r2.playerLarder,
+      FOOD_CHAMBER_CAPACITY - 2 * RAID_CARRY_FP,
+    );
+    updateRaiders(r2.world);
+    expect(r2.world.ants.subTask[c]).toBe(FightingSubState.Looting);
+    expect(r2.world.ants.subTask[d]).toBe(FightingSubState.Looting);
+  });
+
+  it('a looter keeps on until there is nowhere at all to put food (the stop rule)', () => {
+    const r = raidWorld();
+    const w = r.world;
+    const id = raiderInEnemyNest(r);
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.Looting);
+    fillPlayerStores(r);
+    setPoolFoodForTest(w, r.player, BASE_FOOD_STORAGE_CAPACITY - 2); // 2 fp of room: no new start …
+    expect(w.ants.subTask[id]).toBe(FightingSubState.Looting);
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.Looting); // … but a looter keeps on
+  });
+
+  it('it hunts instead: never takes loot, and closes on the enemy queen (D10)', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    const id = raiderInEnemyNest(r);
+    const q = r.enemy.queenEntityId;
+    const d0 = Math.abs(tileOf(w, id).x - tileOf(w, q).x);
+    run(w, 40, undefined, () => {
+      fillPlayerStores(r);
+      w.ants.lastMealTick[q] = w.tick; // the enemy queen draws nothing from her larder
+    });
+    expect(w.ants.subTask[id]).not.toBe(FightingSubState.Looting);
+    expect(w.ants.foodCarrying[id]).toBe(0);
+    expect(chamberStock(w, r.enemyLarder)).toBe(3000);
+    expect(r.player.foodRaidedFp).toBe(0);
+    expect(Math.abs(tileOf(w, id).x - tileOf(w, q).x)).toBeLessThan(d0);
+  });
+
+  it('a raider already Looting stops at its next decision when the stores fill', () => {
+    const r = raidWorld();
+    const w = r.world;
+    const id = raiderInEnemyNest(r);
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.Looting);
+    fillPlayerStores(r);
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.MovingToRally);
+  });
+
+  it('room frees → it loots again', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    const id = raiderInEnemyNest(r);
+    fillPlayerStores(r);
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).not.toBe(FightingSubState.Looting);
+    setChamberStockForTest(w, r.player, r.playerLarder, FOOD_CHAMBER_CAPACITY - RAID_CARRY_FP);
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.Looting);
+    expect(run(w, 200, () => w.ants.subTask[id] === FightingSubState.Hauling)).toBeGreaterThan(0);
+    expect(w.ants.foodCarrying[id]).toBe(RAID_CARRY_FP);
+  });
+
+  it('a hauler already carrying keeps hauling home', () => {
+    const r = raidWorld();
+    const w = r.world;
+    rallyOn(r.player, r.enemyDoor);
+    const id = addHauler(w, P, 100, 6, E, RAID_CARRY_FP);
+    fillPlayerStores(r);
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.Hauling);
+    expect(w.ants.foodCarrying[id]).toBe(RAID_CARRY_FP);
+  });
+
+  it('applies to the enemy colony too: the sim does not tell an AI from a player', () => {
+    const r = raidWorld();
+    const w = r.world;
+    // An enemy raider in the player's nest, which has a stocked larder.
+    setChamberStockForTest(w, r.player, r.playerLarder, 3000);
+    rallyOn(r.enemy, r.playerDoor);
+    const id = addFighter(w, E, 20, 6, P);
+    expect(fighterMayLoot(w, r.enemy, id)).toBe(true);
+    setPoolFoodForTest(w, r.enemy, BASE_FOOD_STORAGE_CAPACITY);
+    setChamberStockForTest(w, r.enemy, r.enemyLarder, FOOD_CHAMBER_CAPACITY);
+    expect(fighterMayLoot(w, r.enemy, id)).toBe(false);
+  });
+
+  /** Raid world whose player owns three FoodStorage chambers, each held at
+   *  `freeEach` fp below cap every tick (pool full, player queen and larvae fed). */
+  function threeChamberWorld(freeEach: number | readonly [number, number, number]): {
+    r: RaidWorld;
+    freeze: () => void;
+  } {
+    const frees = typeof freeEach === 'number' ? [freeEach, freeEach, freeEach] : freeEach;
+    const r = raidWorld(3000);
+    const w = r.world;
+    const extra = [0, 1].map((i) =>
+      addChamberForTest(
+        w,
+        r.player,
+        {
+          chamberId: allocateEntityId(w),
+          chamberType: ChamberType.FoodStorage,
+          posX: (60 + i * 6) << FP_SHIFT,
+          posY: 20 << FP_SHIFT,
+          width: 4,
+          height: 3,
+        },
+        0,
+      ),
+    );
+    const freeze = (): void => {
+      setPoolFoodForTest(w, r.player, BASE_FOOD_STORAGE_CAPACITY);
+      [r.playerLarder, ...extra].forEach((ch, i) =>
+        setChamberStockForTest(w, r.player, ch, FOOD_CHAMBER_CAPACITY - frees[i]!),
+      );
+      w.ants.lastMealTick[r.player.queenEntityId] = w.tick;
+      for (const l of r.player.larvae) w.ants.lastMealTick[l] = w.tick;
+    };
+    return { r, freeze };
+  }
+
+  it('counts only room a deposit can use: pool full, chambers 512 + 256 + 256 free → no start', () => {
+    // Codex P2 (PR #351): raw free capacity is 1024 = RAID_CARRY_FP, but the two
+    // 256-fp chambers are under the 512-fp deposit hysteresis and take nothing,
+    // so a load would store 512 and park the rest.
+    const { r, freeze } = threeChamberWorld([512, 256, 256]);
+    const w = r.world;
+    rallyOn(r.player, r.enemyDoor);
+    const id = addFighter(w, P, 100, 6, E);
+    freeze();
+    expect(colonyFoodCapacity(r.player) - colonyFoodTotal(w, r.player)).toBe(RAID_CARRY_FP);
+    expect(colonyDepositableRoom(w, r.player)).toBe(512);
+    expect(colonyHasNoDepositTarget(w, r.player)).toBe(false); // the stop gate alone passes
+    expect(fighterMayLoot(w, r.player, id)).toBe(false);
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).not.toBe(FightingSubState.Looting);
+  });
+
+  it('… while 512 + 512 + 0 free (both depositable, 1024 usable) starts', () => {
+    const { r, freeze } = threeChamberWorld([512, 512, 0]);
+    const w = r.world;
+    rallyOn(r.player, r.enemyDoor);
+    const id = addFighter(w, P, 100, 6, E);
+    freeze();
+    expect(colonyDepositableRoom(w, r.player)).toBe(RAID_CARRY_FP);
+    expect(fighterMayLoot(w, r.player, id)).toBe(true);
+  });
+
+  it('colonyDepositableRoom: pool headroom plus each depositable chamber’s whole free space', () => {
+    const { r, freeze } = threeChamberWorld([600, 511, 0]);
+    const w = r.world;
+    freeze();
+    setPoolFoodForTest(w, r.player, BASE_FOOD_STORAGE_CAPACITY - 7);
+    expect(colonyDepositableRoom(w, r.player)).toBe(7 + 600); // 511 < hysteresis: none
+  });
+
+  it('3 chambers each under the deposit hysteresis (1200 fp free in all): no start, it hunts', () => {
+    // Regression (PR 6b review): every chamber refuses a deposit (< 512 fp free)
+    // while the total still holds a load, so a start the stop gate refused next
+    // tick flipped Looting / MovingToRally every tick and froze the fighter.
+    const { r, freeze } = threeChamberWorld(400);
+    const w = r.world;
+    rallyOn(r.player, r.enemyDoor);
+    const id = addFighter(w, P, 100, 6, E);
+    freeze();
+    expect(colonyHasNoDepositTarget(w, r.player)).toBe(true);
+    let looting = 0;
+    const x0 = tileOf(w, id).x;
+    let moved = false;
+    run(
+      w,
+      400,
+      () => {
+        if (w.ants.subTask[id] === FightingSubState.Looting) looting += 1;
+        if (tileOf(w, id).x !== x0) moved = true;
+        return false;
+      },
+      () => {
+        freeze();
+        w.ants.lastMealTick[id] = w.tick;
+      },
+    );
+    expect(looting).toBe(0);
+    expect(r.player.foodRaidedFp).toBe(0);
+    expect(moved).toBe(true);
+  });
+
+  it('… and with 600 fp free in each (depositable) it loots and hauls', () => {
+    const { r, freeze } = threeChamberWorld(600);
+    const w = r.world;
+    rallyOn(r.player, r.enemyDoor);
+    const id = addFighter(w, P, 100, 6, E);
+    freeze();
+    expect(colonyHasNoDepositTarget(w, r.player)).toBe(false);
+    expect(
+      run(
+        w,
+        200,
+        () => w.ants.subTask[id] === FightingSubState.Hauling,
+        () => {
+          freeze();
+          w.ants.lastMealTick[id] = w.tick;
+        },
+      ),
+    ).toBeGreaterThan(0);
+  });
+
+  it('a looter that stops mid-pass releases its load for a later raider in the same pass', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    rallyOn(r.player, r.enemyDoor);
+    const a = addFighter(w, PLAYER_COLONY_ID, 100, 6, ENEMY_COLONY_ID);
+    const b = addFighter(w, PLAYER_COLONY_ID, 101, 6, ENEMY_COLONY_ID);
+    setPoolFoodForTest(w, r.player, BASE_FOOD_STORAGE_CAPACITY);
+    setChamberStockForTest(w, r.player, r.playerLarder, FOOD_CHAMBER_CAPACITY - RAID_CARRY_FP);
+    w.ants.lastMealTick[r.player.queenEntityId] = w.tick;
+    updateRaiders(w);
+    const lo = Math.min(a, b);
+    const hi = Math.max(a, b);
+    expect(w.ants.subTask[lo]).toBe(FightingSubState.Looting);
+    expect(w.ants.subTask[hi]).not.toBe(FightingSubState.Looting);
+    w.ants.lastMealTick[lo] = -100000; // hungry: lo stops at its next decision
+    updateRaiders(w);
+    expect(w.ants.subTask[lo]).not.toBe(FightingSubState.Looting);
+    expect(w.ants.subTask[hi]).toBe(FightingSubState.Looting);
+  });
+
+  it('a dead looter holds no load at the next pass', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    rallyOn(r.player, r.enemyDoor);
+    const a = addFighter(w, PLAYER_COLONY_ID, 100, 6, ENEMY_COLONY_ID);
+    const b = addFighter(w, PLAYER_COLONY_ID, 101, 6, ENEMY_COLONY_ID);
+    setPoolFoodForTest(w, r.player, BASE_FOOD_STORAGE_CAPACITY);
+    setChamberStockForTest(w, r.player, r.playerLarder, FOOD_CHAMBER_CAPACITY - RAID_CARRY_FP);
+    updateRaiders(w);
+    w.ants.alive[Math.min(a, b)] = 0;
+    updateRaiders(w);
+    expect(w.ants.subTask[Math.max(a, b)]).toBe(FightingSubState.Looting);
+  });
+
+  it('a looter stays committed across passes: room for one load, B stays blocked while A loots', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    fillPlayerStores(r);
+    setChamberStockForTest(w, r.player, r.playerLarder, FOOD_CHAMBER_CAPACITY - RAID_CARRY_FP);
+    rallyOn(r.player, r.enemyDoor);
+    const a = addFighter(w, P, 100, 6, E);
+    updateRaiders(w);
+    expect(w.ants.subTask[a]).toBe(FightingSubState.Looting);
+    const b = addFighter(w, P, 101, 6, E);
+    updateRaiders(w); // pass 2: A is rebuilt into the tally, still Looting
+    expect(w.ants.subTask[a]).toBe(FightingSubState.Looting);
+    expect(w.ants.subTask[b]).not.toBe(FightingSubState.Looting);
+  });
+
+  it('… and counted once: room for two loads, B starts in pass 2 beside A', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    fillPlayerStores(r);
+    setChamberStockForTest(w, r.player, r.playerLarder, FOOD_CHAMBER_CAPACITY - 2 * RAID_CARRY_FP);
+    rallyOn(r.player, r.enemyDoor);
+    const a = addFighter(w, P, 100, 6, E);
+    updateRaiders(w);
+    expect(w.ants.subTask[a]).toBe(FightingSubState.Looting);
+    const b = addFighter(w, P, 101, 6, E);
+    updateRaiders(w);
+    expect(w.ants.subTask[a]).toBe(FightingSubState.Looting);
+    expect(w.ants.subTask[b]).toBe(FightingSubState.Looting);
+  });
+
+  it("another colony's laden haulers do not use up this colony's room", () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    fillPlayerStores(r);
+    setChamberStockForTest(w, r.player, r.playerLarder, FOOD_CHAMBER_CAPACITY - RAID_CARRY_FP);
+    const id = raiderInEnemyNest(r);
+    const x = freeSurfaceTile(w, r.playerDoor.y);
+    addHauler(w, E, x, r.playerDoor.y, null, RAID_CARRY_FP);
+    addHauler(w, E, x, r.playerDoor.y, null, RAID_CARRY_FP);
+    expect(fighterMayLoot(w, r.player, id)).toBe(true);
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.Looting);
+  });
+
+  it('after a pass the tally is not reused: a query sees a looter that has since stopped as gone', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    fillPlayerStores(r);
+    setChamberStockForTest(w, r.player, r.playerLarder, FOOD_CHAMBER_CAPACITY - RAID_CARRY_FP);
+    rallyOn(r.player, r.enemyDoor);
+    const a = addFighter(w, P, 100, 6, E);
+    const b = addFighter(w, P, 101, 6, E);
+    updateRaiders(w);
+    expect(w.ants.subTask[a]).toBe(FightingSubState.Looting);
+    expect(fighterMayLoot(w, r.player, b)).toBe(false); // A holds the one load of room
+    w.ants.subTask[a] = FightingSubState.MovingToRally; // A leaves, same tick
+    expect(fighterMayLoot(w, r.player, b)).toBe(true); // rebuilt, not the pass's tally
+  });
+
+  it('a V52 world still loots with full stores (pre-V53 unchanged)', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    w.simVersion = SIM_VERSION_V52_RAIDING;
+    const id = raiderInEnemyNest(r);
+    fillPlayerStores(r);
+    expect(fighterMayLoot(w, r.player, id)).toBe(true);
+    expect(
+      run(
+        w,
+        200,
+        () => w.ants.subTask[id] === FightingSubState.Hauling,
+        () => fillPlayerStores(r),
+      ),
+    ).toBeGreaterThan(0);
+    expect(r.player.foodRaidedFp).toBe(RAID_CARRY_FP);
   });
 });

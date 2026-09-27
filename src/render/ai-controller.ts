@@ -5,7 +5,10 @@
 // (GameScene's onBeforeTick calls runAIController only for non-player colonyIds).
 
 import type { WorldState } from '../sim/types.js';
-import { SIM_VERSION_V40_SMALL_COLONY_SURVIVAL } from '../sim/types.js';
+import {
+  SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
+  SIM_VERSION_V53_NO_LOOT_WHEN_FULL,
+} from '../sim/types.js';
 import type { ColonyId, ColonyRecord } from '../sim/colony/colony-store.js';
 import type {
   CancelDigMarkCommand,
@@ -31,6 +34,7 @@ import {
   QUEEN_EGG_FOOD_THRESHOLD,
 } from '../sim/constants.js';
 import {
+  colonyFoodCapacity,
   colonyFoodTotal,
   pileCount,
   pileFoodId,
@@ -54,6 +58,26 @@ export const AI_DIG_MARK_BUDGET = 5 as const;
 export const AI_QUEEN_CHAMBER_DEPTH = 18 as const;
 export const AI_FOOD_STORAGE_THRESHOLD = 8 as const;
 export const AI_NURSERY_THRESHOLD = 12 as const;
+
+/**
+ * #290 D14 (PR 6b) — "when its stores are full, the AI builds more storage, as a
+ * human would". Once the colony owns at least one COMPLETED FoodStorage chamber,
+ * `aiChamberPlacement` places one more whenever the stored total reaches this
+ * percentage of capacity (`colonyFoodTotal * 100 >= colonyFoodCapacity * PCT`)
+ * and no FoodStorage is pending. See `aiExtraFoodStorageWanted` for the rules.
+ */
+export const AI_EXTRA_FOOD_STORAGE_FULL_PCT = 90 as const;
+
+/**
+ * #290 D14 (PR 6b) — most FoodStorage chambers the AI will own (the extra-storage
+ * rule stops once this many are COMPLETED; at most one more is ever pending). A
+ * bound on runaway digging, not a gameplay limit (a player may build more).
+ * Measured with V53 (no loot with full stores), --both-ai 200 seeds: uncapped, the
+ * AI dug a median of ~9 and up to 29 chambers and its peak workers rose 60 %; a
+ * cap of 3 raised them 31 %; a cap of 2 raised them 15 % and had the lowest share
+ * of laden haulers parked with full stores.
+ */
+export const AI_MAX_FOOD_STORAGE_CHAMBERS = 2 as const;
 
 /**
  * Issue #33 — chamber placement depth tolerance (tiles). The findOpenChamberSpot
@@ -570,9 +594,8 @@ export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): voi
   // winner) a second FS PendingChamber would slip through. The previous
   // gate `!colony.chambers.some(...)` checked only completed chambers, so
   // this widened-window race already existed; widening hasChamberOrPending
-  // here closes it. Net behavior: the AI places exactly one FoodStorage
-  // chamber per colony — same as before this PR; the sim layer would
-  // accept additional FS but the AI does not issue them.
+  // here closes it. This rule places only the FIRST FoodStorage; more come
+  // from the #290 D14 rule after the Nursery block below.
   if (
     hasChamberOrPending(world, colony, ChamberType.Queen) &&
     colonyFoodTotal(world, colony) >= AI_FOOD_STORAGE_THRESHOLD &&
@@ -626,6 +649,24 @@ export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): voi
         };
         pushCommand(world, cmd, 'ai');
       }
+    }
+  }
+  // #290 D14 (PR 6b) — more storage when the stores are nearly full. Runs last
+  // so Queen and Nursery keep priority; the predicate also waits for a Nursery
+  // to be at least pending, so on the tick the Nursery is first issued (not yet
+  // pending) this does nothing.
+  if (aiExtraFoodStorageWanted(world, colony)) {
+    const placement = findOpenChamberSpot(world, colony, 5, ChamberType.FoodStorage);
+    if (placement !== null) {
+      const cmd: PlaceChamberCommand = {
+        type: 'PlaceChamber',
+        colonyId: colony.colonyId,
+        chamberType: ChamberType.FoodStorage,
+        anchorTileX: placement.tileX,
+        anchorTileY: placement.tileY,
+        issuedAtTick: world.tick,
+      };
+      pushCommand(world, cmd, 'ai');
     }
   }
 }
@@ -997,6 +1038,48 @@ function hasChamberOrPending(
     if (pc.colonyId === colony.colonyId && pc.chamberType === chamberType) return true;
   }
   return false;
+}
+
+/**
+ * #290 D14 (PR 6b) — should the AI place ANOTHER FoodStorage chamber now? Only
+ * once the opening is settled and the stores are nearly full:
+ *   - a Queen chamber is COMPLETED and a Nursery is completed or pending, so
+ *     the extra storage never competes with the opening's dig labour (the first
+ *     FoodStorage keeps its own rule in `aiChamberPlacement`);
+ *   - at least one FoodStorage is COMPLETED and none is pending: one extra
+ *     chamber in flight at a time, and the next is judged against the capacity
+ *     the last one added;
+ *   - fewer than AI_MAX_FOOD_STORAGE_CHAMBERS FoodStorage chambers exist;
+ *   - `colonyFoodTotal` is at least AI_EXTRA_FOOD_STORAGE_FULL_PCT of
+ *     `colonyFoodCapacity` (pending chambers add no capacity).
+ * Every input is world state, so the command stream stays deterministic per seed.
+ * Sticky-version gated (as V40 survival mode): the rule shipped with V53, so a
+ * pre-V53 world keeps the AI command stream it was recorded under.
+ * The AI state (Peacetime .. Invading) is deliberately not an input: a colony
+ * whose raiders bring food home to a full larder wants the room most.
+ */
+export function aiExtraFoodStorageWanted(world: WorldState, colony: ColonyRecord): boolean {
+  if (world.simVersion < SIM_VERSION_V53_NO_LOOT_WHEN_FULL) return false;
+  let completedStorage = 0;
+  let queen = false;
+  for (const ch of colony.chambers) {
+    if (ch.chamberType === ChamberType.FoodStorage) completedStorage += 1;
+    else if (ch.chamberType === ChamberType.Queen) queen = true;
+  }
+  if (!queen || completedStorage === 0) return false;
+  if (!hasChamberOrPending(world, colony, ChamberType.Nursery)) return false;
+  for (const pcKey in world.pendingChambers) {
+    if (!Object.hasOwn(world.pendingChambers, pcKey)) continue;
+    const pc = world.pendingChambers[pcKey]!;
+    if (pc.colonyId === colony.colonyId && pc.chamberType === ChamberType.FoodStorage) {
+      return false;
+    }
+  }
+  if (completedStorage >= AI_MAX_FOOD_STORAGE_CHAMBERS) return false;
+  return (
+    colonyFoodTotal(world, colony) * 100 >=
+    colonyFoodCapacity(colony) * AI_EXTRA_FOOD_STORAGE_FULL_PCT
+  );
 }
 
 /**
