@@ -1266,7 +1266,34 @@ export const SIM_VERSION_V57_ROUTED_TO_ENTRANCE = 57 as const;
  * change. A V57 save replays byte-identically. MIN_ACCEPTED is UNCHANGED (V50).
  */
 export const SIM_VERSION_V58_STARVING_FIGHTER_EATS = 58 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V58_STARVING_FIGHTER_EATS;
+
+/**
+ * #364 (V59) — invaders piling on one defender go for the next reachable enemy.
+ *
+ * Combat fights one pair per tile per tick (the lowest-id ant of each colony on
+ * it), and up to V58 every invader hunting in an enemy nest went for the same
+ * nearest hostile by Manhattan distance, so a pile of invaders waited behind one
+ * duel while other enemies stood free. A tile is SATURATED for invader `id` when
+ * its colony already holds the duel there (`tileSaturatedFor`, ant-motion.ts): its
+ * own tile when a lower-id friend stands on it too, any other tile when any friend
+ * does. From V59:
+ *   - an invader on the hunt steps toward the nearest hostile BY PATH on a tile not
+ *     saturated for it (`invaderHuntStep`, invader-retarget.ts), not routing
+ *     through tiles lower-id friends hold where the occupancy pass would bump it
+ *     back (with friends in every way, it holds); with no free hostile reachable it
+ *     hunts as before (it keeps its place in the queue);
+ *   - a raider's reach check (ant-raid.ts hostileInReach) ignores hostiles on
+ *     tiles saturated for it, so a duel a friend holds neither stops its looting
+ *     nor draws it in to queue. Step 10e's aim, which an aimed raider follows
+ *     instead of the hunt, is a free hostile when 10e picks it (a lower-id friend
+ *     can reach its tile first that tick). The reach check counts adults only, the
+ *     hunt brood too, as before V59: a looter loots beside unguarded brood.
+ * No new serialized field, command, world.rngState draw, entity-ID advance or
+ * tick-order change (the search buffers are derived, unserialized scratch). A V58
+ * save replays byte-identically. MIN_ACCEPTED is UNCHANGED (V50).
+ */
+export const SIM_VERSION_V59_INVADER_RETARGET = 59 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V59_INVADER_RETARGET;
 
 /**
  * S2 — AI colony state machine states.

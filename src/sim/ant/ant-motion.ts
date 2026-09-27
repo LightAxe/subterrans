@@ -11,6 +11,8 @@ import { SurfaceMovementEffect, surfaceMovementAt } from '../surface-features.js
 import type { AntComponents } from './ant-store.js';
 import { isRecentTile } from './ant-store.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
+import { isInChamberFootprint } from '../colony/colony-store.js';
+import { pileAtTile } from '../food/food-api.js';
 import { AntTask, DiggingSubState, NursingSubState, ChamberType } from '../enums.js';
 import {
   SURFACE_GRID_WIDTH,
@@ -594,5 +596,86 @@ export function isDescentBlocked(
     }
   }
 
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// isOccupancyExempt — tile-based exemption for same-colony occupancy rule.
+//
+// Returns true when (zone, tileX, tileY) is a "work site" where multiple
+// same-colony ants must be able to stack:
+//   - Any same-colony chamber footprint (food deposit, nursing, expansion).
+//   - Any same-colony entrance (surface tile; underground shaft bottom at tileY=0).
+//   - Any food pile (surface only; piles are infinite pickup sources per SURF-02).
+//
+// #364: lives in Layer 0 so behaviour modules (invader-retarget.ts) read the same
+// rule the occupancy pass (ant-movement.ts) applies.
+//
+// Inlined per-ant. Chamber / entrance / pile counts are small in practice
+// (bounded by colony design), so the linear scan is acceptable in the movement
+// hot path. Runs O(chambers + entrances + piles) per move rather than per ant
+// per work-site lookup — no Set/Map allocation.
+// ---------------------------------------------------------------------------
+export function isOccupancyExempt(
+  world: WorldState,
+  colonyId: number,
+  zone: number,
+  tileX: number,
+  tileY: number,
+): boolean {
+  const colony = world.colonies[colonyId];
+  if (!colony) return false;
+
+  if (isInChamberFootprint(colony, tileX, tileY)) return true;
+
+  if (colony.entrances) {
+    for (let e = 0; e < colony.entrances.length; e++) {
+      const ent = colony.entrances[e]!;
+      if (zone === Zone.Surface) {
+        if (ent.surfaceTileX === tileX && ent.surfaceTileY === tileY) return true;
+      } else {
+        // Underground shaft bottom at (entrance col, tileY=0)
+        if (ent.surfaceTileX === tileX && tileY === 0) return true;
+      }
+    }
+  }
+
+  if (zone === Zone.Surface) {
+    if (pileAtTile(world, tileX, tileY) >= 0) return true;
+  }
+
+  return false;
+}
+
+/**
+ * #364 (V59) — tile (tileX, tileY) of nest `gridColonyId` is SATURATED for fighter
+ * `id`: its colony already has its side of the fight there, so `id` could add
+ * nothing by going to it. Combat fights one pair per tile per tick, the lowest-id
+ * ant of each colony on it (combat.ts resolveCombatOnTile_v16; with two colonies,
+ * the only case the game has). So:
+ *   - the tile `id` stands on is saturated when a LOWER-id ant of its colony stands
+ *     there too (that ant, not `id`, is paired);
+ *   - any other tile is saturated when ANY other ant of its colony stands on it
+ *     (`id` arriving there would at best take over a duel a friend already holds).
+ * Only ants below ground in that nest count. Allocation-free; one pass over the ants.
+ */
+export function tileSaturatedFor(
+  world: WorldState,
+  id: number,
+  gridColonyId: number,
+  tileX: number,
+  tileY: number,
+): boolean {
+  const ants = world.ants;
+  const self = ants.colonyId[id]!;
+  const own = ants.posX[id]! >> FP_SHIFT === tileX && ants.posY[id]! >> FP_SHIFT === tileY;
+  for (let o = 0; o < ants.alive.length; o++) {
+    if (o === id || ants.alive[o] !== 1 || ants.colonyId[o] !== self) continue;
+    if (ants.zone[o] !== Zone.Underground || ants.currentGridColonyId[o] !== gridColonyId) {
+      continue;
+    }
+    if (ants.posX[o]! >> FP_SHIFT !== tileX || ants.posY[o]! >> FP_SHIFT !== tileY) continue;
+    if (!own || o < id) return true;
+  }
   return false;
 }

@@ -57,9 +57,10 @@ import { Zone } from '../terrain.js';
 import {
   SIM_VERSION_V52_RAIDING,
   SIM_VERSION_V53_NO_LOOT_WHEN_FULL,
+  SIM_VERSION_V59_INVADER_RETARGET,
   type WorldState,
 } from '../types.js';
-import { DIR_DX, DIR_DY, canEnterUndergroundTile } from './ant-motion.js';
+import { DIR_DX, DIR_DY, canEnterUndergroundTile, tileSaturatedFor } from './ant-motion.js';
 
 /** Fighter `id` is hauling loot home (FightingSubState.Hauling; V52 only writes it). */
 export function fighterIsHauling(world: WorldState, id: number): boolean {
@@ -151,6 +152,9 @@ function stockStepDir(world: WorldState, id: number, start: boolean): number {
  * the candidates (path distance is never shorter), so the BFS runs only with a
  * candidate near and the final pick reads only them. Returns that hostile (the nearest by path; the first found on a tie), or
  * -1 if none is in reach. Allocation-free (scratch window).
+ * From V59 (#364) a hostile on a tile SATURATED for the raider (tileSaturatedFor:
+ * its colony already holds the duel there) does not count: it neither stops the
+ * raider looting nor draws it in to queue behind that duel.
  */
 function hostileInReach(world: WorldState, id: number, gridColonyId: number, R: number): number {
   const ants = world.ants;
@@ -163,6 +167,7 @@ function hostileInReach(world: WorldState, id: number, gridColonyId: number, R: 
   const raid = getScratch(world).raid;
   const cand = raid.reachCand;
   cand.length = 0;
+  const v59 = world.simVersion >= SIM_VERSION_V59_INVADER_RETARGET;
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
     const c = world.colonies[key as unknown as keyof typeof world.colonies]!;
@@ -174,7 +179,11 @@ function hostileInReach(world: WorldState, id: number, gridColonyId: number, R: 
         continue;
       const dx = (ants.posX[o]! >> FP_SHIFT) - tx;
       const dy = (ants.posY[o]! >> FP_SHIFT) - ty;
-      if ((dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy) <= R) cand.push(o);
+      if ((dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy) > R) continue;
+      if (v59 && tileSaturatedFor(world, id, gridColonyId, tx + dx, ty + dy)) {
+        continue;
+      }
+      cand.push(o);
     }
   }
   if (cand.length === 0) return -1;

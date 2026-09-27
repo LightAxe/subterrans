@@ -238,6 +238,12 @@ _Avoid_: range, vision.
 
 **Combat**:
 HP / damage / cooldown resolution on contested tiles (ant vs ant, ant vs spider).
+One pair fights per tile per tick: the lowest-id ant of each colony on it. A tile
+is **saturated** for a fighter when its colony already holds the fight there
+(another of its ants stands on it; on the fighter's own tile, one with a lower
+id). Since **#364 (simVersion V59)** an invader goes after the nearest enemy (by
+tunnel) whose tile is not saturated, instead of queuing behind a duel its colony
+already holds, and such a duel no longer stops a raider looting.
 _Avoid_: battle; **fight** (fight = the task / behavior-ratio term, not the resolver).
 
 **Raid / looting / hauling** (simVersion V52; V53 no loot with full stores, #290):
