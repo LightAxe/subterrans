@@ -64,7 +64,7 @@ import {
   wholeLoadFp,
 } from '../food/food-api.js';
 import { fighterIsHungry } from '../hunger.js';
-import { colonyRaidType, isAnyEntranceTile } from '../raid-order.js';
+import { colonyRaidType, isEntranceTileOfAnyColony } from '../raid-order.js';
 import { getScratch, RAID_REACH_WINDOW_RADIUS, RAID_REACH_WINDOW_SIDE } from '../scratch.js';
 import { Zone } from '../terrain.js';
 import {
@@ -601,7 +601,7 @@ function placeDenyLoad(
     const nx = i < 0 ? tx : tx + DIR_DX[i]!;
     const ny = i < 0 ? ty : ty + DIR_DY[i]!;
     if (!canEnterSurfaceTile(world, nx, ny)) continue;
-    if (isAnyEntranceTile(world, nx, ny)) continue;
+    if (isEntranceTileOfAnyColony(world, nx, ny)) continue;
     if (pileDropRoomFp(world, nx, ny) < fp) continue;
     dropX = nx;
     dropY = ny;

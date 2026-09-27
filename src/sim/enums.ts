@@ -122,7 +122,7 @@ export const RaidType = {
 export type RaidType = (typeof RaidType)[keyof typeof RaidType];
 
 /** #352 — the RaidType values, in order (the save and the command validate against it). */
-export const RAID_TYPE_COUNT = 5;
+export const RAID_TYPE_COUNT = Object.keys(RaidType).length;
 
 /** #352 — `v` is a RaidType value (an integer in [0, RAID_TYPE_COUNT)). */
 export function isRaidType(v: unknown): v is RaidType {

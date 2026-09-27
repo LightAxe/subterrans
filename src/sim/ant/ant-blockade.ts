@@ -38,7 +38,7 @@ import {
 } from '../constants.js';
 import { AntTask, FightingSubState } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
-import { blockadedEntrance, isAnyEntranceTile } from '../raid-order.js';
+import { blockadedEntrance, isEntranceTileOfAnyColony } from '../raid-order.js';
 import {
   BLOCKADE_MARK_AT_POST,
   BLOCKADE_MARK_HELD,
@@ -144,7 +144,7 @@ function buildPosts(world: WorldState, ent: NestEntrance, out: number[]): void {
         const x = ent.surfaceTileX + dx;
         const y = ent.surfaceTileY + dy;
         if (!canEnterSurfaceTile(world, x, y) || !isSurfaceTileInComponent(world, x, y)) continue;
-        if (isAnyEntranceTile(world, x, y)) continue;
+        if (isEntranceTileOfAnyColony(world, x, y)) continue;
         out.push(x, y);
       }
     }

@@ -52,7 +52,7 @@ import type { CommandFeedforward } from '../render/command-feedforward.js';
 import { enqueueCommand } from './command-queue.js';
 import type { RaidType } from '../sim/enums.js';
 import { requestShowContextMenu } from '../render/context-menu-state.js';
-import { worldHasRaidOrders } from '../render/raid-order-view.js';
+import { enemyEntranceAt, worldHasRaidOrders } from '../sim/raid-order.js';
 
 // ---------------------------------------------------------------------------
 // isEmptySurfaceTile — checks whether a tile is empty (not entrance, not food pile)
@@ -150,16 +150,8 @@ export function isForeignColonyEntrance(
 ): boolean {
   if (tileX < 0 || tileY < 0) return false;
   if (tileX >= world.surface.width || tileY >= world.surface.height) return false;
-  for (const key of Object.keys(world.colonies)) {
-    const cid = Number(key);
-    if (cid === ownColonyId) continue;
-    const colony = world.colonies[cid];
-    if (colony === undefined) continue;
-    for (const entrance of colony.entrances) {
-      if (entrance.surfaceTileX === tileX && entrance.surfaceTileY === tileY) return true;
-    }
-  }
-  return false;
+  // #352: the sim's scan (raid-order.ts), shared with the rally lookup and captions.
+  return enemyEntranceAt(world, ownColonyId, tileX, tileY) !== null;
 }
 
 // ---------------------------------------------------------------------------

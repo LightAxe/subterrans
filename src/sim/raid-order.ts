@@ -18,26 +18,46 @@ export function colonyRaidType(world: WorldState, colony: ColonyRecord): RaidTyp
   return world.simVersion >= SIM_VERSION_V60_RAID_ORDERS ? colony.raidType : RaidType.Loot;
 }
 
+/** The world has raid orders (V60+): read by the raid menu, badge and captions. */
+export function worldHasRaidOrders(world: WorldState): boolean {
+  return world.simVersion >= SIM_VERSION_V60_RAID_ORDERS;
+}
+
 /**
- * The entrance of ANOTHER colony that `colony`'s rally point sits on (open or
- * closed), or null: no rally, or the rally is not on another colony's entrance.
- * Colonies in key order, entrances in list order (tiles are unique per entrance).
+ * The entrance (open or closed) of a colony OTHER than `colonyId` whose surface
+ * tile is (tileX, tileY), or null. Colonies in key order, entrances in list order
+ * (tiles are unique per entrance). The one "is this another colony's entrance?"
+ * scan: the sim's rally lookup, the input layer's tap / raid-menu eligibility and
+ * the render layer's order caption all read it, so they cannot disagree.
  */
-export function rallyEnemyEntrance(world: WorldState, colony: ColonyRecord): NestEntrance | null {
-  const rp = colony.rallyPoint;
-  if (rp == null) return null;
+export function enemyEntranceAt(
+  world: WorldState,
+  colonyId: number,
+  tileX: number,
+  tileY: number,
+): NestEntrance | null {
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
     const other = world.colonies[key as unknown as keyof typeof world.colonies]!;
-    if (other.colonyId === colony.colonyId) continue;
+    if (other.colonyId === colonyId) continue;
     const ents = other.entrances;
     if (ents == null) continue;
     for (let e = 0; e < ents.length; e++) {
       const ent = ents[e]!;
-      if (ent.surfaceTileX === rp.tileX && ent.surfaceTileY === rp.tileY) return ent;
+      if (ent.surfaceTileX === tileX && ent.surfaceTileY === tileY) return ent;
     }
   }
   return null;
+}
+
+/**
+ * The entrance of ANOTHER colony that `colony`'s rally point sits on (open or
+ * closed), or null: no rally, or the rally is not on another colony's entrance.
+ */
+export function rallyEnemyEntrance(world: WorldState, colony: ColonyRecord): NestEntrance | null {
+  const rp = colony.rallyPoint;
+  if (rp == null) return null;
+  return enemyEntranceAt(world, colony.colonyId, rp.tileX, rp.tileY);
 }
 
 /**
@@ -51,7 +71,7 @@ export function blockadedEntrance(world: WorldState, colony: ColonyRecord): Nest
 }
 
 /** Surface tile (x, y) is an entrance (open or closed) of any colony. */
-export function isAnyEntranceTile(world: WorldState, x: number, y: number): boolean {
+export function isEntranceTileOfAnyColony(world: WorldState, x: number, y: number): boolean {
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
     const ents = world.colonies[key as unknown as keyof typeof world.colonies]!.entrances;
