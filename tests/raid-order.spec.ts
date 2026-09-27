@@ -80,8 +80,6 @@ async function openRaidMenu(
     { x: door.tileX, y: door.tileY },
   );
   expect(pt).not.toBeNull();
-  // Let a frame apply the recentred camera before clicking.
-  await page.waitForTimeout(100);
   const box = await canvasBox(page);
   await page.mouse.click(box.x + pt!.x, box.y + pt!.y, { button: 'right' });
   await expect
@@ -129,7 +127,7 @@ test.describe('#352 — raid orders', () => {
       .toEqual({ raidType: RAID.Deny, rally: { tileX: door.tileX, tileY: door.tileY } });
     await expect
       .poll(() => captions(page), { timeout: 10_000 })
-      .toContainEqual(expect.stringMatching(/^Raiding: Deny\. /));
+      .toContainEqual(expect.stringMatching(/^Raiding: Deny\. Fighters steal food/));
     // The menu closed with the pick.
     await expect.poll(async () => (await contextMenu(page))?.visible ?? true).toBe(false);
 
@@ -142,5 +140,27 @@ test.describe('#352 — raid orders', () => {
     await expect
       .poll(() => captions(page), { timeout: 10_000 })
       .toContainEqual(expect.stringMatching(/^Raiding: Blockade\. /));
+
+    // A right-click on the open menu picks nothing (the row under it is Loot).
+    menu = await openRaidMenu(page, door);
+    const row0 = contextMenuRowRect(menu.screenX, menu.screenY, RAID.Loot);
+    const box = await canvasBox(page);
+    await page.mouse.click(box.x + row0.x + (row0.w >> 1), box.y + row0.y + (row0.h >> 1), {
+      button: 'right',
+    });
+    // It reopens the menu there; pick Assault. Had the right-click picked Loot,
+    // that order would have gone first, and its caption would be among those shown.
+    await expect
+      .poll(async () => {
+        const m = await contextMenu(page);
+        return m !== null && m.visible && m.kind === 'raid';
+      })
+      .toBe(true);
+    menu = (await contextMenu(page))!;
+    await pickRow(page, menu, RAID.Assault);
+    await expect
+      .poll(async () => (await raidOrder(page))?.raidType ?? -1, { timeout: 10_000 })
+      .toBe(RAID.Assault);
+    expect(await captions(page)).not.toContainEqual(expect.stringMatching(/^Raiding: Loot\. /));
   });
 });

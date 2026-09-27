@@ -194,26 +194,32 @@ function runOrder(start: WorldState, type: number): Row {
   let dropped = 0;
   let queen = '-';
   const a = world.ants;
-  // Piles by the player's doors: those there at t0 are not drops.
-  const seen = new Set<number>();
+  // Piles by the player's doors: what they held at t0 is not a drop. A pile's
+  // initial size only grows by a top-up, so each scan adds its growth since the
+  // last (a pile new since t0 adds all of it) — a drop onto an existing pile counts.
+  const lastInitial = new Map<number, number>();
   const scanDoorPiles = (): void => {
     forEachPile(world, (p) => {
-      if (seen.has(p.foodId)) return;
       for (const e of player.entrances) {
         if (
           e.isOpen &&
           Math.abs(p.x - e.surfaceTileX) <= 1 &&
           Math.abs(p.y - e.surfaceTileY) <= 1
         ) {
-          seen.add(p.foodId);
-          if (world.tick > t) dropped += p.initialFp;
+          const before = lastInitial.get(p.foodId);
+          if (world.tick > t) dropped += p.initialFp - (before ?? 0);
+          lastInitial.set(p.foodId, p.initialFp);
           return;
         }
       }
     });
   };
   scanDoorPiles();
+  // Ticks actually run: an order that ends the match stops early, and its means
+  // are over the ticks it ran, not the whole window.
+  let ran = 0;
   for (let k = 0; k < WINDOW; k++) {
+    ran++;
     runAIController(world, ENEMY_COLONY_ID);
     const outcome = tick(world, world.commandQueue.splice(0));
     scanDoorPiles();
@@ -242,14 +248,14 @@ function runOrder(start: WorldState, type: number): Row {
   });
   return {
     fighters,
-    meanFighters: Math.round((fighterSum / WINDOW) * 10) / 10,
+    meanFighters: Math.round((fighterSum / ran) * 10) / 10,
     dropped,
     stolen: player.foodRaidedFp - stolen0,
     lostE: enemy.foodLostToRaidsFp - lost0,
     trips: player.raidTrips - trips0,
     doorFp,
     inNest,
-    ring: Math.round((ringSum / WINDOW) * 10) / 10,
+    ring: Math.round((ringSum / ran) * 10) / 10,
     kills: player.killCount - kills0,
     queen,
     queenHp: a.alive[enemy.queenEntityId] === 1 ? a.hp[enemy.queenEntityId]! : 0,

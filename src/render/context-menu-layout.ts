@@ -42,6 +42,27 @@ export function contextMenuHeight(items: readonly ContextMenuRow[]): number {
   return CONTEXT_MENU.ITEM_HEIGHT * items.length;
 }
 
+/**
+ * #352 — the anchor (top-left) of a menu `menuH` tall opened at (x, y), moved so
+ * the whole menu lies within [0, maxRight) × [0, maxBottom): the raid menu opens
+ * on an enemy entrance anywhere on screen, and its bottom rows past the canvas
+ * (or under the bottom HUD strip) would be out of reach.
+ */
+export function clampContextMenuAnchor(
+  x: number,
+  y: number,
+  menuH: number,
+  maxRight: number,
+  maxBottom: number,
+): { x: number; y: number } {
+  const hiX = maxRight - CONTEXT_MENU.WIDTH;
+  const hiY = maxBottom - menuH;
+  return {
+    x: Math.max(0, Math.min(x, hiX)),
+    y: Math.max(0, Math.min(y, hiY)),
+  };
+}
+
 /** #352 — what the menu geometry needs of a row: the chamber menu's items and
  *  the surface raid menu's orders (raid-order-view.ts) share it. */
 export interface ContextMenuRow {

@@ -11,10 +11,15 @@ import {
   raidMenuItemAt,
   raidOrderCaption,
   raidOrderOfRally,
+  raidOrderOnTile,
   worldHasRaidOrders,
 } from './raid-order-view.js';
+import { drawGhostDelta } from './draw-command-legibility.js';
+import type { GhostDelta } from './command-ghosts.js';
+import { TILE_SIZE_PX } from './sprites.js';
 import {
   CONTEXT_MENU,
+  clampContextMenuAnchor,
   drawContextMenuGeometry,
   isInsideContextMenu,
 } from './context-menu-layout.js';
@@ -273,5 +278,66 @@ describe('input: opening the raid menu and sending the pick', () => {
     });
     expect(plain!.type).toBe('SetRallyPoint');
     expect('raidType' in plain!).toBe(false);
+  });
+});
+
+describe('#352 review — menu placement, the order in force, the queued badge', () => {
+  it('clampContextMenuAnchor keeps the whole menu inside the given bounds', () => {
+    const h = CONTEXT_MENU.ITEM_HEIGHT * RAID_ORDER_OPTIONS.length;
+    expect(clampContextMenuAnchor(100, 100, h, 800, 508)).toEqual({ x: 100, y: 100 });
+    // Near the bottom-right corner it moves up and left so every row is on screen.
+    const a = clampContextMenuAnchor(780, 500, h, 800, 508);
+    expect(a).toEqual({ x: 800 - CONTEXT_MENU.WIDTH, y: 508 - h });
+    // Never off the top-left.
+    expect(clampContextMenuAnchor(-5, -5, h, 800, 508)).toEqual({ x: 0, y: 0 });
+  });
+
+  it('raidOrderOnTile is the order only on the rallied entrance', () => {
+    const w = world();
+    const c = w.colonies[PLAYER_COLONY_ID]!;
+    const d = enemyDoor(w);
+    expect(raidOrderOnTile(w, PLAYER_COLONY_ID, d.x, d.y)).toBeNull();
+    c.rallyPoint = { tileX: d.x, tileY: d.y };
+    c.raidType = RaidType.Spoil;
+    expect(raidOrderOnTile(w, PLAYER_COLONY_ID, d.x, d.y)).toBe(RaidType.Spoil);
+    expect(raidOrderOnTile(w, PLAYER_COLONY_ID, d.x + 1, d.y)).toBeNull();
+  });
+
+  it('the queued badge sits on the rally tile, lifted above the committed one on a type change', () => {
+    const base: GhostDelta = {
+      pendingMarks: [],
+      pendingRemovals: [],
+      ghostChambers: [],
+      removedChambers: [],
+      pendingRally: null,
+      rallyCleared: null,
+      pendingSpiderPriority: null,
+      pendingFoodMark: null,
+      foodMarkCleared: null,
+      pendingEntrances: [],
+      pendingRaidOrder: null,
+    };
+    const tile = { tileX: 10, tileY: 20 };
+    const plain = new MockGfx();
+    drawGhostDelta(
+      plain,
+      { ...base, pendingRaidOrder: { ...tile, raidType: RaidType.Deny, overCommitted: false } },
+      'surface',
+      PLAYER_COLONY_ID,
+    );
+    const ref = new MockGfx();
+    drawRaidOrderBadge(ref, tile.tileX * TILE_SIZE_PX, tile.tileY * TILE_SIZE_PX, RaidType.Deny);
+    expect(plain.rects).toEqual(ref.rects);
+    const lifted = new MockGfx();
+    drawGhostDelta(
+      lifted,
+      { ...base, pendingRaidOrder: { ...tile, raidType: RaidType.Deny, overCommitted: true } },
+      'surface',
+      PLAYER_COLONY_ID,
+    );
+    expect(lifted.rects.map((r) => r[1])).toEqual(
+      ref.rects.map((r) => r[1] - RAID_BADGE_SIZE_PX - 1),
+    );
+    expect(new MockGfx().rects).toEqual([]);
   });
 });

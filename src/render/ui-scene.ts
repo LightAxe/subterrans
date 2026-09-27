@@ -257,6 +257,8 @@ import {
 } from './context-menu-state.js';
 import {
   CONTEXT_MENU_ITEMS,
+  clampContextMenuAnchor,
+  contextMenuHeight,
   contextMenuItemAt,
   isInsideContextMenu,
   itemLabelPos,
@@ -265,7 +267,7 @@ import {
   type ContextMenuItem,
   type ContextMenuRow,
 } from './context-menu-layout.js';
-import { RAID_ORDER_OPTIONS, activeRaidOrder, raidMenuItemAt } from './raid-order-view.js';
+import { RAID_ORDER_OPTIONS, raidMenuItemAt, raidOrderOnTile } from './raid-order-view.js';
 import { handleSetRallyPoint } from '../input/surface-input.js';
 import {
   computeHudStats,
@@ -1059,6 +1061,10 @@ export class UIScene extends Phaser.Scene {
             this.contextMenuRows(),
           )
         ) {
+          // #352 review — only a primary click picks a row: a right-click on the
+          // open menu (it opens over the tile right-clicked) reopens it (the
+          // arbiter's right-click) instead of silently choosing the row under it.
+          if (pointer.button !== 0) return;
           // #352 — a raid order: rally on the menu's enemy entrance with that type.
           if (contextMenuState.kind === 'raid') {
             this.dispatchRaidMenuClick(pointer.x, pointer.y);
@@ -1408,7 +1414,20 @@ export class UIScene extends Phaser.Scene {
     // pending (rare — would need two pointerdowns in one frame) the most
     // recently-requested show wins.
     applyPendingContextMenuHide();
+    const menuShown = contextMenuState.pendingShow;
     applyPendingContextMenuShow();
+    // #352 — keep a new raid menu on screen, above the bottom HUD strip.
+    if (menuShown && contextMenuState.kind === 'raid') {
+      const a = clampContextMenuAnchor(
+        contextMenuState.screenX,
+        contextMenuState.screenY,
+        contextMenuHeight(RAID_ORDER_OPTIONS),
+        this.layout.w,
+        this.hud.HINTS.y,
+      );
+      contextMenuState.screenX = a.x;
+      contextMenuState.screenY = a.y;
+    }
     applyPendingAntActivityPanelHide();
     this.gfx.clear();
     this.contextMenuGfx.clear();
@@ -1673,12 +1692,12 @@ export class UIScene extends Phaser.Scene {
       // #352 — the raid menu: the five orders, the one in force on this entrance
       // (in the PROJECTED world, so a queued pick shows while paused) outlined.
       for (const label of this.contextMenuLabels) label.setVisible(false);
-      const rally = projColony?.rallyPoint ?? null;
-      const onThis =
-        rally !== null &&
-        rally.tileX === contextMenuState.anchorTileX &&
-        rally.tileY === contextMenuState.anchorTileY;
-      const current = onThis ? activeRaidOrder(projWorld, PLAYER_COLONY_ID) : null;
+      const current = raidOrderOnTile(
+        projWorld,
+        PLAYER_COLONY_ID,
+        contextMenuState.anchorTileX,
+        contextMenuState.anchorTileY,
+      );
       drawContextMenuGeometry(
         this.contextMenuGfx as unknown as import('./draw-surface.js').GfxLike,
         contextMenuState.screenX,
@@ -1977,6 +1996,15 @@ export class UIScene extends Phaser.Scene {
     if (!world) return;
     const choice = raidMenuItemAt(px, py, contextMenuState.screenX, contextMenuState.screenY);
     if (choice === null) return;
+    // The order already in force here (projected: a queued pick counts): nothing
+    // to send — no queue slot spent while paused, no repeated caption.
+    const inForce = raidOrderOnTile(
+      this.getProjectedWorld(),
+      PLAYER_COLONY_ID,
+      contextMenuState.anchorTileX,
+      contextMenuState.anchorTileY,
+    );
+    if (inForce === choice) return;
     const paused = this.isPausedFn ? this.isPausedFn() : false;
     const dropped = handleSetRallyPoint(
       world,

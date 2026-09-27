@@ -104,6 +104,23 @@ export function activeRaidOrder(world: WorldState, colonyId: ColonyId): RaidType
 }
 
 /**
+ * The raid order `colonyId` has in force on the enemy entrance at surface tile
+ * (tileX, tileY) — its rally is there — or null. The raid menu outlines it, and a
+ * pick of the same order sends nothing (read on the projected world, so a queued
+ * pick counts while paused).
+ */
+export function raidOrderOnTile(
+  world: WorldState,
+  colonyId: ColonyId,
+  tileX: number,
+  tileY: number,
+): RaidType | null {
+  const rally = world.colonies[colonyId]?.rallyPoint ?? null;
+  if (rally === null || rally.tileX !== tileX || rally.tileY !== tileY) return null;
+  return activeRaidOrder(world, colonyId);
+}
+
+/**
  * The raid order a rally command gives, or null when it gives none: a V60+ world
  * and the rally tile is another colony's entrance (open or closed). The type is
  * the command's `raidType`, Loot when absent; a malformed one (which the sim drops

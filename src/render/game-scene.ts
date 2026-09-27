@@ -2791,6 +2791,8 @@ export class GameScene extends Phaser.Scene {
   ): { tileX: number; tileY: number; outcome: FeedforwardOutcome } | null {
     if (this.viewState.activeView !== 'surface') return null;
     if (this.viewState.activeTool !== 'dig') return null;
+    // #352 review — nor while the raid menu is up (it takes the clicks).
+    if (contextMenuState.visible) return null;
     if (this.hoverScreenX === null || this.hoverScreenY === null) return null;
     if (isPointerOverHUD(this.hoverScreenX, this.hoverScreenY, this.hud, this.viewState))
       return null;
