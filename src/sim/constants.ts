@@ -147,14 +147,12 @@ export const QUEEN_FOOD_PER_TICK = 2;
 /** PRD §9c — Food units consumed by a larva per tick. */
 export const LARVA_FOOD_PER_TICK = 1;
 
-/** PRD §9c — Food units consumed by a worker per tick (workers self-forage). */
-export const WORKER_FOOD_PER_TICK = 0;
-
 // #288 / #290 PR 2 (V50) — per-kind hunger profiles (see src/sim/hunger.ts).
 // A meal is attempted once ticks-since-meal reaches the interval; an ant that
 // fails a meal dies once ticks-since-meal reaches starve-after. The queen and
 // larva rows reproduce the pre-V50 per-tick draw and 300-tick countdown exactly.
-// Workers and fighters get rows when they start eating (#290 PR 4).
+// Workers and fighters eat from V51 (#290 PR 4): one meal every interval, from
+// the colony stores at home or from their own load away (hunger.ts).
 
 /** Queen: tries to eat every tick. */
 export const QUEEN_MEAL_INTERVAL_TICKS = 1;
@@ -169,6 +167,56 @@ export const LARVA_MEAL_INTERVAL_TICKS = 1;
 export const LARVA_MEAL_FP = LARVA_FOOD_PER_TICK;
 /** Larva: dies when a meal fails this many ticks after its last meal. */
 export const LARVA_STARVE_AFTER_TICKS = STARVATION_GRACE_TICKS;
+
+// Worker and fighter rows (V51). Tuned by the #290 PR 4 AI-economy sweep
+// (plan/food-entity-rewrite/SWEEP-PR4.md); fighters share the worker knobs.
+/** Worker: a meal is due this many ticks after the last one. */
+export const WORKER_MEAL_INTERVAL_TICKS = 600;
+/** Worker: fp per meal. */
+export const WORKER_MEAL_FP = 32;
+/** Worker: dies when a meal fails this many ticks after its last meal. */
+export const WORKER_STARVE_AFTER_TICKS = 3600;
+/** Fighter (a worker with task Fighting, read at the check): meal interval. */
+export const FIGHTER_MEAL_INTERVAL_TICKS = WORKER_MEAL_INTERVAL_TICKS;
+/** Fighter: fp per meal. */
+export const FIGHTER_MEAL_FP = WORKER_MEAL_FP;
+/** Fighter: dies when a meal fails this many ticks after its last meal. */
+export const FIGHTER_STARVE_AFTER_TICKS = WORKER_STARVE_AFTER_TICKS;
+
+/**
+ * V51 — a worker or fighter is AT HOME, and eats from the colony stores, when it
+ * is underground in its own nest or on the surface within this many tiles
+ * (Manhattan) of one of its colony's open entrances. 8 = a sentry's guard area
+ * (FIGHT_AGGRO_RADIUS + the door area), so sentries eat at their posts.
+ */
+export const HOME_EAT_RADIUS_TILES = 8;
+
+/**
+ * V51 — the colony feeds the queen first: a worker or fighter meal from the
+ * stores is skipped when it would leave less than this in them. One
+ * starvation-grace window of queen meals (300 × 2 fp = 600 fp).
+ */
+export const QUEEN_MEAL_RESERVE_FP = STARVATION_GRACE_TICKS * QUEEN_FOOD_PER_TICK;
+
+/**
+ * V51 (owner decision D11) — ticks a fighter needs, at most, to walk home from
+ * anywhere. The surface is 128 × 128 tiles, so the farthest tile lies at most
+ * 254 tiles (Manhattan) from an entrance; a fighter moves WORKER_BASE_SPEED =
+ * ½ tile a tick, 2 ticks a tile, so 508 ticks in the open. Allow half as much
+ * again for flow-field detours round features and occupancy bumps (~760), plus
+ * climbing out of a foreign nest first (128 × 64 grid: at most ~192 tiles to
+ * its shaft, ~384 ticks): ~1150, rounded up.
+ */
+export const FIGHTER_WALK_HOME_BUDGET_TICKS = 1200;
+
+/**
+ * V51 (D11) — a fighter away from home, empty-handed and not fighting, walks
+ * home to eat once this many ticks have passed since its last meal: its
+ * starve-after less the walk-home budget, so it reaches home before it would
+ * starve from anywhere on the map.
+ */
+export const FIGHTER_WALK_HOME_HUNGER_TICKS =
+  FIGHTER_STARVE_AFTER_TICKS - FIGHTER_WALK_HOME_BUDGET_TICKS;
 
 /** PRD §9c — Maximum food units (fp) a worker can carry. 1024 = 4 × FP_ONE. */
 export const WORKER_CARRY_CAPACITY = 1024; // 4 × FP_ONE

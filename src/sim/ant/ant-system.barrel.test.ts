@@ -17,6 +17,7 @@ const PUBLIC_FUNCTIONS = [
   'getTaskDirection',
   'pickCardinalStep',
   'pickInvaderUndergroundStep',
+  'fighterWalksHomeToEat', // V51 (#290 PR 4, D11) — the hungry walk-home marker, pinned by its tick-level test
   'pickNearestHostileUnderground',
   'pickSurfaceDetour',
   'routeForagerPriority',
@@ -44,7 +45,7 @@ describe('ant-system barrel public API (#212)', () => {
     });
   }
 
-  it('exports EXACTLY the 26 public functions (no accidental widening or narrowing)', () => {
+  it('exports EXACTLY the 27 public functions (no accidental widening or narrowing)', () => {
     const exportedFns = Object.keys(barrel)
       .filter((k) => typeof (barrel as Record<string, unknown>)[k] === 'function')
       .sort();

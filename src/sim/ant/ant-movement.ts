@@ -39,13 +39,14 @@ import {
   stepTowardReachable,
   surfaceGoalDistance,
 } from '../surface-routing.js';
-import { UndergroundTileState, Zone, ugGet } from '../terrain.js';
+import { UndergroundTileState, Zone, ugGet, type UndergroundGrid } from '../terrain.js';
 import type { WorldState } from '../types.js';
 import {
   pickInvaderUndergroundStep,
   pickNearestHostileUnderground,
   fighterBarredFromForeignShaft,
   fighterBarredFromOwnShaft,
+  fighterWalksHomeToEat,
   sentryHoldsBelow,
   sentryPassesThroughFriends,
   fighterDefendsTunnels,
@@ -69,6 +70,7 @@ import {
   isDescentBlocked,
   pickCardinalStep,
   pickSurfaceDetour,
+  packStep,
   unpackStepDx,
   unpackStepDy,
 } from './ant-motion.js';
@@ -796,7 +798,10 @@ export function tickAntMovement(
         // so this is unconditional now.) Must stay in lockstep with the ascent
         // `isRecallingFromForeign` / `skipAscent` predicate in the surface-ascent block
         // later in tickAntMovement.
-        const isRecalling = ownColony != null && ownColony.rallyPoint == null;
+        // V51 (#290 PR 4, D11): a hungry invader step 10c sent home to eat leaves
+        // the same way (fighterWalksHomeToEat is false below V51).
+        const isRecalling =
+          (ownColony != null && ownColony.rallyPoint == null) || fighterWalksHomeToEat(world, id);
 
         if (isRecalling) {
           // Recalled invader: navigate toward the nearest foreign entrance exit
@@ -822,8 +827,28 @@ export function tickAntMovement(
                 bestIsOpen = candidate.isOpen;
               }
             }
-            rawDx = (bestEnt.surfaceTileX << FP_SHIFT) - posX;
-            rawDy = -posY; // target underground Y=0 (entrance row)
+            const exitGrid = world.undergroundGrids[gridColonyId];
+            if (exitGrid !== undefined && fighterWalksHomeToEat(world, id)) {
+              // V51 (#290 PR 4, D11): a hungry invader walks out by the
+              // wall-aware BFS step (hungryExitStep), toward the first OPEN
+              // entrance of this nest it can actually reach, so neither a bend
+              // in the tunnel nor a nearer, unconnected stub shaft can pin it
+              // until it starves. (The plain recall below keeps its
+              // straight-line step at the nearest entrance: pre-V51 behaviour
+              // is unchanged.)
+              const step = hungryExitStep(
+                world,
+                exitGrid,
+                fEnts,
+                posX >> FP_SHIFT,
+                posY >> FP_SHIFT,
+              );
+              rawDx = unpackStepDx(step) * FP_ONE;
+              rawDy = unpackStepDy(step) * FP_ONE;
+            } else {
+              rawDx = (bestEnt.surfaceTileX << FP_SHIFT) - posX;
+              rawDy = -posY; // target underground Y=0 (entrance row)
+            }
             haveTarget = true;
           }
           // else: no enemy entrance → hold (dx=dy=0 fallback)
@@ -880,12 +905,13 @@ export function tickAntMovement(
       // #333 (V48) — a sentry walking home steps by the surface entrance flow
       // field (obstacle-aware), as a homebound forager does. At an entrance
       // tile (-1) or off the field (-2) it keeps the straight-line step.
+      // V51 (#290 PR 4, D11): so does a hungry fighter walking home to eat.
       let fieldStepped = false;
       if (
         haveTarget &&
         zone === Zone.Surface &&
         entranceFlowFields !== undefined &&
-        sentryWalksHome(world, id)
+        (sentryWalksHome(world, id) || fighterWalksHomeToEat(world, id))
       ) {
         const sDir = surfaceEntranceFieldDir(entranceFlowFields, ants.colonyId[id]!, posX, posY);
         if (sDir >= 0 && sDir < 4) {
@@ -1615,7 +1641,9 @@ export function tickAntMovement(
           // earlier in tickAntMovement.
           const ownColonyForAscent = world.colonies[ants.colonyId[id]!];
           const isRecallingFromForeign =
-            !inOwnGrid && ownColonyForAscent != null && ownColonyForAscent.rallyPoint == null;
+            !inOwnGrid &&
+            ((ownColonyForAscent != null && ownColonyForAscent.rallyPoint == null) ||
+              fighterWalksHomeToEat(world, id));
           const skipAscent = task === AntTask.Fighting && !inOwnGrid && !isRecallingFromForeign;
           if (!skipAscent) {
             const lookupColonyId = ants.currentGridColonyId[id]!;
@@ -1684,6 +1712,47 @@ export function tickAntMovement(
 // deposit food, nurse brood, excavate, or pick up. Exempt tiles never enter
 // the occupancy map.
 // ---------------------------------------------------------------------------
+/**
+ * V51 (#290 PR 4, D11) — the step a hungry invader at (tileX, tileY) in a foreign
+ * nest takes toward an exit: the nest's OPEN entrances in the recall order
+ * (nearest by |dx| + y, ties to the lower index), the first one whose shaft top
+ * (column, y 0) the wall-aware BFS (pickInvaderUndergroundStep) can reach. An
+ * "open" entrance only needs its top two shaft tiles dug, so a nearer stub need
+ * not join the nest. Standing on a shaft top it holds (step 0,0) and the ascent
+ * block lifts it out. No reachable exit: hold. At most one BFS per open entrance
+ * (MAX_ENTRANCES_PER_COLONY = 4), each bounded by the ant's connected tunnels;
+ * no allocation (a bit mask of the entrances tried).
+ */
+function hungryExitStep(
+  world: WorldState,
+  grid: UndergroundGrid,
+  ents: ReadonlyArray<{ surfaceTileX: number; isOpen: boolean }>,
+  tileX: number,
+  tileY: number,
+): number {
+  let tried = 0;
+  for (let round = 0; round < ents.length; round++) {
+    let pick = -1;
+    let pickDist = 0;
+    for (let e = 0; e < ents.length; e++) {
+      if ((tried & (1 << e)) !== 0 || !ents[e]!.isOpen) continue;
+      const dx = ents[e]!.surfaceTileX - tileX;
+      const dist = (dx < 0 ? -dx : dx) + tileY;
+      if (pick < 0 || dist < pickDist) {
+        pick = e;
+        pickDist = dist;
+      }
+    }
+    if (pick < 0) break;
+    tried |= 1 << pick;
+    const ex = ents[pick]!.surfaceTileX;
+    if (tileX === ex && tileY === 0) return packStep(0, 0);
+    const step = pickInvaderUndergroundStep(grid, tileX, tileY, ex, 0, getScratch(world));
+    if (unpackStepDx(step) !== 0 || unpackStepDy(step) !== 0) return step;
+  }
+  return packStep(0, 0);
+}
+
 /**
  * The colony's surface entrance flow-field direction at a surface position:
  * 0..3 = a cardinal step toward the nearest open entrance (DIR_DX/DIR_DY),
@@ -1770,6 +1839,10 @@ function resolveSameColonyOccupancy(world: WorldState): void {
     if (sentryPassesThroughFriends(world, id) || defenderPassesThroughFriends(world, id)) continue;
     // #322 (V49): nor does an idle worker mustering home under the alarm.
     if (idleMusterPassesThroughFriends(world, id)) continue;
+    // V51 (#290 PR 4, D11): nor does a hungry fighter walking home to eat. Bumped
+    // like any ant, one leaving a crowded rally stepped onto a tile a fed friend
+    // held and was pushed back every tick, until it starved a tile from open ground.
+    if (fighterWalksHomeToEat(world, id)) continue;
 
     // Issue #108 (v13+) — zero the gridColonyId portion of the key when
     // zone === Surface. Mirrors combat tile-key encoding (tile-key.ts:56);

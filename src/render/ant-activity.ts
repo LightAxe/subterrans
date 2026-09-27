@@ -29,9 +29,16 @@
 //   - Nursing (any sub)               -> nursing
 //   - Idle (or unknown task value)    -> idle
 //
+// Hunger (#290 PR 4, V51 worlds only — before V51 workers do not eat): every
+// living worker, fighters included, whose meal is due is counted `hungry`;
+// one at 75 % or more of its starve-after is counted `starving` instead
+// (profile by task, as the sim reads it). No on-map ring — the panel only.
+//
 // Pure + Node-testable: no Phaser imports.
 
 import type { WorldState } from '../sim/types.js';
+import { SIM_VERSION_V51_UNIFIED_HUNGER } from '../sim/types.js';
+import { workerHungerProfile } from '../sim/hunger.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
 import { isAlive } from '../sim/ant/ant-store.js';
 import { AntTask, ForagingSubState, DiggingSubState } from '../sim/enums.js';
@@ -61,6 +68,12 @@ export interface AntActivity {
   nursing: number;
   idle: number;
   totalWorkers: number;
+  /** V51+: workers and fighters eat, so the hunger counts below mean something. */
+  workersEat: boolean;
+  /** Workers (fighters included) whose meal is due, short of `starving`. */
+  hungry: number;
+  /** Workers at 75 % or more of their starve-after: they die if not fed soon. */
+  starving: number;
 }
 
 export function computeAntActivity(world: WorldState, colony: ColonyRecord): AntActivity {
@@ -76,11 +89,22 @@ export function computeAntActivity(world: WorldState, colony: ColonyRecord): Ant
   let nursing = 0;
   let idle = 0;
   let workers = 0;
+  let hungry = 0;
+  let starving = 0;
+  const workersEat = world.simVersion >= SIM_VERSION_V51_UNIFIED_HUNGER;
 
   for (let i = 0; i < colony.workers.length; i++) {
     const id = colony.workers[i]!;
     if (!isAlive(ants, id)) continue;
     workers += 1;
+
+    if (workersEat) {
+      // Between ticks the last consumption step ran at world.tick − 1.
+      const sinceMeal = world.tick - 1 - ants.lastMealTick[id]!;
+      const profile = workerHungerProfile(world, id);
+      if (sinceMeal * 4 >= profile.starveAfterTicks * 3) starving += 1;
+      else if (sinceMeal >= profile.mealIntervalTicks) hungry += 1;
+    }
 
     const task = ants.task[id]!;
     const sub = ants.subTask[id]!;
@@ -124,6 +148,9 @@ export function computeAntActivity(world: WorldState, colony: ColonyRecord): Ant
     nursing,
     idle,
     totalWorkers: workers,
+    workersEat,
+    hungry,
+    starving,
   };
 }
 
@@ -155,6 +182,9 @@ export function formatAntActivityLines(a: AntActivity): string[] {
     `  Fighting: ${a.fighting}`,
     `  Nursing:  ${a.nursing}`,
     `  Idle:     ${a.idle}`,
+    // V51: hunger (blank below V51, where workers do not eat).
+    '',
+    a.workersEat ? `  Hungry:   ${a.hungry}  starving: ${a.starving}` : '',
   ];
 }
 
@@ -165,10 +195,10 @@ export function formatAntActivityLines(a: AntActivity): string[] {
 /**
  * Fixed screen rect the popup renders into, derived from the passed stats rect
  * (hud.STATS). Anchored just below the stats bar (top-left), wide enough to hold
- * the longest formatted line without clipping (`  carrying:  NN` at 10px
- * monospace), tall enough for the 19 lines in `formatAntActivityLines` plus
- * padding. At the default 800×592 layout (stats = {x:8, y:8, w:200, h:24}) this
- * yields the former `ANT_ACTIVITY_PANEL` constant: {x:8, y:36, w:220, h:264}.
+ * the longest formatted line without clipping (`  Hungry:   NN  starving: NN`
+ * at 11px monospace), tall enough for the 21 lines in `formatAntActivityLines`
+ * plus padding (19 until the V51 hunger line, #290 PR 4, added two). At the
+ * default 800×592 layout (stats = {x:8, y:8, w:200, h:24}) this yields {x:8, y:36, w:220, h:290}.
  *
  * Used by `isPointerOverHUD` (camera-input) so clicks inside the panel don't
  * fall through to the world while it is visible.
@@ -178,7 +208,7 @@ export function antActivityPanelRect(stats: HudRect): HudRect {
     x: stats.x,
     y: stats.y + stats.h + 4,
     w: 220,
-    h: 264,
+    h: 290,
   };
 }
 

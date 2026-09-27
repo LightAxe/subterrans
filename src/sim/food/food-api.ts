@@ -203,9 +203,13 @@ export function withdrawFood(world: WorldState, colony: ColonyRecord, amount: nu
   const amountFp = world.food.amountFp;
 
   let remaining = amount;
-  // Outer `while` re-scans each iteration. Both production callers (queen 2 fp,
-  // larva 1 fp) finish in one iteration in steady state; the O(N²) worst case
-  // (tiny dribbles across many chambers) does not arise in any current caller.
+  // Outer `while` re-scans each iteration. The queen (2 fp) and larva (1 fp)
+  // meals finish in one iteration in steady state. From V51 a worker/fighter
+  // meal (WORKER_MEAL_FP, 32 fp) can span near-empty chambers, so the loop can
+  // run up to once per FoodStorage chamber the colony owns: O(chambers²) per meal
+  // (a 32 fp meal can empty at most 32 chambers, so ≤ 32 × chambers), and meals
+  // are rare (one per worker per meal interval). A single-pass rewrite (#290 plan §3.4) was deliberately not
+  // done: the bound is small and fullest-first order is easier to keep here.
   while (remaining > 0) {
     let pickIdx = -1;
     let pickFill = -1;

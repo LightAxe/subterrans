@@ -12,7 +12,11 @@
 //   6. Version-gated: bumping SAVE_FORMAT_VERSION invalidates old saves (intentional for beta)
 
 import type { WorldState, EntityId, AIStateRecord, SpiderState } from '../sim/types.js';
-import { LATEST_SIM_VERSION, SIM_VERSION_V50_LOCATED_FOOD } from '../sim/types.js';
+import {
+  LATEST_SIM_VERSION,
+  SIM_VERSION_V50_LOCATED_FOOD,
+  SIM_VERSION_V51_UNIFIED_HUNGER,
+} from '../sim/types.js';
 import { AI_MAX_OPERATION_FIGHTERS, SPIDER_HUNT_INTERVAL_TICKS } from '../sim/constants.js';
 import type { AntComponents } from '../sim/ant/ant-store.js';
 import {
@@ -65,7 +69,7 @@ import { FP_SHIFT } from '../sim/fixed.js';
 import { ChamberType } from '../sim/enums.js';
 import { livePileTiles } from '../sim/food/food-api.js';
 import { Zone } from '../sim/terrain.js';
-import { LARVA_HUNGER, QUEEN_HUNGER } from '../sim/hunger.js';
+import { FIGHTER_HUNGER, LARVA_HUNGER, QUEEN_HUNGER, WORKER_HUNGER } from '../sim/hunger.js';
 import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 import {
   validateSurfaceConnectivity,
@@ -178,12 +182,12 @@ export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V50_LOCATED_FOOD;
  *   2. In the NEXT PR that bumps LATEST while leaving MIN behind: set this back to
  *      `null` (the guard test fails until you do). Never leave a stale version here.
  *
- * Now V50: #290 PR 2 (the located food store) runs the ritual — it raises MIN
- * to V50 = LATEST (see MIN_ACCEPTED_SIM_VERSION). The next PR that bumps LATEST
- * while leaving MIN at V50 (#290 PR 4, unified hunger) sets this back to `null`.
- * (The previous break, V30, was retired by #225 at V31.)
+ * Now null: #290 PR 2 (the located food store) ran the ritual at V50, raising
+ * MIN to V50 = LATEST (see MIN_ACCEPTED_SIM_VERSION); #290 PR 4 (V51, unified
+ * hunger) bumped LATEST past it and retired the flag. (The previous break, V30,
+ * was retired by #225 at V31.)
  */
-export const DELIBERATE_WINDOW_BREAK_AT: number | null = SIM_VERSION_V50_LOCATED_FOOD;
+export const DELIBERATE_WINDOW_BREAK_AT: number | null = null;
 
 export class OldSimVersionError extends Error {
   // #229 — explicit field (see SaveVersionMismatchError): strip-only Node compat.
@@ -2060,9 +2064,18 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   // walkable component of the baked grid (not just the roots — R3-8/R5-2). A
   // corrupt/old map fails loudly here rather than loading a broken world.
   // #288 / #290 PR 2 — the hunger clock of every ant that eats (a live queen or
-  // larva) lies in [tick − starve-after, tick − 1] between ticks: it ate at most
-  // starve-after − 1 meals ago (else it would be dead) and not in the future.
-  // Outside that window the ant would never eat again, or never starve.
+  // larva; from V51 every live worker too, #290 PR 4) lies in
+  // [tick − starve-after, tick − 1] between ticks: it ate at most starve-after − 1
+  // ticks ago (else it would be dead) and not in the future. Outside that window
+  // the ant would never eat again, or never starve. (A worker's kind is read from
+  // its task at the check, so one stood down from Fighting since its last meal
+  // may be past its current kind's starve-after until step 3 next runs: the
+  // window uses the larger of the two.)
+  const workersEat = world.simVersion >= SIM_VERSION_V51_UNIFIED_HUNGER;
+  const workerStarveAfter = Math.max(
+    WORKER_HUNGER.starveAfterTicks,
+    FIGHTER_HUNGER.starveAfterTicks,
+  );
   for (const c of Object.values(world.colonies)) {
     const eaters: Array<[number, number, string]> = [
       [c.queenEntityId, QUEEN_HUNGER.starveAfterTicks, 'queen'],
@@ -2070,6 +2083,11 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
         id,
         LARVA_HUNGER.starveAfterTicks,
         'larva',
+      ]),
+      ...(workersEat ? c.workers : []).map((id): [number, number, string] => [
+        id,
+        workerStarveAfter,
+        'worker',
       ]),
     ];
     for (const [id, starveAfter, what] of eaters) {

@@ -2,12 +2,18 @@
 // #212 Layer 1 (behavior): hostile/invader target selection + the inverted-BFS step
 // search. Depends only on Layer-0 ant-motion primitives (+ sibling sim modules);
 // only the orchestrator calls these. Owns the INV_BFS_* scratch arrays.
-import { ENTRANCE_SHAFT_DEPTH, FIGHT_AGGRO_RADIUS } from '../constants.js';
+import {
+  ENTRANCE_SHAFT_DEPTH,
+  FIGHT_AGGRO_RADIUS,
+  FIGHTER_WALK_HOME_HUNGER_TICKS,
+} from '../constants.js';
 import { AntTask, FightingSubState } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
 import { Zone, type UndergroundGrid } from '../terrain.js';
 import type { WorldState } from '../types.js';
+import { SIM_VERSION_V51_UNIFIED_HUNGER } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
+import { antIsAtHome, ticksSinceMeal } from '../hunger.js';
 import { isSurfaceTileInComponent } from '../surface-features.js';
 import { getScratch } from '../scratch.js';
 import { DIR_DX, DIR_DY, canEnterUndergroundTile, packStep } from './ant-motion.js';
@@ -37,6 +43,12 @@ const SENTRY_KEEP_HOLD_RADIUS_TILES = SENTRY_HOLD_RADIUS_TILES + 1;
 const SENTRY_HOME = 0; // walking home to its entrance (outside the guard area; from V48 until the door area)
 /** #333 (V48) — `sentryMoving` value for a sentry walking home (1 = passes through friends). */
 const SENTRY_MOVING_HOME = 2;
+/**
+ * V51 (#290 PR 4, D11) — `sentryMoving` value for a hungry fighter walking home
+ * to eat (fighterWalksHomeToEat). Like SENTRY_MOVING_HOME it is bumped like any
+ * ant and steps by the surface entrance flow field.
+ */
+const FIGHTER_MOVING_TO_EAT = 3;
 const SENTRY_TO_POST = 1; // walking to its post
 const SENTRY_HOLD = 2; // holding its post
 const SENTRY_NO_POST = 3; // its entrance has no post
@@ -88,7 +100,10 @@ function inGuardArea(tileX: number, tileY: number, doorX: number, doorY: number)
  * farther ant. Shared by rallied fighters (V17 ants / V23 spider) and, from V43,
  * sentries (#323), which pass their door as (guardDoorX, guardDoorY): a sentry
  * chases only enemy ants inside its guard area (within SENTRY_GUARD_RADIUS of the
- * door), and never the spider, which it takes cover from instead. Allocation-free.
+ * door), and never the spider, which it takes cover from instead. From V51 a
+ * hungry fighter walking home to eat (#290 PR 4, D11) passes `withSpider =
+ * false`: it fights an enemy ant it meets, but does not stop to mob the spider.
+ * Allocation-free.
  */
 function targetNearestHostileInSight(
   world: WorldState,
@@ -98,6 +113,7 @@ function targetNearestHostileInSight(
   aggroEnemyColonies: readonly AggroColony[],
   guardDoorX = -1,
   guardDoorY = -1,
+  withSpider = guardDoorX < 0,
 ): boolean {
   const ants = world.ants;
   const aggroZone = ants.zone[id];
@@ -156,7 +172,7 @@ function targetNearestHostileInSight(
   // the spider's tile is enough — the widened spider-combat gate resolves the damage.
   // The spider is targetable in ANY state: fighters may pursue a Feeding spider to
   // interrupt its heal (tickSpiderV23 forfeits the heal once a fighter is adjacent).
-  if (guardDoorX < 0 && world.spider !== null) {
+  if (withSpider && world.spider !== null) {
     const spTileX = world.spider.posX >> FP_SHIFT;
     const spTileY = world.spider.posY >> FP_SHIFT;
     const dist = Math.abs(spTileX - aggroTileX) + Math.abs(spTileY - aggroTileY);
@@ -299,7 +315,65 @@ export function fighterBarredFromOwnShaft(
  * door, or a recalled invader surfacing at the door it just left — stays out.
  */
 export function fighterBarredFromForeignShaft(world: WorldState, id: number): boolean {
-  return hasNoOrders(world, id);
+  // V51 (D11): nor does a hungry fighter — it is on its way home to eat. Keyed on
+  // hunger itself, not on this tick's walk-home verdict: a hungry invader that
+  // has just climbed out and is fighting an enemy ant on the doorstep (so step
+  // 10c chased rather than marked it) must not drop straight back in, or it
+  // bounces down and up the shaft every tick (the #106 bounce).
+  return hasNoOrders(world, id) || fighterIsHungry(world, id);
+}
+
+/**
+ * V51 (#290 PR 4, owner decision D11) — fighter `id` is hungry: past
+ * FIGHTER_WALK_HOME_HUNGER_TICKS since its last meal and empty-handed (an ant
+ * carrying food eats from its load instead). Always false below V51.
+ */
+function fighterIsHungry(world: WorldState, id: number): boolean {
+  const ants = world.ants;
+  return (
+    world.simVersion >= SIM_VERSION_V51_UNIFIED_HUNGER &&
+    ants.foodCarrying[id] === 0 &&
+    ticksSinceMeal(world, id) >= FIGHTER_WALK_HOME_HUNGER_TICKS
+  );
+}
+
+/**
+ * V51 (D11) — hungry fighter `id` below ground in a FOREIGN nest leaves to eat:
+ * it is not fighting (no duel in progress and no hostile within
+ * FIGHT_AGGRO_RADIUS of it in that grid). Combat comes first — an invader in a
+ * fight stays in it.
+ */
+function hungryInvaderLeaves(world: WorldState, id: number, gridColonyId: number): boolean {
+  if (!fighterIsHungry(world, id)) return false;
+  const ants = world.ants;
+  if (ants.combatOpponentId[id] !== -1) return false;
+  // Any other colony's ant in this grid within FIGHT_AGGRO_RADIUS (Manhattan)?
+  // The same candidates pickNearestHostileUnderground scans, allocation-free.
+  const selfColony = ants.colonyId[id]!;
+  const tx = ants.posX[id]! >> FP_SHIFT;
+  const ty = ants.posY[id]! >> FP_SHIFT;
+  for (let o = 0; o < ants.alive.length; o++) {
+    if (ants.alive[o] !== 1 || o === id) continue;
+    if (ants.zone[o] !== Zone.Underground || ants.currentGridColonyId[o] !== gridColonyId) continue;
+    if (ants.colonyId[o] === selfColony) continue;
+    const dx = (ants.posX[o]! >> FP_SHIFT) - tx;
+    const dy = (ants.posY[o]! >> FP_SHIFT) - ty;
+    if ((dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy) <= FIGHT_AGGRO_RADIUS) return false;
+  }
+  return true;
+}
+
+/**
+ * V51 (#290 PR 4, D11) — step 10c sent hungry fighter `id` home to eat this tick:
+ * on the surface it walks to its nearest own open entrance and step 16 steps it
+ * by the surface entrance flow field; in a foreign nest it climbs out the way a
+ * recalled invader does (tickAntMovement's recall routing and ascent). Once it is
+ * home (antIsAtHome) step 3 feeds it and its ordinary routing takes it back to
+ * its rally or post. (Same-tick scratch, rebuilt by every 10c pass.)
+ */
+export function fighterWalksHomeToEat(world: WorldState, id: number): boolean {
+  const moving = getScratch(world).antTargeting.sentryMoving;
+  return id < moving.length && moving[id] === FIGHTER_MOVING_TO_EAT;
 }
 
 /**
@@ -1343,6 +1417,10 @@ export function updateFightAntTargets(world: WorldState): void {
       // Always clear stale targets — tickAntMovement computes the correct direction.
       ants.targetPosX[id] = -1;
       ants.targetPosY[id] = -1;
+      // V51 (D11): a hungry invader not in a fight climbs out to go home and eat.
+      if (hungryInvaderLeaves(world, id, currentGridColonyId)) {
+        sentryMoving[id] = FIGHTER_MOVING_TO_EAT;
+      }
       continue;
     }
 
@@ -1359,6 +1437,57 @@ export function updateFightAntTargets(world: WorldState): void {
         sentryMoving,
       );
       continue;
+    }
+
+    // V51 (#290 PR 4, D11) — a hungry fighter on the surface walks home to eat,
+    // unless it is fighting (a duel in progress, the spider's included, or an
+    // enemy ant in sight: combat first) or its colony sent its fighters at the
+    // spider (step 10d overrides every surface fighter's target). It does not
+    // stop to mob a spider it merely sees. Home, it eats at step 3 and this branch
+    // no longer fires, so its ordinary routing below takes it back. Home but
+    // still hungry (the colony could not feed it), a fighter with a rally
+    // elsewhere waits where it is (it still fights an enemy it sees); a sentry
+    // or tunnel defender keeps to its ordinary routing, which is at home.
+    if (
+      ants.zone[id] === Zone.Surface &&
+      hasEntrances &&
+      world.spiderPriorityColonyId !== colonyId &&
+      ants.combatOpponentId[id] === -1 &&
+      fighterIsHungry(world, id)
+    ) {
+      const away = !antIsAtHome(world, id);
+      if (away || (rp != null && defendedEntrance(world, colony) === null)) {
+        if (
+          targetNearestHostileInSight(
+            world,
+            id,
+            colonyId,
+            currentGridColonyId,
+            aggroEnemyColonies,
+            -1,
+            -1,
+            false,
+          )
+        ) {
+          continue;
+        }
+        if (!away) {
+          ants.targetPosX[id] = -1;
+          ants.targetPosY[id] = -1;
+          continue;
+        }
+        const e = pickFighterTargetEntrance(
+          entrances,
+          ants.posX[id]! >> FP_SHIFT,
+          ants.posY[id]! >> FP_SHIFT,
+        );
+        if (e !== null && e.isOpen) {
+          ants.targetPosX[id] = (e.surfaceTileX << FP_SHIFT) + (FP_ONE >> 1);
+          ants.targetPosY[id] = (e.surfaceTileY << FP_SHIFT) + (FP_ONE >> 1);
+          sentryMoving[id] = FIGHTER_MOVING_TO_EAT;
+          continue;
+        }
+      }
     }
 
     // No rally point (null or uninitialized): fall back to first entrance (idle-at-nest).

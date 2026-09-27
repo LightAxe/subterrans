@@ -43,7 +43,7 @@ import { SURFACE_GOAL_UNREACHED, surfaceGoalDistance } from '../surface-routing.
 import { Zone } from '../terrain.js';
 import { SIM_VERSION_V49_ALARM_MUSTER, type WorldState } from '../types.js';
 import { ALT_DX, ALT_DY, type CardinalStep } from './ant-motion.js';
-import { clearRecentTiles, isRecentTile } from './ant-store.js';
+import { clearRecentTiles, isRecentTile, resetCarrierToIdle } from './ant-store.js';
 
 /**
  * Attempt to pick up food from the pile in `slot` into an ant's carry inventory.
@@ -243,29 +243,13 @@ export function antDepositFood(world: WorldState, colony: ColonyRecord, antId: n
   // heading so routeForagerPriority can re-route the ant back to a chamber next tick
   // without a round-trip through Idle.
   if (remaining === 0) {
-    world.ants.task[antId] = AntTask.Idle;
-    world.ants.subTask[antId] = 0;
-
-    // 09 excursion-foraging memo — clear heading on deposit so the re-promoted
-    // SearchingFood pass after step 10a starts fresh. Follow-up: also clear
-    // prev-tile memory — a fresh outbound excursion should have no anti-
-    // backtrack bias.
-    world.ants.searchHeadingX[antId] = 0;
-    world.ants.searchHeadingY[antId] = 0;
-    world.ants.searchHeadingTicks[antId] = 0;
-    world.ants.searchPrevTileX[antId] = -1;
-    world.ants.searchPrevTileY[antId] = -1;
-    // Issue #27 — full deposit always clears any wait state. The ant is
-    // about to be reassigned by step 10a; whatever state it returns from
-    // (foraging, idle pool, etc.) starts with a clean waitingDeposit flag.
-    world.ants.waitingDeposit[antId] = 0;
-    // Issue #35 — clear pause counter so a future SearchingFood pass
-    // starts with a clean cadence.
-    world.ants.searchPauseTicks[antId] = 0;
-    // Issue #42 fix #3 — full-deposit transitions Foraging→Idle. The next
-    // re-promotion to SearchingFood starts a fresh excursion that should
-    // not be biased by the just-completed return route's tile history.
-    clearRecentTiles(world.ants, antId);
+    // task=Idle, subTask=0, and a clean excursion state (resetCarrierToIdle):
+    // 09 excursion-foraging memo — clear heading and prev-tile memory so the
+    // re-promoted SearchingFood pass after step 10a starts fresh with no anti-
+    // backtrack bias; issue #27 — clear any wait state; issue #35 — clear the
+    // pause counter; issue #42 fix #3 — clear the recent-tiles history so the
+    // next excursion is not biased by the just-completed return route.
+    resetCarrierToIdle(world.ants, antId);
   }
 }
 
