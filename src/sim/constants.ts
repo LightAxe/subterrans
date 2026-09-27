@@ -1085,12 +1085,14 @@ export const AI_INVADING_FOOD_FRAC_PCT = 70 as const;
 /**
  * S2 / D-29 — Absolute floor for the hybrid frontage trigger: player workers >= 24
  * AND player workers >= 1.3× AI workers triggers WarFooting regardless of age.
+ * "Player" = the AI's opponent: the player for the enemy AI; from V56 (#347) the
+ * enemy for a player-colony AI (see frontageOpponentWorkerCount, ai-state.ts).
  */
 export const AI_FRONTAGE_PLAYER_WORKERS_ABS = 24 as const;
 
 /**
  * S2 / D-29 — Ratio multiplier (×100) for the hybrid frontage trigger.
- * Usage: `playerWorkers * 100 >= AI_FRONTAGE_PLAYER_WORKERS_RATIO_X100 * aiWorkers`
+ * Usage: `opponentWorkers * 100 >= AI_FRONTAGE_PLAYER_WORKERS_RATIO_X100 * aiWorkers`
  * Integer-safe; avoids float division. 130 → 1.3× threshold.
  */
 export const AI_FRONTAGE_PLAYER_WORKERS_RATIO_X100 = 130 as const;

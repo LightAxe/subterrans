@@ -981,7 +981,12 @@ const MIN_WARFOOTING_PCT = 70;
  *
  * #349 — the check reads the IN-MATCH share (the window stops at the first tick
  * tick() reports an outcome), since the live game stops there and the harness
- * does not. The whole-run share is still printed alongside it.
+ * does not. The whole-run share is still printed alongside it. The 4% threshold
+ * is CARRIED OVER from the whole-run calibration above, not re-measured on the
+ * bug population: the #297 freeze happens while the match is live, so the
+ * in-match share should read at least as high on it, but that is not shown. On
+ * the fixed code (V56 stack, 200 passive Normal seeds) the two read 0.2% whole-run
+ * vs 0.1% in-match (max 1.9%).
  */
 const MAX_FROZEN_FORAGER_SHARE_PCT = 4;
 

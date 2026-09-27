@@ -641,6 +641,26 @@ describe('#347 — a player-colony AI reads its opponent (V56)', () => {
     }
   });
 
+  it("V56: the ENEMY AI still goes to WarFooting early on the player's frontage", () => {
+    const world = makeMinimalWorld();
+    world.simVersion = SIM_VERSION_V56_OPPONENT_FRONTAGE;
+    world.tick = AI_WARFOOTING_MIN_TICK - 1; // NOT age ready
+    const enemy = world.colonies[ENEMY_COLONY_ID as ColonyId]!;
+    spawnFighters(world, ENEMY_COLONY_ID, AI_WARFOOTING_FIGHTER_THRESHOLD[NORMAL_TIER_INDEX], 10);
+    setPoolFoodForTest(
+      world,
+      enemy,
+      Math.ceil((colonyFoodCapacity(enemy) * AI_WARFOOTING_FOOD_FRAC_PCT) / 100), // eslint-disable-line no-restricted-syntax
+    );
+    enemy.workerCount = 10;
+    world.colonies[PLAYER_COLONY_ID as ColonyId]!.workerCount = 40;
+    expect(advanceAIState(world, ENEMY_COLONY_ID as ColonyId).state).toBe('WarFooting');
+    const evt = world.events.find((e) => e.type === 'ai_state_transition');
+    expect(evt?.type === 'ai_state_transition' && evt.payload.triggerValues.playerWorkerCount).toBe(
+      40,
+    );
+  });
+
   it('invasion_start targets the opponent: the enemy for a player-colony AI', () => {
     const world = makeMinimalWorld();
     world.aiState.push(createDefaultAIStateRecord(PLAYER_COLONY_ID as ColonyId));
