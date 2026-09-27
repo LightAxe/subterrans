@@ -1141,6 +1141,40 @@ describe('no loot while the raider’s own stores are full (V53, D14)', () => {
     ).toBeGreaterThan(0);
   });
 
+  it('a looter that stops mid-pass releases its load for a later raider in the same pass', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    rallyOn(r.player, r.enemyDoor);
+    const a = addFighter(w, PLAYER_COLONY_ID, 100, 6, ENEMY_COLONY_ID);
+    const b = addFighter(w, PLAYER_COLONY_ID, 101, 6, ENEMY_COLONY_ID);
+    setPoolFoodForTest(w, r.player, BASE_FOOD_STORAGE_CAPACITY);
+    setChamberStockForTest(w, r.player, r.playerLarder, FOOD_CHAMBER_CAPACITY - RAID_CARRY_FP);
+    w.ants.lastMealTick[r.player.queenEntityId] = w.tick;
+    updateRaiders(w);
+    const lo = Math.min(a, b);
+    const hi = Math.max(a, b);
+    expect(w.ants.subTask[lo]).toBe(FightingSubState.Looting);
+    expect(w.ants.subTask[hi]).not.toBe(FightingSubState.Looting);
+    w.ants.lastMealTick[lo] = -100000; // hungry: lo stops at its next decision
+    updateRaiders(w);
+    expect(w.ants.subTask[lo]).not.toBe(FightingSubState.Looting);
+    expect(w.ants.subTask[hi]).toBe(FightingSubState.Looting);
+  });
+
+  it('a dead looter holds no load at the next pass', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    rallyOn(r.player, r.enemyDoor);
+    const a = addFighter(w, PLAYER_COLONY_ID, 100, 6, ENEMY_COLONY_ID);
+    const b = addFighter(w, PLAYER_COLONY_ID, 101, 6, ENEMY_COLONY_ID);
+    setPoolFoodForTest(w, r.player, BASE_FOOD_STORAGE_CAPACITY);
+    setChamberStockForTest(w, r.player, r.playerLarder, FOOD_CHAMBER_CAPACITY - RAID_CARRY_FP);
+    updateRaiders(w);
+    w.ants.alive[Math.min(a, b)] = 0;
+    updateRaiders(w);
+    expect(w.ants.subTask[Math.max(a, b)]).toBe(FightingSubState.Looting);
+  });
+
   it('a looter stays committed across passes: room for one load, B stays blocked while A loots', () => {
     const r = raidWorld(3000);
     const w = r.world;
