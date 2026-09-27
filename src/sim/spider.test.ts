@@ -8,8 +8,6 @@ import {
   SIM_VERSION_V20_SPIDER,
   SIM_VERSION_V23_SPIDER_AGGRO,
   SIM_VERSION_V26_SPIDER_EDGE_MARGIN,
-  SIM_VERSION_V31_SPIDER_TERRAIN,
-  SIM_VERSION_V32_AI_OP_VALIDATION,
 } from './types.js';
 import { PLAYTRACE_EVENT_CAP_PER_ROUND } from './telemetry.js';
 import { tickSpider, isSpiderPassable, computeFeedAwayTile } from './spider.js';
@@ -24,7 +22,6 @@ import {
   SPIDER_TELEGRAPH_TICKS,
   SPIDER_STRIKE_TICKS,
   SPIDER_HUNT_INTERVAL_TICKS,
-  SPIDER_HUNGER_MAX_TICKS,
   SPIDER_CHASE_TRIGGER_RADIUS,
   SPIDER_DEFENSE_TRIGGER_RADIUS,
   SPIDER_CHASE_MAX_TICKS,
@@ -45,6 +42,9 @@ import {
 } from './constants.js';
 import { FP_SHIFT } from './fixed.js';
 import { Zone } from './terrain.js';
+
+/** Hunger well past the Normal-tier threshold (SPIDER_HUNGER_THRESHOLD_TICKS[1] = 1200). */
+const WELL_PAST_HUNGRY_TICKS = 1800;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -316,7 +316,7 @@ describe('tickSpider', () => {
       for (let tick = 0; tick < 50; tick++) {
         world.spider = makeSpider({
           state: 'Patrolling',
-          hungerTicks: SPIDER_HUNGER_MAX_TICKS[1] - 1,
+          hungerTicks: WELL_PAST_HUNGRY_TICKS - 1,
           rampageStartTick: 0,
         });
         world.tick = tick * 37; // vary tick to get different hash values
@@ -360,9 +360,8 @@ describe('tickSpider', () => {
       }
     });
 
-    it('V32: emits spider_hunt_end(swarm_retreat, deaths 0) when dying while Hunting (#226)', () => {
+    it('emits spider_hunt_end(swarm_retreat, deaths 0) when dying while Hunting (#226)', () => {
       const world = makeWorld();
-      world.simVersion = SIM_VERSION_V32_AI_OP_VALIDATION;
       // killsThisStrike is deliberately nonzero: deaths must still report 0, since
       // that counter holds the PREVIOUS strike's kills during the Hunting telegraph.
       world.spider = makeSpider({ state: 'Hunting', hp: 0, killsThisStrike: 2 });
@@ -376,9 +375,8 @@ describe('tickSpider', () => {
       }
     });
 
-    it('V32: a same-tick Hunting kill + death reports outcome kill with exactly the fresh death (#226)', () => {
+    it('a same-tick Hunting kill + death reports outcome kill with exactly the fresh death (#226)', () => {
       const world = makeWorld();
-      world.simVersion = SIM_VERSION_V32_AI_OP_VALIDATION;
       // The combat resolver can set killedThisTick=1 while also dropping hp<=0 in the
       // same step. killsThisStrike is deliberately STALE (5, from a prior strike) — the
       // report must use the one fresh same-tick kill (killedThisTick), not the stale count.
@@ -392,18 +390,8 @@ describe('tickSpider', () => {
       }
     });
 
-    it('pre-V32: dying while Hunting emits no spider_hunt_end (dangling episode preserved)', () => {
+    it('cap-full: dying while Hunting bumps a persisted dropped-event counter (byte-impact pin)', () => {
       const world = makeWorld();
-      world.simVersion = SIM_VERSION_V31_SPIDER_TERRAIN;
-      world.spider = makeSpider({ state: 'Hunting', hp: 0, killsThisStrike: 2 });
-      tickSpider(world);
-      expect(world.spider).toBeNull();
-      expect(world.events.some((e) => e.type === 'spider_hunt_end')).toBe(false);
-    });
-
-    it('V32 cap-full: dying while Hunting bumps a persisted dropped-event counter (byte-impact pin)', () => {
-      const world = makeWorld();
-      world.simVersion = SIM_VERSION_V32_AI_OP_VALIDATION;
       // Fill the event buffer to the hard cap so the added hunt_end overflows and
       // bumps a PERSISTED dropped counter — the exact divergence that requires
       // gating this emission (#226 item 1).
@@ -417,21 +405,6 @@ describe('tickSpider', () => {
       world.spider = makeSpider({ state: 'Hunting', hp: 0 });
       tickSpider(world);
       expect(world.droppedStructuralCount + world.droppedCombatKillCount).toBeGreaterThan(0);
-    });
-
-    it('pre-V32 cap-full: dying while Hunting emits nothing, dropped counters unchanged', () => {
-      const world = makeWorld();
-      world.simVersion = SIM_VERSION_V31_SPIDER_TERRAIN;
-      for (let i = 0; i < PLAYTRACE_EVENT_CAP_PER_ROUND; i++) {
-        world.events.push({
-          tick: 0,
-          type: 'spider_hunt_end',
-          payload: { outcome: 'kill', deaths: 0 },
-        });
-      }
-      world.spider = makeSpider({ state: 'Hunting', hp: 0 });
-      tickSpider(world);
-      expect(world.droppedStructuralCount + world.droppedCombatKillCount).toBe(0);
     });
   });
 
@@ -1351,7 +1324,8 @@ describe('tickSpider', () => {
 
     it('corner kill via the hash fallback still retreats the full distance in-bounds (Codex P2)', () => {
       const world = makeWorld();
-      world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
+      // All-passable terrain, so the V31 boulder probe cannot move the endpoint.
+      world.bakedSurfaceEffect.fill(SurfaceMovementEffect.Cosmetic);
       // Kill tile == spider tile at the (0,0) corner → dx==dy==0 takes the hash
       // fallback. Whichever cardinal it picks, the endpoint must stay in-bounds
       // and retreat AT LEAST a full SPIDER_FEED_RETREAT_TILES from the kill
@@ -1602,21 +1576,19 @@ describe('tickSpider', () => {
 });
 
 describe('spider terrain passability (#225, V31)', () => {
-  const V31 = SIM_VERSION_V31_SPIDER_TERRAIN;
   function setHardBlock(world: WorldState, tx: number, ty: number): void {
     world.bakedSurfaceEffect[ty * SURFACE_GRID_WIDTH + tx] = SurfaceMovementEffect.HardBlock;
   }
   // createWorldState bakes real procedural terrain (scattered boulders); wipe it
   // to an all-passable slate so each test controls exactly which tiles block.
-  function makeCleanWorld(simVersion: number): WorldState {
+  function makeCleanWorld(): WorldState {
     const world = makeWorld();
-    world.simVersion = simVersion;
     world.bakedSurfaceEffect.fill(SurfaceMovementEffect.Cosmetic);
     return world;
   }
 
   it('isSpiderPassable treats OOB as impassable and honors HardBlock (C2)', () => {
-    const world = makeCleanWorld(V31);
+    const world = makeCleanWorld();
     // surfaceMovementAt returns Cosmetic (passable) for OOB, so the predicate
     // must bounds-check itself — off-grid is impassable.
     expect(isSpiderPassable(world, -1, 5)).toBe(false);
@@ -1630,7 +1602,7 @@ describe('spider terrain passability (#225, V31)', () => {
   });
 
   it('V31 step refuses a HardBlock on the preferred axis and takes the other axis', () => {
-    const world = makeCleanWorld(V31);
+    const world = makeCleanWorld();
     const sx = 64;
     const sy = 32;
     // Target 3 east + 2 north → prefers X (ax = 3 >= ay = 2).
@@ -1651,7 +1623,7 @@ describe('spider terrain passability (#225, V31)', () => {
   });
 
   it('V31 Chasing routes around a multi-tile boulder wall to reach the prey (routing P2)', () => {
-    const world = makeCleanWorld(V31);
+    const world = makeCleanWorld();
     // A vertical wall between the spider (west) and its prey (east), with gaps
     // above and below. Greedy movement would hold at the wall's west face until
     // the chase times out (dy === 0, no sideways detour); flow-field routing steps
@@ -1684,26 +1656,8 @@ describe('spider terrain passability (#225, V31)', () => {
     expect(gotPastWall).toBe(true); // detoured around it (greedy would hold at wallX-1 for 300 ticks)
   });
 
-  it('pre-V31 (V23) steps onto the boulder — terrain-blind movement preserved byte-for-byte', () => {
-    const world = makeCleanWorld(SIM_VERSION_V23_SPIDER_AGGRO);
-    const sx = 64;
-    const sy = 32;
-    const antId = placeWorker(world, sx + 3, sy);
-    setHardBlock(world, sx + 1, sy); // ignored below the V31 gate
-    world.spider = makeSpider({
-      posX: sx << FP_SHIFT,
-      posY: sy << FP_SHIFT,
-      state: 'Chasing',
-      chaseTargetAntId: antId,
-      chaseStartTick: 0,
-    });
-    world.tick = 1;
-    tickSpider(world);
-    expect(world.spider.posX).toBe((sx << FP_SHIFT) + SPIDER_SPEED); // stepped onto the boulder tile
-  });
-
   it('Feeding stays terrain-blind under V31: crosses a boulder to the feed tile and heals (C3)', () => {
-    const world = makeCleanWorld(V31);
+    const world = makeCleanWorld();
     const sx = 64;
     const sy = 32;
     setHardBlock(world, sx + 1, sy); // boulder between the spider and its feed tile
@@ -1742,7 +1696,7 @@ describe('spider terrain passability (#225, V31)', () => {
       h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0;
       return (h ^ (h >>> 16)) >>> 0;
     };
-    const world = makeCleanWorld(V31);
+    const world = makeCleanWorld();
     world.tick = 0; // meander tick (0 % divisor === 0), tick-bucket 0
     const seed = 0 ^ world.terrainSeed;
     const tx = hash32(seed) % SURFACE_GRID_WIDTH;
@@ -1771,8 +1725,47 @@ describe('spider terrain passability (#225, V31)', () => {
     expect(finalX === tx && finalY === ty).toBe(false);
   });
 
+  it('V31 meander step refuses a HardBlock on the preferred axis and takes the other axis', () => {
+    // The live meander path steps through moveTowardTilePassable. At tick 0 the
+    // hashed meander target is (0, 37) (see the probe test above): from (64, 40)
+    // the X axis is preferred (ax 64 >= ay 3), so a boulder one tile west must be
+    // refused and the spider steps north instead.
+    const world = makeCleanWorld();
+    world.tick = 0;
+    setHardBlock(world, 63, 40);
+    world.spider = makeSpider({
+      posX: 64 << FP_SHIFT,
+      posY: 40 << FP_SHIFT,
+      state: 'Patrolling',
+      hungerTicks: 0,
+    });
+    tickSpider(world);
+    expect(world.spider.state).toBe('Patrolling');
+    expect(world.spider.posX >> FP_SHIFT).toBe(64); // X refused (boulder)
+    expect(world.spider.posY >> FP_SHIFT).toBe(39); // stepped toward the target on Y
+  });
+
+  it('V31 meander probe redirects the target itself, not just the step', () => {
+    // Boulder the hashed target (0, 37) and the nine tiles after it in row-major
+    // order, so the probe lands on (10, 37). From (5, 38) the un-probed target lies
+    // WEST and the probed one EAST, so the step direction shows which one was used.
+    const world = makeCleanWorld();
+    world.tick = 0;
+    for (let x = 0; x <= 9; x++) setHardBlock(world, x, 37);
+    world.spider = makeSpider({
+      posX: 5 << FP_SHIFT,
+      posY: 38 << FP_SHIFT,
+      state: 'Patrolling',
+      hungerTicks: 0,
+    });
+    tickSpider(world);
+    expect(world.spider.state).toBe('Patrolling');
+    expect(world.spider.posX >> FP_SHIFT).toBe(6); // east, toward the probed (10, 37)
+    expect(world.spider.posY >> FP_SHIFT).toBe(38);
+  });
+
   it('V31 computeFeedAwayTile probes a boulder feed endpoint to passable in-band ground (Codex P2)', () => {
-    const world = makeCleanWorld(V31);
+    const world = makeCleanWorld();
     // Boulder a large square around the spider/kill so that wherever the ~10-tile
     // retreat endpoint lands (±10 on one axis), it is inside the block; passable
     // ground remains just beyond it.
@@ -1793,26 +1786,8 @@ describe('spider terrain passability (#225, V31)', () => {
     expect(isSpiderPassable(world, spider.feedAwayTileX, spider.feedAwayTileY)).toBe(true);
   });
 
-  it('pre-V31 computeFeedAwayTile leaves the endpoint in the boulder (un-probed, gated)', () => {
-    const world = makeCleanWorld(SIM_VERSION_V23_SPIDER_AGGRO);
-    for (let y = 20; y <= 44; y++) {
-      for (let x = 52; x <= 76; x++) {
-        setHardBlock(world, x, y);
-      }
-    }
-    const spider = makeSpider({
-      posX: 64 << FP_SHIFT,
-      posY: 32 << FP_SHIFT,
-      lastKillTileX: 64,
-      lastKillTileY: 32,
-    });
-    computeFeedAwayTile(world, spider);
-    // No probe below V31: the endpoint stays inside the boulder (old behavior).
-    expect(isSpiderPassable(world, spider.feedAwayTileX, spider.feedAwayTileY)).toBe(false);
-  });
-
   it('V31 spider that starts on an impassable tile escapes via the terrain-blind hatch (Codex P1)', () => {
-    const world = makeCleanWorld(V31);
+    const world = makeCleanWorld();
     // 5x5 boulder with the spider in the dead centre — all four cardinal neighbours
     // are HardBlock, so passability-aware stepping alone would strand it forever.
     for (let y = 30; y <= 34; y++) {

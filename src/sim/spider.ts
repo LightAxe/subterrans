@@ -34,12 +34,6 @@ import {
   SURFACE_GRID_HEIGHT,
   SPIDER_EDGE_MARGIN_TILES,
 } from './constants.js';
-import {
-  SIM_VERSION_V31_SPIDER_TERRAIN,
-  SIM_VERSION_V32_AI_OP_VALIDATION,
-  SIM_VERSION_V37_CORPSE_FOOD,
-  SIM_VERSION_V39_SPIDER_TIEBREAK,
-} from './types.js';
 import { spawnCorpseFood, corpseYield } from './food-system.js';
 import { colonyPoolFood } from './food/food-api.js';
 import { hungerState, SPIDER_HUNGER } from './hunger.js';
@@ -177,9 +171,8 @@ function antTieKey(world: WorldState, antId: number): number {
 /**
  * Find the nearest live surface ant (any caste; queens excluded) within
  * SPIDER_CHASE_TRIGGER_RADIUS of the spider. Returns the ant entity id, or -1 if
- * none qualify. Manhattan distance; pre-V39 ties are broken by ascending ant id
- * (lower id wins), matching the deterministic SoA iteration order. V39+ breaks an
- * exact distance tie on the lower `antTieKey` instead (strict `<` on distance is
+ * none qualify. Manhattan distance; an exact distance tie breaks on the lower
+ * `antTieKey` (V39; strict `<` on distance is
  * unchanged — a genuinely nearer ant still always wins). No allocation.
  */
 function findChaseTarget(world: WorldState, spider: SpiderState): number {
@@ -200,10 +193,9 @@ function findChaseTarget(world: WorldState, spider: SpiderState): number {
 
   const { ants } = world;
   const antCount = ants.alive.length;
-  const v39 = world.simVersion >= SIM_VERSION_V39_SPIDER_TIEBREAK;
   let bestId = -1;
   let bestDist = r + 1; // must be <= r to qualify
-  let bestKey = 0; // V39 only; meaningless until bestId >= 0
+  let bestKey = 0; // meaningless until bestId >= 0
   for (let i = 0; i < antCount; i++) {
     if (ants.alive[i] !== 1) continue;
     if (ants.zone[i] !== 0) continue; // surface only
@@ -217,9 +209,8 @@ function findChaseTarget(world: WorldState, spider: SpiderState): number {
     if (dist < bestDist) {
       bestDist = dist;
       bestId = i;
-      if (v39) bestKey = antTieKey(world, i);
-    } // strict < ⇒ pre-V39 lower id wins on tie
-    else if (v39 && dist === bestDist) {
+      bestKey = antTieKey(world, i);
+    } else if (dist === bestDist) {
       // V39: exact tie → lower coin wins instead of lower id. `bestDist` starts at
       // r + 1 and every candidate here has dist <= r, so this branch is unreachable
       // before the first assignment above (bestKey is always initialized).
@@ -274,8 +265,8 @@ function isSurfaceAntOnTile(world: WorldState, tileX: number, tileY: number): bo
  * SPIDER_DEFENSE_TRIGGER_RADIUS of the spider. Returns the ant entity id, or -1.
  * Used to make an attacked spider stop meandering/camping and actively engage its
  * attackers (a Chasing spider moves at 2× ant speed, so it reliably closes). Same
- * deterministic Manhattan + tie-break contract as findChaseTarget (pre-V39 ascending
- * id; V39+ lower `antTieKey` coin); no allocation. Queens are never AntTask.Fighting,
+ * deterministic Manhattan + tie-break contract as findChaseTarget (lower
+ * `antTieKey` coin); no allocation. Queens are never AntTask.Fighting,
  * so no queen exclusion is needed.
  */
 function findNearestAttackingFighter(world: WorldState, spider: SpiderState): number {
@@ -285,10 +276,9 @@ function findNearestAttackingFighter(world: WorldState, spider: SpiderState): nu
 
   const { ants } = world;
   const antCount = ants.alive.length;
-  const v39 = world.simVersion >= SIM_VERSION_V39_SPIDER_TIEBREAK;
   let bestId = -1;
   let bestDist = r + 1;
-  let bestKey = 0; // V39 only; meaningless until bestId >= 0
+  let bestKey = 0; // meaningless until bestId >= 0
   for (let i = 0; i < antCount; i++) {
     if (ants.alive[i] !== 1) continue;
     if (ants.zone[i] !== 0) continue; // surface only
@@ -302,9 +292,8 @@ function findNearestAttackingFighter(world: WorldState, spider: SpiderState): nu
     if (dist < bestDist) {
       bestDist = dist;
       bestId = i;
-      if (v39) bestKey = antTieKey(world, i);
-    } // strict < ⇒ pre-V39 lower id wins on tie
-    else if (v39 && dist === bestDist) {
+      bestKey = antTieKey(world, i);
+    } else if (dist === bestDist) {
       // V39: exact tie → lower coin wins instead of lower id (see findChaseTarget).
       const key = antTieKey(world, i);
       if (key < bestKey) {
@@ -393,16 +382,15 @@ function findNearestEntrance(
  *
  * The richer colony is favored 60/40 using a deterministic hash of
  * (terrainSeed ^ rampageStartTick) so the result looks organic but is fully
- * replay-safe. On an EXACT score tie, V39+ orders the tied candidates by a
+ * replay-safe. On an EXACT score tie, V39 orders the tied candidates by a
  * deterministic PER-COLONY key instead of by colony id, so neither seat is
- * structurally the "richer" one. No world.rngState draws in either path.
+ * structurally the "richer" one. No world.rngState draws.
  *
  * `hash32` (the Murmur3 finalizer shared by rampage/meander/feed-away targeting)
  * moved to hash.ts (#209 PR A) so the idle-reserve wander can reuse it; the
  * arithmetic is unchanged, so the spider's replay identity is byte-identical.
  */
 function pickRampageTarget(world: WorldState, spider: SpiderState): number {
-  const v39 = world.simVersion >= SIM_VERSION_V39_SPIDER_TIEBREAK;
   const candidates: Array<{ colonyId: number; score: number; tieKey: number }> = [];
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
@@ -418,24 +406,19 @@ function pickRampageTarget(world: WorldState, spider: SpiderState): number {
       // colonies — the only reachable orders are [1,2,3] and [3,2,1], which hands the
       // middle colony 40% of the picks against 30% each for the outer two. A key per
       // colony makes every permutation of a tied group reachable and equally likely.
-      tieKey: v39 ? hash32(world.terrainSeed ^ world.tick ^ SPIDER_TIEBREAK_SALT ^ cid) : 0,
+      tieKey: hash32(world.terrainSeed ^ world.tick ^ SPIDER_TIEBREAK_SALT ^ cid),
     });
   }
   if (candidates.length === 0) return -1;
   if (candidates.length === 1) return candidates[0]!.colonyId;
-  if (v39) {
-    // Richest first; exact ties ordered by tieKey. The keys are computed once, above,
-    // so the comparator is a fixed lexicographic order on (-score, tieKey, colonyId) —
-    // consistent and transitive, and independent of the engine's sort stability. (A
-    // coin drawn per COMPARISON would be intransitive and implementation-dependent.)
-    // The trailing colonyId term is unreachable — hash32 is a bijection on int32 and
-    // the two inputs differ only in `cid`, so distinct colonies cannot collide — and is
-    // kept only so the order is visibly total by inspection.
-    candidates.sort((a, b) => b.score - a.score || a.tieKey - b.tieKey || a.colonyId - b.colonyId);
-  } else {
-    // Richest first; ascending colonyId tiebreak for determinism.
-    candidates.sort((a, b) => b.score - a.score || a.colonyId - b.colonyId);
-  }
+  // Richest first; exact ties ordered by tieKey. The keys are computed once, above,
+  // so the comparator is a fixed lexicographic order on (-score, tieKey, colonyId) —
+  // consistent and transitive, and independent of the engine's sort stability. (A
+  // coin drawn per COMPARISON would be intransitive and implementation-dependent.)
+  // The trailing colonyId term is unreachable — hash32 is a bijection on int32 and
+  // the two inputs differ only in `cid`, so distinct colonies cannot collide — and is
+  // kept only so the order is visibly total by inspection.
+  candidates.sort((a, b) => b.score - a.score || a.tieKey - b.tieKey || a.colonyId - b.colonyId);
   // Murmur3 finalizer seeded by terrainSeed ^ rampageStartTick — good avalanche,
   // deterministic, no rngState draw.
   const h = hash32(world.terrainSeed ^ spider.rampageStartTick);
@@ -485,10 +468,9 @@ export function isSpiderPassable(world: WorldState, tileX: number, tileY: number
   return surfaceMovementAt(world, tileX, tileY) !== SurfaceMovementEffect.HardBlock;
 }
 
-/** V31 (#225) gate wrapper for the live (V23) path. Pre-V31 delegates verbatim to
- *  moveTowardTile (the shared surface-movement helper).
- *  V31+: one axis step per tick (SPIDER_SPEED === FP_ONE, so an axis step lands
- *  exactly one tile over), refusing HardBlock destinations — preferred axis
+/** V31 (#225) passability-aware movement for the live (V23) path: one axis step
+ *  per tick (SPIDER_SPEED === FP_ONE, so an axis step lands exactly one tile over),
+ *  refusing HardBlock destinations — preferred axis
  *  (ax >= ay → X, moveTowardTile's tie-break) first, then the other axis if it
  *  approaches the target, else hold this tick. Not used for Feeding (see V31 doc
  *  in types.ts): that heal gate needs exact arrival, so it keeps moveTowardTile. */
@@ -498,10 +480,6 @@ function moveTowardTilePassable(
   targetX: number,
   targetY: number,
 ): void {
-  if (world.simVersion < SIM_VERSION_V31_SPIDER_TERRAIN) {
-    moveTowardTile(spider, targetX, targetY);
-    return;
-  }
   const curX = spider.posX >> FP_SHIFT;
   const curY = spider.posY >> FP_SHIFT;
   if (curX === targetX && curY === targetY) return;
@@ -542,8 +520,7 @@ function moveTowardTilePassable(
 }
 
 /** V31 (#225) target-seeking movement for the combat/pursuit states (Hunting,
- *  Striking, Chasing, Rampaging). Pre-V31 delegates verbatim to moveTowardTile
- *  (frozen V22/pre-gate behaviour). V31+: step ONE cardinal tile down the BFS goal
+ *  Striking, Chasing, Rampaging): step ONE cardinal tile down the BFS goal
  *  field toward the target (`ensureSurfaceGoalField`, HardBlock-impassable, cached
  *  per world by target tile), so the spider routes AROUND obstacles instead of
  *  greedily holding at a wall face — distance-to-target strictly decreases each
@@ -560,10 +537,6 @@ function moveTowardTileRouted(
   targetX: number,
   targetY: number,
 ): void {
-  if (world.simVersion < SIM_VERSION_V31_SPIDER_TERRAIN) {
-    moveTowardTile(spider, targetX, targetY);
-    return;
-  }
   const curX = spider.posX >> FP_SHIFT;
   const curY = spider.posY >> FP_SHIFT;
   if (curX === targetX && curY === targetY) return;
@@ -769,15 +742,13 @@ export function tickSpider(world: WorldState): void {
       emitSpiderChaseEnd(world, 'killed');
     } else if (spider.state === 'Rampaging') {
       emitSpiderRampageEnd(world, 'killed_in_nest', spider.rampageKillsThisRampage, false);
-    } else if (spider.state === 'Hunting' && world.simVersion >= SIM_VERSION_V32_AI_OP_VALIDATION) {
+    } else if (spider.state === 'Hunting') {
       // V32 (#226): close the episode opened by spider_hunt_start — under the V23
       // always-on combat gate a spider can die mid-telegraph. If it killed an ant in
       // the SAME combat step it died (killedThisTick — the resolver can set it while
       // also dropping hp<=0), report the kill exactly like the live Hunting-kill path
       // (spider.ts:1249): outcome 'kill', deaths = killsThisStrike or at least 1.
-      // Otherwise the swarm got it with no trade: 'swarm_retreat', 0. (Pre-V23 can't
-      // reach hp<=0 while Hunting — combat excludes Hunting below V23 — so the gate's
-      // old branch covers exactly the V23–V31 range where the dangling episode existed.)
+      // Otherwise the swarm got it with no trade: 'swarm_retreat', 0.
       if (spider.killedThisTick === 1) {
         // Report the ONE fresh same-tick kill. killsThisStrike is stale during
         // Hunting (only reset at Hunting→Striking, so it holds the PREVIOUS strike's
@@ -789,20 +760,12 @@ export function tickSpider(world: WorldState): void {
     }
     // A2 (V37) — the spider's own death drops a large corpse-food cache at its
     // (stationary) tile, so bringing the spider down rewards the colony with a
-    // forageable bonanza. Gated `simVersion >= V37` (byte-identical pre-V37: no
-    // ID-counter advance, no food-pile mutation). Dropped BEFORE `world.spider =
+    // forageable bonanza. Dropped BEFORE `world.spider =
     // null` so `spider.posX/posY` are still readable. If the spider died on a
     // passable-but-off-component tile (it navigates by the looser `isSpiderPassable`
     // rule), `spawnCorpseFood`'s placement guard skips the drop rather than minting a
     // pile that would make the save unloadable — the rare bonanza is simply forgone.
-    if (world.simVersion >= SIM_VERSION_V37_CORPSE_FOOD) {
-      spawnCorpseFood(
-        world,
-        spider.posX >> FP_SHIFT,
-        spider.posY >> FP_SHIFT,
-        corpseYield('spider'),
-      );
-    }
+    spawnCorpseFood(world, spider.posX >> FP_SHIFT, spider.posY >> FP_SHIFT, corpseYield('spider'));
 
     clearSpiderPairingSentinels(world);
     world.spider = null;
@@ -885,10 +848,7 @@ export function computeFeedAwayTile(world: WorldState, spider: SpiderState): voi
   // that is ALSO inside the reachable [margin, size-1-margin] band, so the spider
   // heals on open ground AND the step-6b edge clamp can't strand it short of the
   // target (which would re-livelock the arrival gate). Deterministic, no RNG.
-  if (
-    world.simVersion >= SIM_VERSION_V31_SPIDER_TERRAIN &&
-    !isSpiderPassable(world, spider.feedAwayTileX, spider.feedAwayTileY)
-  ) {
+  if (!isSpiderPassable(world, spider.feedAwayTileX, spider.feedAwayTileY)) {
     const tileCount = SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT;
     const hiX = SURFACE_GRID_WIDTH - 1 - margin;
     const hiY = SURFACE_GRID_HEIGHT - 1 - margin;
@@ -1272,10 +1232,7 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
         // keep the two hash32 draws above, then linear-probe (tile index +1,
         // row-major, wrapping at width*height) to the first passable tile. Probe
         // order is a pure function of the hashed tile, so replays stay deterministic.
-        if (
-          world.simVersion >= SIM_VERSION_V31_SPIDER_TERRAIN &&
-          !isSpiderPassable(world, tx, ty)
-        ) {
+        if (!isSpiderPassable(world, tx, ty)) {
           const tileCount = SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT;
           let idx = (ty << HUNT_KEY_SHIFT) + tx; // row-major key (width 128 = 2^7, compile-asserted)
           for (let probe = 0; probe < tileCount; probe++) {

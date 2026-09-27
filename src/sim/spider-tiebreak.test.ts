@@ -9,17 +9,12 @@
 // with a deterministic hash32 key, and changes nothing else — in particular the
 // rampage SCORE stays `colonyPoolFood + workerCount * 10`.
 //
-// These tests pin BOTH sides of every gate: the V39 coin behaviour AND the pre-V39
-// id behaviour a save inside the acceptance window still replays under.
+// These tests pin the V39 coin behaviour (the pre-V39 id rule was reaped once
+// MIN_ACCEPTED passed V39).
 
 import { describe, it, expect } from 'vitest';
 import type { WorldState, SpiderState, SpiderBehaviorState } from './types.js';
-import {
-  createWorldState,
-  allocateEntityId,
-  SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH,
-  SIM_VERSION_V39_SPIDER_TIEBREAK,
-} from './types.js';
+import { createWorldState, allocateEntityId } from './types.js';
 import { hash32 } from './hash.js';
 import { tickSpider } from './spider.js';
 import { resolveSpiderCombatOnTile } from './combat.js';
@@ -32,7 +27,6 @@ import { setPoolFoodForTest, addChamberForTest, type TestChamber } from './food/
 import {
   SPIDER_HP_FULL,
   SPIDER_HUNT_INTERVAL_TICKS,
-  SPIDER_HUNGER_MAX_TICKS,
   SPIDER_GRACE_TICKS,
   SPIDER_CHASE_TRIGGER_RADIUS,
   SPIDER_DEFENSE_TRIGGER_RADIUS,
@@ -47,8 +41,8 @@ import {
 import { FP_SHIFT, FP_ONE } from './fixed.js';
 import { Zone } from './terrain.js';
 
-// V39's immediate predecessor — what a save one version below the gate replays under.
-const PRE_V39 = SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH;
+/** Hunger well past the Normal-tier threshold (SPIDER_HUNGER_THRESHOLD_TICKS[1] = 1200). */
+const WELL_PAST_HUNGRY_TICKS = 1800;
 
 const C1 = PLAYER_COLONY_ID as unknown as ColonyId;
 const C2 = ENEMY_COLONY_ID as unknown as ColonyId;
@@ -96,9 +90,8 @@ function makeSpider(overrides: Partial<SpiderState> = {}): SpiderState {
  * colony.queenEntityId, so the queens must be actual ant slots) and the surface
  * DangerTrail grids the spider deposits into.
  */
-function makeWorld(seed: number, simVersion: number): WorldState {
+function makeWorld(seed: number): WorldState {
   const world = createWorldState(seed);
-  world.simVersion = simVersion;
   for (const cid of [C1, C2]) {
     const queen = allocateEntityId(world);
     initAnt(world.ants, queen, {
@@ -200,7 +193,7 @@ function rampageTargetAtTick(world: WorldState, tick: number): number {
   world.tick = tick;
   world.spider = makeSpider({
     state: 'Patrolling',
-    hungerTicks: SPIDER_HUNGER_MAX_TICKS[1] - 1,
+    hungerTicks: WELL_PAST_HUNGRY_TICKS - 1,
     nextHuntTick: tick + SPIDER_HUNT_INTERVAL_TICKS, // hunt on cooldown → camp
   });
   tickSpider(world);
@@ -215,8 +208,8 @@ describe('pickRampageTarget — V39 seat-bias fix', () => {
   const TICKS = Array.from({ length: 200 }, (_, i) => SPIDER_GRACE_TICKS + i * 37);
 
   /** Both colonies tied on score: equal pool food, equal worker counts. */
-  function tiedWorld(seed: number, simVersion: number): WorldState {
-    const world = makeWorld(seed, simVersion);
+  function tiedWorld(seed: number): WorldState {
+    const world = makeWorld(seed);
     for (const cid of [C1, C2]) {
       setPoolFoodForTest(world, world.colonies[cid]!, 4096);
       world.colonies[cid]!.workerCount = 7;
@@ -225,7 +218,7 @@ describe('pickRampageTarget — V39 seat-bias fix', () => {
   }
 
   it('V39: an exact score tie is broken by the tie key, not by ascending colony id', () => {
-    const world = tiedWorld(42, SIM_VERSION_V39_SPIDER_TIEBREAK);
+    const world = tiedWorld(42);
     for (const t of TICKS) {
       const indexZero = tieWinner(world, t);
       const indexOne = indexZero === PLAYER_COLONY_ID ? ENEMY_COLONY_ID : PLAYER_COLONY_ID;
@@ -234,63 +227,39 @@ describe('pickRampageTarget — V39 seat-bias fix', () => {
     }
   });
 
-  it('V39: the tied-score split goes from lopsided to near even (paired arms, same ticks)', () => {
+  it('V39: the tied-score split is near even between the seats', () => {
     // Counts, not fractions: src/sim/ bans float division and float literals, tests
     // included — so every rate assertion below is cross-multiplied into integers.
+    // (Pre-V39 the ascending-colonyId sort pinned colony 1 at index 0 on every tie,
+    // so the 60/40 weighting landed on one seat — the structural advantage V39 fixed.)
     const N = TICKS.length;
-    function colony1Picks(simVersion: number): number {
-      const world = tiedWorld(42, simVersion);
-      let c1 = 0;
-      for (const t of TICKS) if (rampageTargetAtTick(world, t) === PLAYER_COLONY_ID) c1 += 1;
-      return c1;
-    }
-    const oldCount = colony1Picks(PRE_V39);
-    const newCount = colony1Picks(SIM_VERSION_V39_SPIDER_TIEBREAK);
-    // Pre-V39 the ascending-colonyId sort pins colony 1 at index 0 on every tie, so
-    // the 60/40 weighting lands on one seat — the structural advantage this fixes.
-    // oldCount / N > 55/100:
-    expect(oldCount * 100).toBeGreaterThan(55 * N);
+    const world = tiedWorld(42);
+    let newCount = 0;
+    for (const t of TICKS) if (rampageTargetAtTick(world, t) === PLAYER_COLONY_ID) newCount += 1;
     // V39 folds in an independent order coin → ~50%. |newCount / N - 1/2| < 6/100:
     expect(Math.abs(newCount * 2 - N) * 100).toBeLessThan(12 * N);
-    expect(newCount).toBeLessThan(oldCount);
-  });
-
-  it('pre-V39: an exact score tie still sorts colony 1 first (the old, biased rule)', () => {
-    const world = tiedWorld(42, PRE_V39);
-    let c1 = 0;
-    for (const t of TICKS) {
-      // Ascending colonyId tiebreak ⇒ index 0 is ALWAYS colony 1.
-      const expected = favorsIndexZero(world, t) ? PLAYER_COLONY_ID : ENEMY_COLONY_ID;
-      expect(rampageTargetAtTick(world, t)).toBe(expected);
-      if (expected === PLAYER_COLONY_ID) c1 += 1;
-    }
-    // ... which is exactly the 60/40 weighting pointed at one seat (c1 / N > 1/2).
-    expect(c1 * 2).toBeGreaterThan(TICKS.length);
   });
 
   it('V39 leaves the SCORE on the entrance pool — FoodStorage chambers do not count', () => {
     // V39 changes the tiebreak, not the score. Scoring on colonyFoodTotal was
     // considered and deferred (see pickRampageTarget): colony 2 here holds far more
-    // total food but a smaller pool, and it must still read as the POORER colony at
-    // V39, exactly as at PRE_V39.
-    function build(simVersion: number): WorldState {
-      const world = makeWorld(7, simVersion);
+    // total food but a smaller pool, and it must still read as the POORER colony.
+    function build(): WorldState {
+      const world = makeWorld(7);
       setPoolFoodForTest(world, world.colonies[C1]!, 4096);
       setPoolFoodForTest(world, world.colonies[C2]!, 1024);
       addFoodChamber(world, world.colonies[C2]!, 900, 8192); // ignored by the score
       return world;
     }
-    const v39 = build(SIM_VERSION_V39_SPIDER_TIEBREAK);
-    const old = build(PRE_V39);
+    const v39 = build();
     // Pick a tick where the 60/40 draw favours index 0 so "richer" is observable.
     const t = TICKS.find((tk) => favorsIndexZero(v39, tk))!;
     expect(t).toBeDefined();
     expect(rampageTargetAtTick(v39, t)).toBe(PLAYER_COLONY_ID); // bigger POOL wins
-    expect(rampageTargetAtTick(old, t)).toBe(PLAYER_COLONY_ID); // unchanged from pre-V39
   });
 
   it('V39: a genuine score gap still decides the order (the key only breaks exact ties)', () => {
-    const world = makeWorld(11, SIM_VERSION_V39_SPIDER_TIEBREAK);
+    const world = makeWorld(11);
     setPoolFoodForTest(world, world.colonies[C1]!, 64);
     setPoolFoodForTest(world, world.colonies[C2]!, 9999);
     for (const t of TICKS) {
@@ -304,7 +273,7 @@ describe('pickRampageTarget — V39 seat-bias fix', () => {
     // BASE_FOOD_STORAGE_CAPACITY — which is the common steady state, and the reason
     // ~36% of picks tie. Pin that V39 leaves it doing that job. Chambers differ here
     // and must not matter.
-    const world = makeWorld(13, SIM_VERSION_V39_SPIDER_TIEBREAK);
+    const world = makeWorld(13);
     setPoolFoodForTest(world, world.colonies[C1]!, 2048);
     addFoodChamber(world, world.colonies[C1]!, 901, 3072); // ignored by the score
     setPoolFoodForTest(world, world.colonies[C2]!, 2048);
@@ -321,7 +290,7 @@ describe('pickRampageTarget — V39 seat-bias fix', () => {
     // A coin that only chose ascending-vs-descending colonyId reaches just [1,2,3] and
     // [3,2,1], so the middle colony would take 40% of picks against 30% each for the
     // outer two. Per-colony keys make every permutation reachable.
-    const world = makeWorld(21, SIM_VERSION_V39_SPIDER_TIEBREAK);
+    const world = makeWorld(21);
     const C3 = 3 as unknown as ColonyId;
     const queen3 = allocateEntityId(world);
     initAnt(world.ants, queen3, {
@@ -377,7 +346,7 @@ describe('findChaseTarget — V39 equal-distance tie coin', () => {
       state: 'Patrolling',
       posX: SX << FP_SHIFT,
       posY: SY << FP_SHIFT,
-      hungerTicks: SPIDER_HUNGER_MAX_TICKS[1] - 1,
+      hungerTicks: WELL_PAST_HUNGRY_TICKS - 1,
     });
     tickSpider(world);
     expect(world.spider.state).toBe('Chasing');
@@ -385,7 +354,7 @@ describe('findChaseTarget — V39 equal-distance tie coin', () => {
   }
 
   it('V39: the lower antTieKey wins the tie, and both ants are reachable across ticks', () => {
-    const world = makeWorld(3, SIM_VERSION_V39_SPIDER_TIEBREAK);
+    const world = makeWorld(3);
     const { a1, a2 } = twoEquidistantAnts(world);
     let pickedA2 = 0;
     for (let i = 0; i < 200; i++) {
@@ -401,17 +370,8 @@ describe('findChaseTarget — V39 equal-distance tie coin', () => {
     expect(pickedA2).toBeLessThan(140);
   });
 
-  it('pre-V39: the lower entity id always wins the tie (colony 1, every time)', () => {
-    const world = makeWorld(3, PRE_V39);
-    const { a1, a2 } = twoEquidistantAnts(world);
-    expect(a1).toBeLessThan(a2);
-    for (let i = 0; i < 50; i++) {
-      expect(chaseTargetAtTick(world, SPIDER_GRACE_TICKS + i * 13)).toBe(a1);
-    }
-  });
-
   it('V39: a strictly nearer ant still wins regardless of its coin', () => {
-    const world = makeWorld(3, SIM_VERSION_V39_SPIDER_TIEBREAK);
+    const world = makeWorld(3);
     spawnAnt(world, C1, SX - D, SY); // farther
     const near = spawnAnt(world, C2, SX + 1, SY); // strictly nearer
     for (let i = 0; i < 50; i++) {
@@ -443,7 +403,7 @@ describe('findNearestAttackingFighter — V39 equal-distance tie coin', () => {
   }
 
   it('V39: the lower antTieKey wins, and the colony-2 fighter is reachable', () => {
-    const world = makeWorld(5, SIM_VERSION_V39_SPIDER_TIEBREAK);
+    const world = makeWorld(5);
     const f1 = spawnAnt(world, C1, SX - D, SY, AntTask.Fighting);
     const f2 = spawnAnt(world, C2, SX + D, SY, AntTask.Fighting);
     let pickedF2 = 0;
@@ -456,16 +416,6 @@ describe('findNearestAttackingFighter — V39 equal-distance tie coin', () => {
     }
     expect(pickedF2).toBeGreaterThan(60);
     expect(pickedF2).toBeLessThan(140);
-  });
-
-  it('pre-V39: the lower entity id always wins (colony 1, every time)', () => {
-    const world = makeWorld(5, PRE_V39);
-    const f1 = spawnAnt(world, C1, SX - D, SY, AntTask.Fighting);
-    const f2 = spawnAnt(world, C2, SX + D, SY, AntTask.Fighting);
-    expect(f1).toBeLessThan(f2);
-    for (let i = 0; i < 50; i++) {
-      expect(attackerAtTick(world, SPIDER_GRACE_TICKS + i * 17)).toBe(f1);
-    }
   });
 });
 
@@ -486,10 +436,9 @@ describe('resolveSpiderCombatOnTile — V39 on-tile selection key', () => {
 
   function mixedTileWorld(
     seed: number,
-    simVersion: number,
     task: AntTask = AntTask.Foraging,
   ): { world: WorldState; a1: number; a2: number } {
-    const world = makeWorld(seed, simVersion);
+    const world = makeWorld(seed);
     const a1 = spawnAnt(world, C1, TX, TY, task);
     const a2 = spawnAnt(world, C2, TX, TY, task);
     world.spider = makeSpider({
@@ -503,7 +452,7 @@ describe('resolveSpiderCombatOnTile — V39 on-tile selection key', () => {
   it('V39: the lower spiderAntTieKey is engaged, not the lower slot', () => {
     let colony2Wins = 0;
     for (let seed = 1; seed <= 40; seed++) {
-      const { world, a1, a2 } = mixedTileWorld(seed, SIM_VERSION_V39_SPIDER_TIEBREAK);
+      const { world, a1, a2 } = mixedTileWorld(seed);
       resolveSpiderCombatOnTile(world);
       const expected = spiderAntTieKey(world, a1) <= spiderAntTieKey(world, a2) ? a1 : a2;
       expect(pairedAnt(world, [a1, a2])).toBe(expected);
@@ -522,7 +471,7 @@ describe('resolveSpiderCombatOnTile — V39 on-tile selection key', () => {
     // the incumbent fighter would be displaced by any worker holding a lower key.
     let exercised = 0;
     for (let seed = 1; seed <= 40; seed++) {
-      const world = makeWorld(seed, SIM_VERSION_V39_SPIDER_TIEBREAK);
+      const world = makeWorld(seed);
       const fighter = spawnAnt(world, C1, TX, TY, AntTask.Fighting);
       const worker = spawnAnt(world, C2, TX, TY, AntTask.Foraging);
       world.spider = makeSpider({
@@ -541,7 +490,7 @@ describe('resolveSpiderCombatOnTile — V39 on-tile selection key', () => {
 
   it('V39: two fighters and a lower-key worker — a fighter is still engaged', () => {
     for (let seed = 1; seed <= 40; seed++) {
-      const world = makeWorld(seed, SIM_VERSION_V39_SPIDER_TIEBREAK);
+      const world = makeWorld(seed);
       const f1 = spawnAnt(world, C1, TX, TY, AntTask.Fighting);
       const f2 = spawnAnt(world, C2, TX, TY, AntTask.Fighting);
       const worker = spawnAnt(world, C1, TX, TY, AntTask.Foraging);
@@ -562,7 +511,7 @@ describe('resolveSpiderCombatOnTile — V39 on-tile selection key', () => {
     // unrelated ant stepped on or off (see spiderAntTieKey's doc comment).
     let secondWins = 0;
     for (let seed = 1; seed <= 40; seed++) {
-      const world = makeWorld(seed, SIM_VERSION_V39_SPIDER_TIEBREAK);
+      const world = makeWorld(seed);
       const first = spawnAnt(world, C1, TX, TY);
       const second = spawnAnt(world, C1, TX, TY);
       world.spider = makeSpider({
@@ -583,7 +532,7 @@ describe('resolveSpiderCombatOnTile — V39 on-tile selection key', () => {
     // The combat tie key is deliberately tick-free. A tick-mixed key would re-pick a
     // different ant every tick, re-running the windup and never decrementing one
     // ant's cooldown to a strike — this test is the regression guard for that.
-    const { world, a1, a2 } = mixedTileWorld(9, SIM_VERSION_V39_SPIDER_TIEBREAK);
+    const { world, a1, a2 } = mixedTileWorld(9);
     resolveSpiderCombatOnTile(world); // tick 0: windup, no damage
     const engaged = pairedAnt(world, [a1, a2]);
     const other = engaged === a1 ? a2 : a1;
@@ -609,7 +558,7 @@ describe('resolveSpiderCombatOnTile — V39 on-tile selection key', () => {
     // ranks higher — so whenever it does not, the engagement and the windup survive.
     let heldCases = 0;
     for (let seed = 1; seed <= 60; seed++) {
-      const world = makeWorld(seed, SIM_VERSION_V39_SPIDER_TIEBREAK);
+      const world = makeWorld(seed);
       const resident = spawnAnt(world, C1, TX, TY);
       world.spider = makeSpider({
         state: 'Rampaging',
@@ -657,8 +606,8 @@ describe('resolveSpiderCombatOnTile — V39 swarm retaliation target', () => {
    * Priority-colony swarm on the spider's tile, plus one ant of the other colony so
    * the tile is genuinely contested. Returns the priority fighters in spawn order.
    */
-  function swarmWorld(seed: number, simVersion: number): { world: WorldState; f: number[] } {
-    const world = makeWorld(seed, simVersion);
+  function swarmWorld(seed: number): { world: WorldState; f: number[] } {
+    const world = makeWorld(seed);
     const f: number[] = [];
     for (let i = 0; i < SPIDER_SWARM_FIGHTER_THRESHOLD; i++) {
       f.push(spawnAnt(world, C1, TX, TY, AntTask.Fighting));
@@ -688,7 +637,7 @@ describe('resolveSpiderCombatOnTile — V39 swarm retaliation target', () => {
   it('V39: the retaliation target is the lowest-key priority fighter, not the lowest slot', () => {
     let nonFirstWins = 0;
     for (let seed = 1; seed <= 30; seed++) {
-      const { world, f } = swarmWorld(seed, SIM_VERSION_V39_SPIDER_TIEBREAK);
+      const { world, f } = swarmWorld(seed);
       const expected = f.reduce((best, id) =>
         spiderAntTieKey(world, id) < spiderAntTieKey(world, best) ? id : best,
       );
@@ -700,7 +649,7 @@ describe('resolveSpiderCombatOnTile — V39 swarm retaliation target', () => {
   });
 
   it('V39: the retaliation target is stable across the whole windup (damage is not smeared)', () => {
-    const { world, f } = swarmWorld(3, SIM_VERSION_V39_SPIDER_TIEBREAK);
+    const { world, f } = swarmWorld(3);
     const startHp = f.map((id) => world.ants.hp[id]!);
     for (let t = 0; t <= COMBAT_COOLDOWN_TICKS + 1; t++) {
       world.tick = t;
