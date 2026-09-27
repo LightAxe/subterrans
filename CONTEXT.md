@@ -264,8 +264,7 @@ and a looter stops once there is nowhere at all to put food. Otherwise it hunts
 instead; a hauler already carrying still brings its load home. The entrance
 **pool** is never raided. A hauler that dies drops its load (on the surface as a food pile; in the
 enemy nest into that colony's pool). Every "may this fighter loot?" rule lives in
-one predicate (`fighterMayLoot`, `src/sim/ant/ant-raid.ts`), so an explicit raid
-order would change only that. The player sees raids through **captions** (being
+one predicate (`fighterMayLoot`, `src/sim/ant/ant-raid.ts`). The player sees raids through **captions** (being
 raided, raiding, a haul home), a **carried-food** crumb on every laden ant, and the
 raiding / hauling counts in the ant-activity panel. Since **#352 (simVersion V60)**
 what a raid does is its **raid type** (below); the rule above is **Loot**.
@@ -280,7 +279,8 @@ replaces the old one, and clearing it resets the type. **Loot** steals while its
 stores have room; **Deny** steals regardless, leaving what its stores cannot hold as
 a food pile beside its own entrance; **Spoil** destroys the enemy's stored food where
 it lies; **Blockade** (below) never goes in; **Assault** ignores food and goes for
-the queen. Loot, Deny and Spoil go for the queen once there is nothing left to take.
+the queen. Loot, Deny and Spoil fight on — the queen included — once there is nothing
+left to take.
 The AI always raids with Loot.
 _Avoid_: **raid mode**, **stance** (stance = the colony alarm), **attack type**.
 

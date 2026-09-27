@@ -12,9 +12,10 @@
 // that leaves that radius is let go and the blockader walks back to its post; one
 // farther than BLOCKADE_LEASH_TILES from the entrance (arriving, or back from a
 // meal) chases nothing and walks to the entrance round obstacles (the surface goal
-// field, as a V57 tunnel defender does), taking its post once inside the leash. Hunger works as for any rallied
-// fighter (step 10c walks a hungry one home to eat), the spider as for any rallied
-// fighter (a spider priority, step 10d, overrides the blockade; otherwise the
+// field, as a V57 tunnel defender does), taking its post once inside the leash.
+// Hunger works as for any rallied fighter (step 10c walks a hungry one home to eat), the spider as for any rallied
+// fighter (a spider priority, step 10d, overrides the blockade and releases the
+// blockaders from their posts: releaseBlockaderToSpider; otherwise the
 // blockaders pay it no mind), and a blockader caught in an enemy nest when the
 // order is given climbs out the way a recalled invader does.
 //
@@ -26,7 +27,7 @@
 //
 // Determinism: integers only, no `/`, no RNG, no module-level mutable state (all
 // buffers live in the per-world scratch arena). Fighters are visited in ascending
-// id order and take posts in that order. Every rule is behind
+// id order and take posts in that order (ranked over all the colony's fighters). Every rule is behind
 // `blockadedEntrance`, which is null below V60.
 import type { ColonyRecord } from '../colony/colony-store.js';
 import type { NestEntrance } from '../colony/entrance.js';
@@ -202,8 +203,11 @@ function nearestOf(world: WorldState, id: number, intruders: readonly number[]):
  *   - farther than BLOCKADE_LEASH_TILES from `ent` → target `ent`, routed round
  *     obstacles (ROUTED);
  *   - the nearest intruder (collectIntruders) → target it, straight at it;
- *   - else its post: the rank-th post of `ent`'s ring (rank = its order among its
- *     colony's blockaders this pass; past the last post the ring wraps). Within
+ *   - else its post: the rank-th post of `ent`'s ring (rank = its order among all
+ *     its colony's live fighters, by id, wherever they are — so posts do not
+ *     reshuffle as others leave to eat and come back; past the last post the ring
+ *     wraps and the extra fighters share posts, stacking, since holders claim no
+ *     tile). Within
  *     BLOCKADE_HOLD_RADIUS_TILES of the post (BLOCKADE_KEEP_HOLD_RADIUS_TILES if it
  *     was holding) it holds (Holding, no target; AT_POST), else it walks to the
  *     post routed round obstacles (TO_POST). With no post at all it holds in place.
@@ -219,17 +223,19 @@ export function updateBlockaders(world: WorldState): void {
   scratch.postsEntranceId = -1;
   scratch.intrudersEntranceId = -1;
   scratch.intrudersColonyId = -1;
-  const n = mark.length < world.nextEntityId ? mark.length : world.nextEntityId;
-  for (let id = 0; id < n; id++) {
-    const m = mark[id]!;
-    if (m === 0) continue;
+  for (let id = 0; id < world.nextEntityId; id++) {
+    if (ants.alive[id] !== 1 || ants.task[id] !== AntTask.Fighting) continue;
     const colonyId = ants.colonyId[id]!;
     const colony: ColonyRecord | undefined = world.colonies[colonyId];
     if (colony === undefined) continue;
     const ent = blockadedEntrance(world, colony);
     if (ent === null) continue;
+    // The rank counts every fighter of the colony, wherever step 10c sent it (home
+    // to eat, below ground), so a post stays its fighter's while others come and go.
     const r = rank.get(colonyId) ?? 0;
     rank.set(colonyId, r + 1);
+    const m = id < mark.length ? mark[id]! : 0;
+    if (m === 0) continue;
 
     const foeInDuel = ants.combatOpponentId[id]!;
     if (foeInDuel >= 0 && ants.alive[foeInDuel] === 1) {

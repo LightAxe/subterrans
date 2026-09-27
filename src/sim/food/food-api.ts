@@ -724,6 +724,26 @@ export function spawnPile(
  * the surface component (the save's connectivity check would reject anything
  * else). Entity-id exhaustion is a silent skip. No RNG.
  */
+/**
+ * #352 — the food a `topUpOrSpawnCorpsePile` at surface tile (x, y) would keep, at
+ * most: the room left in the pile there (PILE_MAX_FP less its initial size), or,
+ * with none, a whole new pile's worth when a pile may be made there (under
+ * FOOD_PILE_HARD_CAP, in the surface component); else 0. Whole pickups are what
+ * a drop keeps (`wholeLoadFp`).
+ */
+export function pileDropRoomFp(world: WorldState, x: number, y: number): number {
+  const slot = pileAtTile(world, x, y);
+  if (slot >= 0) return PILE_MAX_FP - world.food.initialFp[slot]!;
+  if (pileCount(world) >= FOOD_PILE_HARD_CAP) return 0;
+  if (!isSurfaceTileInComponent(world, x, y)) return 0;
+  return PILE_MAX_FP;
+}
+
+/** #352 — the part of `fp` a surface drop keeps: whole pickups (the rest is lost). */
+export function wholeLoadFp(fp: number): number {
+  return wholePickupsFp(fp);
+}
+
 export function topUpOrSpawnCorpsePile(
   world: WorldState,
   x: number,

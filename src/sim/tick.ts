@@ -79,6 +79,7 @@ import {
   updateRaiders,
   tickRaidActions,
   updateBlockaders,
+  releaseBlockaderToSpider,
 } from './ant/ant-system.js';
 import { findEmbeddedByTightening } from './underground-occupancy.js';
 import { tickPheromoneDecay } from './pheromone/pheromone-system.js';
@@ -1479,6 +1480,8 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       if (ants.subTask[sid] === FightingSubState.ToPost) {
         ants.subTask[sid] = FightingSubState.MovingToRally;
       }
+      // #352 (V60): nor a blockade post (no-op for an ant step 10c2 did not route).
+      releaseBlockaderToSpider(world, sid);
     }
   }
 

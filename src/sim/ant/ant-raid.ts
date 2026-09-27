@@ -58,8 +58,10 @@ import {
   depositCarriedFood,
   depositIntoPool,
   isFoodChamberDepositable,
+  pileDropRoomFp,
   takeFromStock,
   topUpOrSpawnCorpsePile,
+  wholeLoadFp,
 } from '../food/food-api.js';
 import { fighterIsHungry } from '../hunger.js';
 import { colonyRaidType, isAnyEntranceTile } from '../raid-order.js';
@@ -543,15 +545,8 @@ function assaultQueenOf(world: WorldState, colony: ColonyRecord, id: number): nu
  * type is Deny, it stands within one tile (Chebyshev) of one of its colony's open
  * entrances (it walks home by the surface entrance flow field, so it crosses that
  * ring before it can step onto the shaft and go down), and the room its stores
- * can take (`colonyDepositableRoom`) is less than its load. The load
- * becomes a surface food pile on the hauler's tile (`topUpOrSpawnCorpsePile`: whole
- * pickups, so a part-eaten remainder is lost; a full pile store or an
- * off-component tile loses it all), or — on an entrance tile, where no pile may
- * lie — on the first of its N/E/S/W neighbours that is walkable, in the surface
- * component and not an entrance; with none it keeps its load and walks on. The
- * trip counts as done (`raidTrips`, as a deposit would) and the hauler goes back
- * to its rally. Its colony's foragers bring the pile in once there is room.
- * Returns true if it dropped.
+ * can take (`colonyDepositableRoom`) is less than its load. Where and how it drops:
+ * `placeDenyLoad`. Returns true if it dropped.
  */
 function denyHaulerDropsLoad(world: WorldState, colony: ColonyRecord, id: number): boolean {
   if (colonyRaidType(world, colony) !== RaidType.Deny) return false;
@@ -572,23 +567,48 @@ function denyHaulerDropsLoad(world: WorldState, colony: ColonyRecord, id: number
   }
   if (!atDoor) return false;
   if (colonyDepositableRoom(world, colony) >= load) return false;
-  let dropX = tx;
-  let dropY = ty;
-  if (isAnyEntranceTile(world, tx, ty)) {
-    dropX = -1;
-    for (let i = 0; i < DIR_DX.length && dropX < 0; i++) {
-      const nx = tx + DIR_DX[i]!;
-      const ny = ty + DIR_DY[i]!;
-      if (!canEnterSurfaceTile(world, nx, ny) || !isSurfaceTileInComponent(world, nx, ny)) {
-        continue;
-      }
-      if (isAnyEntranceTile(world, nx, ny)) continue;
-      dropX = nx;
-      dropY = ny;
-    }
-    if (dropX < 0) return false;
+  return placeDenyLoad(world, colony, id, tx, ty);
+}
+
+/**
+ * #352 (V60) — Deny: hauler `id` of `colony` leaves its load as a surface food
+ * pile at surface tile (tx, ty) — unless an entrance (of any colony) lies there,
+ * where no pile may — or else on the first of its N/E/S/W neighbours that is
+ * walkable and not an entrance; the first of those whose pile (or new pile) can
+ * keep the whole load (`pileDropRoomFp`: never a full pile, over the pile cap or
+ * off the surface component). The drop keeps whole pickups (a part-pickup
+ * remainder is lost). It counts as a trip (`raidTrips`, as a deposit would) and
+ * the hauler goes back to its rally. With no such tile it keeps its load and
+ * returns false. A load under one pickup is nothing to drop: it is let go
+ * without a trip. Its colony's foragers bring the pile in once there is room.
+ */
+function placeDenyLoad(
+  world: WorldState,
+  colony: ColonyRecord,
+  id: number,
+  tx: number,
+  ty: number,
+): boolean {
+  const ants = world.ants;
+  const fp = wholeLoadFp(ants.foodCarrying[id]!);
+  if (fp <= 0) {
+    ants.foodCarrying[id] = 0;
+    ants.subTask[id] = FightingSubState.MovingToRally;
+    return true;
   }
-  topUpOrSpawnCorpsePile(world, dropX, dropY, load);
+  let dropX = -1;
+  let dropY = -1;
+  for (let i = -1; i < DIR_DX.length && dropX < 0; i++) {
+    const nx = i < 0 ? tx : tx + DIR_DX[i]!;
+    const ny = i < 0 ? ty : ty + DIR_DY[i]!;
+    if (!canEnterSurfaceTile(world, nx, ny)) continue;
+    if (isAnyEntranceTile(world, nx, ny)) continue;
+    if (pileDropRoomFp(world, nx, ny) < fp) continue;
+    dropX = nx;
+    dropY = ny;
+  }
+  if (dropX < 0) return false;
+  topUpOrSpawnCorpsePile(world, dropX, dropY, fp);
   ants.foodCarrying[id] = 0;
   ants.subTask[id] = FightingSubState.MovingToRally;
   colony.raidTrips += 1;
@@ -711,6 +731,17 @@ export function tickRaidActions(world: WorldState): void {
     if (left === 0) {
       ants.subTask[id] = FightingSubState.MovingToRally;
       colony.raidTrips += 1;
+    } else if (ty === 0 && ents != null && colonyRaidType(world, colony) === RaidType.Deny) {
+      // #352 (V60): a Deny hauler that went down with room at the door and found
+      // none (another hauler or a forager filled it first, or it came down under
+      // Loot) does not wait for room: at the top of its shaft it leaves the rest
+      // outside, beside the open entrance above it, and goes back.
+      for (let e = 0; e < ents.length; e++) {
+        const ent = ents[e]!;
+        if (!ent.isOpen || ent.surfaceTileX !== tx) continue;
+        placeDenyLoad(world, colony, id, ent.surfaceTileX, ent.surfaceTileY);
+        break;
+      }
     }
   }
 }

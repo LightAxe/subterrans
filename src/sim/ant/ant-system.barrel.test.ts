@@ -42,6 +42,7 @@ const PUBLIC_FUNCTIONS = [
   'tickRaidActions', // V52 (#290 PR 5) — step 16e, consumed by tick.ts
   'invaderHuntStep', // V59 (#364) — the invader hunt step, pinned by its unit test
   'updateBlockaders', // V60 (#352) — step 10c2, consumed by tick.ts
+  'releaseBlockaderToSpider', // V60 (#352) — step 10d, consumed by tick.ts
 ] as const;
 
 describe('ant-system barrel public API (#212)', () => {

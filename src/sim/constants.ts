@@ -1045,7 +1045,7 @@ export const BLOCKADE_RADIUS_TILES = FIGHT_AGGRO_RADIUS + 2;
 /**
  * #352 (V60) — Blockade leash: a blockader farther than this from the entrance
  * (walking up to the blockade, or back from a meal) chases nothing and makes for
- * its post.
+ * the entrance (routed round obstacles), taking its post once inside.
  */
 export const BLOCKADE_LEASH_TILES = BLOCKADE_RADIUS_TILES + 2;
 

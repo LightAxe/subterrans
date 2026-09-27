@@ -18,7 +18,13 @@ import {
   SIM_VERSION_V60_RAID_ORDERS,
   type WorldState,
 } from './types.js';
-import { fighterMayLoot, updateBlockaders, updateRaiders } from './ant/ant-system.js';
+import {
+  fighterMayLoot,
+  tickRaidActions,
+  updateBlockaders,
+  updateRaiders,
+} from './ant/ant-system.js';
+import { createScenario } from './scenario.js';
 import { blockaderPassesThroughFriends, blockaderRoutesToTarget } from './ant/ant-blockade.js';
 import { AntTask, FightingSubState, RaidType } from './enums.js';
 import { Zone } from './terrain.js';
@@ -33,7 +39,12 @@ import {
   pileTileX,
   pileTileY,
 } from './food/food-api.js';
-import { setChamberStockForTest, setPoolFoodForTest } from './food/food-test-utils.js';
+import {
+  addPileForTest,
+  setChamberStockForTest,
+  setPoolFoodForTest,
+} from './food/food-test-utils.js';
+import type { FoodPileId } from './food.js';
 import {
   BASE_FOOD_STORAGE_CAPACITY,
   BLOCKADE_LEASH_TILES,
@@ -41,6 +52,8 @@ import {
   BLOCKADE_RADIUS_TILES,
   ENEMY_COLONY_ID,
   FOOD_CHAMBER_CAPACITY,
+  FOOD_PICKUP_AMOUNT,
+  FOOD_PILE_INITIAL_PICKUPS_MAX,
   PLAYER_COLONY_ID,
   RAID_CARRY_FP,
   SPOIL_TICKS_PER_LOAD,
@@ -347,6 +360,108 @@ describe('Deny (V60)', () => {
       if (pileAtTile(w, r.playerDoor.x + dx, r.playerDoor.y + dy) >= 0) found += 1;
     }
     expect(found).toBe(1);
+  });
+
+  /** A full pile (FOOD_PILE_INITIAL_PICKUPS_MAX pickups) at (x, y). */
+  function fullPile(w: WorldState, x: number, y: number): void {
+    addPileForTest(w, {
+      foodPileId: allocateEntityId(w) as FoodPileId,
+      tileX: x,
+      tileY: y,
+      pickupsRemaining: FOOD_PILE_INITIAL_PICKUPS_MAX,
+      pickupsInitial: FOOD_PILE_INITIAL_PICKUPS_MAX,
+    });
+  }
+
+  it('never drops onto a full pile: it takes a free neighbour, else keeps its load (no trip)', () => {
+    const r = raidWorld();
+    const w = r.world;
+    order(r, RaidType.Deny);
+    fillPlayerStores(r);
+    const x = r.playerDoor.x - 1;
+    const y = r.playerDoor.y + 1;
+    fullPile(w, x, y);
+    const id = addHauler(w, P, x, y, null, RAID_CARRY_FP);
+    updateRaiders(w);
+    expect(w.ants.foodCarrying[id]).toBe(0);
+    expect(r.player.raidTrips).toBe(1);
+    let placed = 0;
+    for (const [dx, dy] of [
+      [0, -1],
+      [1, 0],
+      [0, 1],
+      [-1, 0],
+    ] as const) {
+      const slot = pileAtTile(w, x + dx, y + dy);
+      if (slot >= 0) placed += pileAmountFp(w, slot);
+    }
+    expect(placed).toBe(RAID_CARRY_FP);
+    // Every candidate tile full: it keeps its load and counts no trip.
+    const r2 = raidWorld();
+    const w2 = r2.world;
+    order(r2, RaidType.Deny);
+    fillPlayerStores(r2);
+    const x2 = r2.playerDoor.x - 1;
+    const y2 = r2.playerDoor.y + 1;
+    fullPile(w2, x2, y2);
+    for (const [dx, dy] of [
+      [0, -1],
+      [1, 0],
+      [0, 1],
+      [-1, 0],
+    ] as const) {
+      if (pileAtTile(w2, x2 + dx, y2 + dy) < 0) fullPile(w2, x2 + dx, y2 + dy);
+    }
+    const id2 = addHauler(w2, P, x2, y2, null, RAID_CARRY_FP);
+    updateRaiders(w2);
+    expect(w2.ants.foodCarrying[id2]).toBe(RAID_CARRY_FP);
+    expect(r2.player.raidTrips).toBe(0);
+  });
+
+  it('a load under one pickup is let go without a pile or a trip', () => {
+    const r = raidWorld();
+    const w = r.world;
+    order(r, RaidType.Deny);
+    fillPlayerStores(r);
+    const piles = pileCount(w);
+    const id = addHauler(
+      w,
+      P,
+      r.playerDoor.x - 1,
+      r.playerDoor.y + 1,
+      null,
+      FOOD_PICKUP_AMOUNT - 1,
+    );
+    updateRaiders(w);
+    expect(w.ants.foodCarrying[id]).toBe(0);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.MovingToRally);
+    expect(pileCount(w)).toBe(piles);
+    expect(r.player.raidTrips).toBe(0);
+  });
+
+  it('down its own shaft with no room after all, it leaves the load outside by the door (Loot waits)', () => {
+    for (const type of [RaidType.Deny, RaidType.Loot]) {
+      const r = raidWorld();
+      const w = r.world;
+      order(r, type);
+      fillPlayerStores(r);
+      const piles = pileCount(w);
+      const id = addHauler(w, P, r.playerDoor.x, 0, P, RAID_CARRY_FP);
+      tickRaidActions(w);
+      if (type === RaidType.Deny) {
+        expect(w.ants.foodCarrying[id]).toBe(0);
+        expect(w.ants.subTask[id]).toBe(FightingSubState.MovingToRally);
+        expect(r.player.raidTrips).toBe(1);
+        expect(pileCount(w)).toBe(piles + 1);
+        const slot = pileSlotAt(w, pileCount(w) - 1);
+        const at = { x: pileTileX(w, slot), y: pileTileY(w, slot) };
+        expect(manhattan(at, r.playerDoor)).toBe(1);
+      } else {
+        expect(w.ants.foodCarrying[id]).toBe(RAID_CARRY_FP);
+        expect(w.ants.subTask[id]).toBe(FightingSubState.Hauling);
+        expect(pileCount(w)).toBe(piles);
+      }
+    }
   });
 });
 
@@ -739,7 +854,7 @@ describe('Blockade (V60)', () => {
     );
     expect(held).toBeGreaterThan(0);
     const tiles = new Set(ids.map((id) => `${tileOf(w, id).x},${tileOf(w, id).y}`));
-    expect(tiles.size).toBeGreaterThan(ids.length >> 1);
+    expect(tiles.size).toBe(ids.length);
     for (const id of ids) {
       expect(manhattan(tileOf(w, id), r.enemyDoor)).toBeLessThanOrEqual(
         BLOCKADE_POST_RADIUS_TILES + 3,
@@ -764,6 +879,44 @@ describe('Blockade (V60)', () => {
     w.ants.combatOpponentId[id!] = -1;
     updateBlockaders(w);
     expect(w.ants.targetPosX[id!]).toBe(w.ants.posX[nearer]);
+  });
+
+  it('a spider priority releases the blockaders from their posts', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    order(r, RaidType.Blockade);
+    const ids = blockaders(r, 3);
+    run(w, 300, () => ids.every((id) => w.ants.subTask[id] === FightingSubState.Holding));
+    w.spider = createScenario(7, 'Normal').spider;
+    expect(w.spider).not.toBeNull();
+    w.spiderPriorityColonyId = P;
+    const sx0 = w.spider!.posX >> FP_SHIFT;
+    tick(w, []);
+    const sx1 = w.spider!.posX >> FP_SHIFT;
+    for (const id of ids) {
+      expect(getScratch(w).blockade.mark[id]).toBe(0);
+      expect(w.ants.subTask[id]).not.toBe(FightingSubState.Holding);
+      expect(blockaderPassesThroughFriends(w, id)).toBe(false);
+      expect(blockaderRoutesToTarget(w, id)).toBe(false);
+      expect([sx0, sx1]).toContain(w.ants.targetPosX[id]! >> FP_SHIFT);
+    }
+  });
+
+  it('posts stay put while a blockader is away (ranks count every fighter of the colony)', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    order(r, RaidType.Blockade);
+    const ids = blockadersNear(r, 3);
+    tick(w, []);
+    const before = ids.map((id) => [w.ants.targetPosX[id], w.ants.targetPosY[id]].join(','));
+    // The lowest-id one goes below ground (step 10c leaves it unmarked).
+    w.ants.zone[ids[0]!] = Zone.Underground;
+    w.ants.currentGridColonyId[ids[0]!] = P;
+    tick(w, []);
+    for (let k = 1; k < ids.length; k++) {
+      const id = ids[k]!;
+      expect([w.ants.targetPosX[id], w.ants.targetPosY[id]].join(',')).toBe(before[k]);
+    }
   });
 
   it('is inert below V60 and without the order: step 10c marks nobody and 10c2 routes nobody', () => {
