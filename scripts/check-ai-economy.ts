@@ -77,8 +77,13 @@ const { GameOutcome } = await import('../src/sim/game-over.js');
 const { PLAYER_COLONY_ID, ENEMY_COLONY_ID, MATCH_TIMEOUT_TICKS, FOOD_PICKUP_AMOUNT } =
   await import('../src/sim/constants.js');
 const { runAIController } = await import('../src/render/ai-controller.js');
-const { colonyFoodTotal, colonyHasNoDepositTarget, forEachPile, pileCount } =
-  await import('../src/sim/food/food-api.js');
+const {
+  colonyFoodTotal,
+  colonyForageBackpressure,
+  colonyHasNoDepositTarget,
+  forEachPile,
+  pileCount,
+} = await import('../src/sim/food/food-api.js');
 const { ChamberType, AntTask, FightingSubState, PheromoneType } =
   await import('../src/sim/enums.js');
 const { isAlive } = await import('../src/sim/ant/ant-store.js');
@@ -235,6 +240,22 @@ interface SeedResult {
   /** Times each colony's AI entered Invading (the player's only under --both-ai). */
   enemyInvasions: number;
   playerInvasions: number;
+  /** #290 PR 6b — COMPLETED FoodStorage chambers each colony owned when the match
+   *  ended (or at the last tick). */
+  enemyFoodChambers: number;
+  playerFoodChambers: number;
+  /** #290 PR 6b — ticks, while the match ran and that colony's queen lived, on
+   *  which it owned a FoodStorage chamber and every store was full (forage
+   *  backpressure on: nowhere to put food). */
+  enemyFullTicks: number;
+  playerFullTicks: number;
+}
+
+/** COMPLETED FoodStorage chambers a colony owns. */
+function foodChamberCount(colony: ColonyRecord): number {
+  let n = 0;
+  for (const ch of colony.chambers) if (ch.chamberType === ChamberType.FoodStorage) n += 1;
+  return n;
 }
 
 /** Tick at which Queen + Nursery + FoodStorage are all COMPLETED for a colony. */
@@ -470,6 +491,10 @@ function runSeed(seed: number): SeedResult {
     playerHaulersParked: 0,
     enemyInvasions: 0,
     playerInvasions: 0,
+    enemyFoodChambers: 0,
+    playerFoodChambers: 0,
+    enemyFullTicks: 0,
+    playerFullTicks: 0,
   };
   let raidsRecorded = false;
   const recordRaids = (): void => {
@@ -477,6 +502,8 @@ function runSeed(seed: number): SeedResult {
     res.enemyRaidTrips = enemy.raidTrips;
     res.playerRaidedFp = player.foodRaidedFp;
     res.playerRaidTrips = player.raidTrips;
+    res.enemyFoodChambers = foodChamberCount(enemy);
+    res.playerFoodChambers = foodChamberCount(player);
     const a = world.ants;
     for (let id = 0; id < world.nextEntityId; id++) {
       if (a.alive[id] !== 1 || a.task[id] !== AntTask.Fighting) continue;
@@ -566,6 +593,10 @@ function runSeed(seed: number): SeedResult {
     // laden ones, food — the colony cannot get back.
     // Only counted while the queen is alive — after she dies the colony is over and
     // the number stops meaning anything.
+    if (res.matchEndTick === null) {
+      if (enemyQueenAlive && colonyForageBackpressure(world, enemy)) res.enemyFullTicks += 1;
+      if (playerQueenAlive && colonyForageBackpressure(world, player)) res.playerFullTicks += 1;
+    }
     if (enemyQueenAlive) {
       res.heldWindow += 1;
       sampleFrozenHomebound(world, ENEMY_COLONY_ID, frozenSample);
@@ -849,7 +880,8 @@ console.log(
 console.log('');
 console.log(
   'seed | matchEnd | raided fp e/p | hauls e/p | invasions e/p | hauls@runEnd e/p | ' +
-    'haulers out@matchEnd e/p (parked home, stores full)   (raid rows; e = enemy, p = player)',
+    'haulers out@matchEnd e/p (parked home, stores full) | FoodStorage chambers@matchEnd e/p | ' +
+    'ticks stores full e/p   (raid rows; e = enemy, p = player)',
 );
 for (const r of results) {
   console.log(
@@ -857,7 +889,8 @@ for (const r of results) {
       `${r.enemyRaidedFp}/${r.playerRaidedFp} | ${r.enemyRaidTrips}/${r.playerRaidTrips} | ` +
       `${r.enemyInvasions}/${r.playerInvasions} | ` +
       `${r.enemyRaidTripsRunEnd}/${r.playerRaidTripsRunEnd} | ` +
-      `${r.enemyHaulersOut}(${r.enemyHaulersParked})/${r.playerHaulersOut}(${r.playerHaulersParked})`,
+      `${r.enemyHaulersOut}(${r.enemyHaulersParked})/${r.playerHaulersOut}(${r.playerHaulersParked}) | ` +
+      `${r.enemyFoodChambers}/${r.playerFoodChambers} | ${r.enemyFullTicks}/${r.playerFullTicks}`,
   );
 }
 const raidSeeds = results.filter((r) => r.enemyRaidedFp > 0 || r.playerRaidedFp > 0).length;
@@ -885,6 +918,15 @@ console.log(
   `  Invasions launched: enemy ${sumOf((r) => r.enemyInvasions)}, ${PLAYER_LABEL} ` +
     `${sumOf((r) => r.playerInvasions)}  Match length (end tick, else ${TICKS}): ` +
     `median=${median(matchEnds)} min=${matchEnds[0]} max=${matchEnds[matchEnds.length - 1]}`,
+);
+const enemyFs = sortedCol((r) => r.enemyFoodChambers);
+const playerFs = sortedCol((r) => r.playerFoodChambers);
+console.log(
+  `  FoodStorage chambers at match end: enemy median=${median(enemyFs)} ` +
+    `max=${enemyFs[enemyFs.length - 1]}, ${PLAYER_LABEL} median=${median(playerFs)} ` +
+    `max=${playerFs[playerFs.length - 1]}. Ticks with every store full (queen alive, ` +
+    `before match end): enemy ${sumOf((r) => r.enemyFullTicks)}, ${PLAYER_LABEL} ` +
+    `${sumOf((r) => r.playerFullTicks)}`,
 );
 
 // ---------------------------------------------------------------------------

@@ -26,6 +26,9 @@ import {
   AI_SURVIVAL_CANCEL_BUDGET,
   aiSurvivalMode,
   AI_SURVIVAL_RATIO,
+  AI_EXTRA_FOOD_STORAGE_FULL_PCT,
+  AI_MAX_FOOD_STORAGE_CHAMBERS,
+  aiExtraFoodStorageWanted,
 } from './ai-controller.js';
 
 import {
@@ -45,7 +48,13 @@ import { createScenario } from '../sim/scenario.js';
 import { createDefaultAIStateRecord } from '../sim/ai-state.js';
 import { tick } from '../sim/tick.js';
 import { serializeWorldState, deserializeWorldState } from '../platform/save.js';
-import { ENEMY_COLONY_ID, QUEEN_EGG_FOOD_THRESHOLD, STARTING_WORKERS } from '../sim/constants.js';
+import {
+  BASE_FOOD_STORAGE_CAPACITY,
+  ENEMY_COLONY_ID,
+  FOOD_CHAMBER_CAPACITY,
+  QUEEN_EGG_FOOD_THRESHOLD,
+  STARTING_WORKERS,
+} from '../sim/constants.js';
 import { colonyFoodTotal } from '../sim/food/food-api.js';
 import {
   addChamberForTest,
@@ -458,6 +467,176 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
           expect(cmd.issuedAtTick).toBe(5);
         }
       }
+    });
+  });
+
+  describe('#290 D14 — more FoodStorage when the stores are nearly full', () => {
+    // Capacity with one completed FoodStorage = pool 2048 + chamber 5120 = 7168 fp.
+    // 90 % of it is 6451.2, so 6452 fp is the first total that qualifies.
+    const CAP_ONE_CHAMBER = BASE_FOOD_STORAGE_CAPACITY + FOOD_CHAMBER_CAPACITY;
+    const FIRST_QUALIFYING = Math.ceil((CAP_ONE_CHAMBER * AI_EXTRA_FOOD_STORAGE_FULL_PCT) / 100);
+
+    /** A settled AI colony: Queen, Nursery and one FoodStorage all completed, the
+     *  stores holding `totalFp` (pool filled first), one Open anchor at (40, 5). */
+    function settledColony(totalFp: number, withNursery = true) {
+      const world = makeWorld(0);
+      const colony = addColony(world, 2 as ColonyId, 0);
+      addUndergroundGrid(world, 2 as ColonyId);
+      setQueenPos(world, 0, 10, 10);
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
+      if (withNursery) addChamberForTest(world, colony, makeChamber(ChamberType.Nursery, 20, 7));
+      const fs = addChamberForTest(world, colony, makeChamber(ChamberType.FoodStorage, 10, 5));
+      const pool = Math.min(totalFp, BASE_FOOD_STORAGE_CAPACITY);
+      setPoolFoodForTest(world, colony, pool);
+      setChamberStockForTest(world, colony, fs, totalFp - pool);
+      ugSet(world.undergroundGrids[2 as ColonyId]!, 40, 5, UndergroundTileState.Open);
+      return { world, colony };
+    }
+
+    const fsCommands = (world: WorldState) =>
+      world.commandQueue.filter(
+        (c) =>
+          c.type === 'PlaceChamber' &&
+          (c as { chamberType: number }).chamberType === ChamberType.FoodStorage,
+      ) as Array<{ anchorTileX: number; anchorTileY: number; colonyId: number }>;
+
+    it('places a second FoodStorage once the stores reach the near-full threshold', () => {
+      const { world, colony } = settledColony(FIRST_QUALIFYING);
+      expect(colonyFoodTotal(world, colony)).toBe(FIRST_QUALIFYING);
+      expect(aiExtraFoodStorageWanted(world, colony)).toBe(true);
+      aiChamberPlacement(world, colony);
+      const cmds = fsCommands(world);
+      expect(cmds).toHaveLength(1);
+      expect(cmds[0]!.anchorTileX).toBe(40);
+      expect(cmds[0]!.anchorTileY).toBe(5);
+      expect(cmds[0]!.colonyId).toBe(2);
+    });
+
+    it('places nothing one fp below the threshold', () => {
+      const { world, colony } = settledColony(FIRST_QUALIFYING - 1);
+      expect(aiExtraFoodStorageWanted(world, colony)).toBe(false);
+      aiChamberPlacement(world, colony);
+      expect(world.commandQueue.filter((c) => c.type === 'PlaceChamber')).toHaveLength(0);
+    });
+
+    it('does not place a second while a FoodStorage is already pending', () => {
+      const { world, colony } = settledColony(CAP_ONE_CHAMBER);
+      world.pendingChambers['2:30:5'] = {
+        colonyId: 2 as ColonyId,
+        chamberType: ChamberType.FoodStorage,
+        anchorTileX: 30,
+        anchorTileY: 5,
+        width: 4,
+        height: 3,
+      };
+      expect(aiExtraFoodStorageWanted(world, colony)).toBe(false);
+      aiChamberPlacement(world, colony);
+      expect(fsCommands(world)).toHaveLength(0);
+    });
+
+    it("another colony's pending FoodStorage does not block this one", () => {
+      const { world, colony } = settledColony(CAP_ONE_CHAMBER);
+      world.pendingChambers['1:30:5'] = {
+        colonyId: 1 as ColonyId,
+        chamberType: ChamberType.FoodStorage,
+        anchorTileX: 30,
+        anchorTileY: 5,
+        width: 4,
+        height: 3,
+      };
+      expect(aiExtraFoodStorageWanted(world, colony)).toBe(true);
+    });
+
+    it('judges fullness against the capacity the completed chambers give', () => {
+      // Two completed FoodStorage: capacity 12 288 fp, 90 % = 11 059.2. A total that
+      // would fill one chamber's colony (7168) is only 58 % here: no third chamber.
+      const { world, colony } = settledColony(CAP_ONE_CHAMBER);
+      addChamberForTest(world, colony, makeChamber(ChamberType.FoodStorage, 30, 5));
+      expect(aiExtraFoodStorageWanted(world, colony)).toBe(false);
+      const fs2 = colony.chambers[colony.chambers.length - 1]!;
+      setChamberStockForTest(world, colony, fs2, 4000); // 7168 + 4000 = 11 168 fp ≥ 90 %
+      expect(aiExtraFoodStorageWanted(world, colony)).toBe(true);
+    });
+
+    it('stops at AI_MAX_FOOD_STORAGE_CHAMBERS', () => {
+      const { world, colony } = settledColony(0);
+      for (let i = 1; i < AI_MAX_FOOD_STORAGE_CHAMBERS; i++) {
+        addChamberForTest(world, colony, makeChamber(ChamberType.FoodStorage, 10 + i * 5, 12));
+      }
+      // Every store brim-full.
+      setPoolFoodForTest(world, colony, BASE_FOOD_STORAGE_CAPACITY);
+      for (const ch of colony.chambers) {
+        if (ch.chamberType === ChamberType.FoodStorage) {
+          setChamberStockForTest(world, colony, ch, FOOD_CHAMBER_CAPACITY);
+        }
+      }
+      expect(aiExtraFoodStorageWanted(world, colony)).toBe(false);
+      aiChamberPlacement(world, colony);
+      expect(fsCommands(world)).toHaveLength(0);
+    });
+
+    it('Nursery keeps priority: full stores and no Nursery place the Nursery, not storage', () => {
+      const { world, colony } = settledColony(CAP_ONE_CHAMBER, false);
+      ugSet(world.undergroundGrids[2 as ColonyId]!, 20, 7, UndergroundTileState.Open);
+      expect(aiExtraFoodStorageWanted(world, colony)).toBe(false);
+      aiChamberPlacement(world, colony);
+      const placed = world.commandQueue
+        .filter((c) => c.type === 'PlaceChamber')
+        .map((c) => (c as { chamberType: number }).chamberType);
+      expect(placed).toEqual([ChamberType.Nursery]);
+    });
+
+    it('a pending Nursery is enough: the extra storage then follows', () => {
+      const { world, colony } = settledColony(CAP_ONE_CHAMBER, false);
+      world.pendingChambers['2:20:7'] = {
+        colonyId: 2 as ColonyId,
+        chamberType: ChamberType.Nursery,
+        anchorTileX: 20,
+        anchorTileY: 7,
+        width: 4,
+        height: 3,
+      };
+      aiChamberPlacement(world, colony);
+      expect(fsCommands(world)).toHaveLength(1);
+    });
+
+    it('waits for the Queen chamber to be COMPLETED, not merely pending', () => {
+      const { world, colony } = settledColony(CAP_ONE_CHAMBER);
+      colony.chambers = colony.chambers.filter((c) => c.chamberType !== ChamberType.Queen);
+      world.pendingChambers['2:10:18'] = {
+        colonyId: 2 as ColonyId,
+        chamberType: ChamberType.Queen,
+        anchorTileX: 10,
+        anchorTileY: AI_QUEEN_CHAMBER_DEPTH,
+        width: 5,
+        height: 3,
+      };
+      expect(aiExtraFoodStorageWanted(world, colony)).toBe(false);
+    });
+
+    it('leaves the first FoodStorage to its own rule (no completed chamber → no extra)', () => {
+      const world = makeWorld(0);
+      const colony = addColony(world, 2 as ColonyId, 0);
+      addUndergroundGrid(world, 2 as ColonyId);
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Nursery, 20, 7));
+      setPoolFoodForTest(world, colony, BASE_FOOD_STORAGE_CAPACITY);
+      expect(aiExtraFoodStorageWanted(world, colony)).toBe(false);
+    });
+
+    it('runs only on the chamber cadence, like every other placement', () => {
+      const { world, colony } = settledColony(CAP_ONE_CHAMBER);
+      const offCadence = { ...world, tick: 1 } as unknown as WorldState;
+      aiChamberPlacement(offCadence, colony);
+      expect(fsCommands(offCadence)).toHaveLength(0);
+    });
+
+    it('is deterministic: the same world yields the same command', () => {
+      const a = settledColony(CAP_ONE_CHAMBER);
+      const b = settledColony(CAP_ONE_CHAMBER);
+      aiChamberPlacement(a.world, a.colony);
+      aiChamberPlacement(b.world, b.colony);
+      expect(fsCommands(a.world)).toEqual(fsCommands(b.world));
     });
   });
 
