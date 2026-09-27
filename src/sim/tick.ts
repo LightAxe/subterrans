@@ -6,7 +6,13 @@ import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath, checkTiebreaks } from './game-over.js';
 import { advanceAIState, getAIStateForColony, setAIRallyOperation } from './ai-state.js';
 import { detectAndResolveCombat } from './combat.js';
-import { getScratch } from './scratch.js';
+import {
+  getScratch,
+  peekFlowFieldCaches,
+  storeFlowFieldCaches,
+  resetFlowFieldCacheStore,
+  type FlowFieldCaches,
+} from './scratch.js';
 import { Rng } from './rng.js';
 import {
   AntTask,
@@ -75,7 +81,6 @@ import { tickPheromoneDecay } from './pheromone/pheromone-system.js';
 import { decodePheromoneKeyType, pheromoneKeyIsSurface } from './pheromone/pheromone-store.js';
 import { tickFoodPileSpawn } from './food-system.js';
 import { computeDigFlowField, ensureDigFlowField, createDigFlowFields } from './dig-system.js';
-import type { DigFlowFields } from './dig-system.js';
 import {
   computeEntranceFlowField,
   computeSurfaceEntranceFlowField,
@@ -83,7 +88,6 @@ import {
   ensureSurfaceEntranceFlowField,
   createEntranceFlowFields,
 } from './entrance-flow.js';
-import type { EntranceFlowFields } from './entrance-flow.js';
 import {
   computeChamberFlowField,
   computeFoodChamberFlowField,
@@ -105,8 +109,9 @@ import type { FoodPileId } from './food.js';
 // ---------------------------------------------------------------------------
 // Per-world flow-field scratch (issue #160) — persists across a world's ticks,
 // not part of WorldState (never serialized). Each WorldState owns its own dig/
-// entrance/chamber BFS caches, keyed by world-object identity in the WeakMap
-// below.
+// entrance/chamber BFS caches, keyed by world-object identity in a WeakMap
+// (stored in scratch.ts since #340, so copyWorldState can drop a destination's
+// caches — a copy must not keep routing on the destination's old topology).
 //
 // Previously these were module-level singletons keyed only by colonyId, shared
 // across every world the process ever ticked. A new or deserialized world that
@@ -125,25 +130,17 @@ import type { FoodPileId } from './food.js';
 //   - chamber:  per-colony food / nursing / queen / nurse-deposit fields; keeps
 //               chamber steering off Solid dirt on bent tunnels (chamber-flow.ts).
 // ---------------------------------------------------------------------------
-interface FlowFieldCaches {
-  dig: DigFlowFields;
-  entrance: EntranceFlowFields;
-  chamber: ChamberFlowFields;
-}
-
-// eslint-disable-next-line subterrans/sim-module-state -- sim-cache: per-world flow-field cache keyed by WorldState identity; derived/recomputable, never authoritative sim state
-let cachesByWorld = new WeakMap<WorldState, FlowFieldCaches>();
-
-/** Get (or lazily create) the flow-field scratch owned by `world`. */
+/** Get (or lazily create) the flow-field scratch owned by `world`. The storage
+ *  lives in scratch.ts so copyWorldState can drop a destination's caches (#340). */
 function getFlowFieldCaches(world: WorldState): FlowFieldCaches {
-  let caches = cachesByWorld.get(world);
+  let caches = peekFlowFieldCaches(world);
   if (caches === undefined) {
     caches = {
       dig: createDigFlowFields(),
       entrance: createEntranceFlowFields(),
       chamber: createChamberFlowFields(),
     };
-    cachesByWorld.set(world, caches);
+    storeFlowFieldCaches(world, caches);
   }
   return caches;
 }
@@ -162,14 +159,14 @@ export function __getChamberFlowFieldsForTest(world: WorldState): ChamberFlowFie
  * Drop all per-world flow-field scratch.
  *
  * As of issue #160 this is no longer required for cross-world correctness —
- * each world owns its caches via the WeakMap above, so a fresh or loaded world
+ * each world owns its caches via a per-world WeakMap, so a fresh or loaded world
  * can never inherit another world's topology. Retained as an explicit teardown
  * hook (the render layer calls it on boot) and for test isolation. Replacing
  * the map drops every world's entry at once; abandoned entries would also be
  * collected on their own once their world is unreferenced.
  */
 export function resetFlowFieldCaches(): void {
-  cachesByWorld = new WeakMap();
+  resetFlowFieldCacheStore();
 }
 
 // #231 — the step-10a idle-reassignment scratch list now lives on the per-world
@@ -218,7 +215,7 @@ void (undefined as unknown as PendingChamber);
  *
  * tick() retains its accepted Phase 4 2-arg signature.
  * DigFlowFields (+ entrance/chamber fields) are per-world scratch caches — a
- * WeakMap keyed by world identity (see the block at lines ~100-121), invisible
+ * WeakMap keyed by world identity (see the "Per-world flow-field scratch" block), invisible
  * to callers.
  *
  * @param world    - Mutable world state; mutated in place across all 19 steps.

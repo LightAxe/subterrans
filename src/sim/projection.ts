@@ -18,8 +18,9 @@ import { applyCommands } from './tick.js';
 
 /**
  * Complete projection clone (Codex R3-1 / R4-1). `copyWorldState` deep-copies everything
- * EXCEPT `events` (a deliberate render-double-buffer optimization) and transient
- * `pendingQueenDeathContexts`. The projection must ALSO copy `events` + the dropped-event
+ * EXCEPT `events` (a deliberate render-double-buffer optimization) and the transient
+ * `pendingQueenDeathContexts` / `droppedCommandOverflowCount` — since #340 it empties dst's own
+ * (as a load does). The projection must ALSO copy `events` + the dropped-event
  * counters, because `applyCommands` can emit events (StartAIOperation) whose cap/eviction
  * behaviour depends on the existing event count — resetting would diverge from the real drain
  * and break projection parity. The surface-component-mask ref is copied by copyWorldState
