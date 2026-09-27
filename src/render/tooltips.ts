@@ -52,16 +52,10 @@ export function tooltipTargetAt(
   py: number,
   view: 'surface' | 'underground',
   hud: HudLayout,
-  /** C1 — false on a pre-V42 save, where the alarm button is hidden. Without it
-   *  the zone would still pop a tooltip promising a feature that does not exist,
-   *  over a control that is not drawn. Same shape as the `view` gate below.
-   *  REQUIRED, deliberately: a default would silently opt any future caller back
-   *  into exactly that bug. */
-  alarmEnabled: boolean,
 ): TooltipTarget | null {
   if (inRect(px, py, hud.STATS)) return { kind: 'stats', anchor: hud.STATS };
   if (inRect(px, py, hud.VIEW_TOGGLE)) return { kind: 'view-toggle', anchor: hud.VIEW_TOGGLE };
-  if (alarmEnabled && inRect(px, py, hud.ALARM_TOGGLE)) {
+  if (inRect(px, py, hud.ALARM_TOGGLE)) {
     return { kind: 'alarm-toggle', anchor: hud.ALARM_TOGGLE };
   }
   if (view === 'underground' && inRect(px, py, hud.UNDERGROUND_COLONY_TOGGLE)) {

@@ -848,6 +848,32 @@ describe('tickReconcile', () => {
     expect(colony.nurseCount).toBe(colony.computedAllocation.nurse);
   });
 
+  it('19a. reconcile applies the V40 nurse floor: no nurse below NURSE_MIN_WORKERS living workers', () => {
+    // #299 — the step-2 reconcile passes NURSE_MIN_WORKERS to allocateWorkers like
+    // the tick.ts call sites do. Brood + a Nursery carve one nurse at 4 workers;
+    // at 2 the floor zeroes it and both forage.
+    const run = (workers: number): { nurse: number; forage: number } => {
+      const { world, colony } = setupWorldWithQueen();
+      for (let i = 0; i < workers; i++) addWorker(world, colony);
+      for (let i = 0; i < 8; i++) addLarva(world, colony);
+      addChamberForTest(world, colony, {
+        chamberId: 9003,
+        chamberType: ChamberType.Nursery,
+        posX: 0,
+        posY: 0,
+        width: 2,
+        height: 2,
+      });
+      colony.targetRatio.forage = 10;
+      colony.targetRatio.fight = 0;
+      colony.reconcileCountdown = 1;
+      tickReconcile(world, colony);
+      return { nurse: colony.computedAllocation.nurse, forage: colony.computedAllocation.forage };
+    };
+    expect(run(4).nurse).toBe(1); // above the floor the carve-out is live
+    expect(run(2)).toEqual({ nurse: 0, forage: 2 });
+  });
+
   it('20. reconcile clamps a negative pool to 0', () => {
     const { world, colony } = setupWorldWithQueen();
     setPoolFoodForTest(world, colony, -50); // artificially drifted negative

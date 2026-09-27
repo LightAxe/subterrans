@@ -40,7 +40,7 @@ import { phGet, pheromoneGridKey, type PheromoneGrid } from '../pheromone/pherom
 import { Rng } from '../rng.js';
 import { SURFACE_GOAL_UNREACHED, surfaceGoalDistance } from '../surface-routing.js';
 import { Zone } from '../terrain.js';
-import { SIM_VERSION_V49_ALARM_MUSTER, type WorldState } from '../types.js';
+import type { WorldState } from '../types.js';
 import { ALT_DX, ALT_DY, type CardinalStep } from './ant-motion.js';
 import { clearRecentTiles, isRecentTile, resetCarrierToIdle } from './ant-store.js';
 
@@ -415,7 +415,7 @@ export function routeForagerPriority(world: WorldState): void {
  * @param dangerGrid  Optional surface DangerTrail grid (A1 / V36). When provided,
  *   the world-edge bounce softly steers the heading away from tiles whose danger
  *   is ≥ DANGER_ROUTE_AVOID_THRESHOLD (bounds stay the hard filter). `undefined`
- *   (pre-V36, gated at the call site) = byte-identical legacy bounce.
+ *   (underground / danger-free) = the plain bounds-only bounce.
  * @returns      Cardinal direction vector { dx, dy } with |dx| + |dy| === 1.
  */
 export function chooseExcursionDirection(
@@ -545,8 +545,8 @@ export function chooseExcursionDirection(
       // A1 (V36): don't wobble INTO a moderate-danger tile the committed-heading
       // danger-steer below would avoid — keeps the wander's danger-avoidance
       // uniform across the turn / keep / wobble branches. Danger read only, no RNG
-      // (the 3 draws above are already spent); undefined pre-V36 (or danger-free)
-      // = the legacy bounds-only behaviour.
+      // (the 3 draws above are already spent); undefined (danger-free) = the
+      // bounds-only behaviour.
       const laterallySafe =
         inBounds &&
         (dangerGrid === undefined || phGet(dangerGrid, nx, ny) < DANGER_ROUTE_AVOID_THRESHOLD);
@@ -578,10 +578,9 @@ export function chooseExcursionDirection(
   // among the in-bounds rotations prefer the FIRST whose next tile's danger is
   // below DANGER_ROUTE_AVOID_THRESHOLD (soft steer away from the spider's wake).
   // Bounds stay the HARD filter — if every in-bounds rotation is dangerous, fall
-  // back to the first in-bounds rotation (never an off-grid heading). Gated:
-  // dangerGrid is passed only at simVersion >= V36, and with danger==0 everywhere
-  // the safe pick collapses to the first in-bounds rotation, so pre-V36 (and
-  // danger-free) wanderers are byte-identical. No RNG consumed here.
+  // back to the first in-bounds rotation (never an off-grid heading). With no
+  // dangerGrid (underground) or danger==0 everywhere the safe pick collapses to the
+  // first in-bounds rotation. No RNG consumed here.
   let fallbackHx = hx;
   let fallbackHy = hy;
   let foundFallback = false;
@@ -649,8 +648,8 @@ export function chooseExcursionDirection(
  * sampler's danger-aware choice by stepping onto a spider-wake tile. Freshness +
  * bounds stay the HARD filter; danger is a soft preference with a first-fresh
  * fallback (heavy danger ≥ FLEE_THRESHOLD is backstopped by the V34 flee next tick).
- * Danger read-only, no RNG. `dangerGrid === undefined` (pre-V36 / danger-free)
- * reproduces the legacy first-fresh pick byte-identically. No allocation — writes
+ * Danger read-only, no RNG. `dangerGrid === undefined` (danger-free) takes the
+ * plain first-fresh pick. No allocation — writes
  * the caller's `out` (a scratch CardinalStep), per the hot-loop rule.
  */
 export function pickNoRevisitSurfaceAlternate(
@@ -660,7 +659,6 @@ export function pickNoRevisitSurfaceAlternate(
   dy: number,
   dangerGrid: PheromoneGrid | undefined,
   out: CardinalStep,
-  releaseWhenBoxed = false,
 ): void {
   const tileX = ants.posX[antId]! >> FP_SHIFT;
   const tileY = ants.posY[antId]! >> FP_SHIFT;
@@ -695,7 +693,7 @@ export function pickNoRevisitSurfaceAlternate(
     // intermediate tiles are below the threshold — otherwise the swap could smuggle
     // the ant onto a spider-wake tile via a partial crossing (Codex). Cardinal
     // alternates (one axis zero) only gate on the single destination. Danger read
-    // only; undefined pre-V36 (or danger-free) = no check, byte-identical.
+    // only; an undefined grid (danger-free) skips the check.
     if (
       dangerGrid !== undefined &&
       (phGet(dangerGrid, candX, candY) >= DANGER_ROUTE_AVOID_THRESHOLD ||
@@ -719,7 +717,7 @@ export function pickNoRevisitSurfaceAlternate(
     return;
   }
   // V40 (#299): boxed in — every in-bounds neighbour is in the ring buffer. The
-  // buffer only advances on real tile crossings, so the legacy {0,0} pause here is
+  // buffer only advances on real tile crossings, so a {0,0} pause here would be
   // PERMANENT: the ant never crosses a tile, the buffer never changes, and the same
   // {0,0} is chosen every tick until some other state change clears the buffer
   // (measured: foragers frozen 3 400-4 100 ticks at a map edge and in open ground
@@ -732,16 +730,10 @@ export function pickNoRevisitSurfaceAlternate(
   // movement clamp turns into a one-tick no-op; the ring is cleared all the same, so
   // the next tick proceeds normally. One tile of revisit is the price of moving
   // again; the refilled buffer resumes the anti-oscillation rule on the next
-  // crossing. Gated at the call site (simVersion >= V40): pre-V40 callers never
-  // pass `releaseWhenBoxed`, so their pause stays byte-identical.
-  if (releaseWhenBoxed) {
-    clearRecentTiles(ants, antId);
-    out.dx = dx;
-    out.dy = dy;
-    return;
-  }
-  out.dx = 0;
-  out.dy = 0;
+  // crossing.
+  clearRecentTiles(ants, antId);
+  out.dx = dx;
+  out.dy = dy;
 }
 
 /**
@@ -898,7 +890,7 @@ export function tickExcursionBoundary(world: WorldState): void {
     // #322 (V49) — while the colony alarm sounds, foragers muster home: a
     // returning forager never breaks out to search, and a searching one turns
     // homebound at once.
-    if (world.simVersion >= SIM_VERSION_V49_ALARM_MUSTER && colony.alarmActive === true) {
+    if (colony.alarmActive === true) {
       if (sub === ForagingSubState.SearchingFood) {
         ants.subTask[id] = ForagingSubState.ReturningToNest;
         // Recalled, not a failed search: park the wave as -(wave + 1) so the

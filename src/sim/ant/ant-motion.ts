@@ -69,11 +69,9 @@ export function pickCardinalStep(
   id: number,
   rawDx: number,
   rawDy: number,
-  _simVersion?: number,
 ): number {
   void ants;
   void id;
-  void _simVersion;
   const absDx = rawDx < 0 ? -rawDx : rawDx;
   const absDy = rawDy < 0 ? -rawDy : rawDy;
   if (absDx === 0 && absDy === 0) return packStep(0, 0);
@@ -121,10 +119,8 @@ export function diagonalizeFlowStep(
   cardDx: number,
   cardDy: number,
   task: AntTask,
-  _simVersion: number,
   out: CardinalStep,
 ): void {
-  void _simVersion;
   out.dx = cardDx;
   out.dy = cardDy;
   const nextX = tileX + cardDx;
@@ -388,8 +384,8 @@ export function pickSurfaceDetour(
    * DANGER_DETOUR_PENALTY score hit, so a wall detour softly prefers a clean tile
    * over the spider-wake tile the sampler was avoiding (a dangerous tile still
    * beats no detour, and pocket-escape still wins). Danger read only, no RNG.
-   * Passed only by the surface SearchingFood-forager call site at simVersion >=
-   * V36; `undefined` (queen / pre-V36 / danger-free) = byte-identical legacy pick.
+   * Passed only by the surface SearchingFood-forager call site (A1, V36);
+   * `undefined` (queen / danger-free) = the plain pick.
    */
   dangerGrid?: PheromoneGrid,
 ): { dx: number; dy: number } {
@@ -485,8 +481,7 @@ export function pickSurfaceDetour(
     // detour doesn't undo the sampler's danger avoidance (Codex). Soft penalty —
     // dominates the neighbour-Manhattan spread (clean detour beats a dangerous one)
     // but stays below the pocket penalty so pocket-escape still wins over avoiding
-    // one flee-backstopped tick. Gated at the caller; danger read only, no RNG;
-    // undefined = byte-identical.
+    // one flee-backstopped tick. Danger read only, no RNG; undefined = no penalty.
     if (dangerGrid !== undefined && phGet(dangerGrid, cx, cy) >= DANGER_ROUTE_AVOID_THRESHOLD) {
       score += DANGER_DETOUR_PENALTY;
     }

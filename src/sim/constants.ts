@@ -283,7 +283,6 @@ export const PHEROMONE_DECAY_FP = 5;
 /**
  * S0a / issue #119 — V14 food-trail decay rate. 2 / 256 ≈ 0.78% per tick;
  * mathematical half-life ≈ 88 ticks. Trails persist ~2.5× longer than legacy.
- * Used when world.simVersion >= SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX.
  */
 export const PHEROMONE_DECAY_FP_V14 = 2;
 
@@ -300,7 +299,6 @@ export const PHEROMONE_FLOOR = 64;
  * trail would stall at ~127 forever under V14 constants, creating zombie
  * trails. With floor=128, any value that has decayed below 128 snaps to 0
  * immediately on the next decay tick (since `decayed < 128 → snap`).
- * Used when world.simVersion >= SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX.
  */
 export const PHEROMONE_FLOOR_V14 = 128;
 
@@ -450,8 +448,7 @@ export const FOOD_TRAIL_DEPOSIT = 512; // 2 × FP_ONE
 
 /**
  * S0a / issue #119 — V14 food-trail deposit per forager step. 1024 = 4 × FP_ONE;
- * doubles the trail strength per step vs legacy. Used when
- * world.simVersion >= SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX.
+ * doubles the trail strength per step vs legacy.
  */
 export const FOOD_TRAIL_DEPOSIT_V14 = 1024; // 4 × FP_ONE
 
@@ -470,8 +467,8 @@ export const NURSE_RATIO = 3;
  * the ceil(workers/4) cap otherwise makes the ONLY worker of a 1-worker colony (or
  * one of two) a nurse the moment brood >= NURSE_RATIO, and nursing only accelerates
  * larvae that a starving queen cannot feed — traced on the #297 AI-economy seeds
- * (Hard 12 and 20: the last worker nursed while the queen starved). Applied at
- * simVersion >= V40 via the call sites in tick.ts / colony-system.ts; pre-V40 passes 0.
+ * (Hard 12 and 20: the last worker nursed while the queen starved). Passed to
+ * allocateWorkers by the call sites in tick.ts / colony-system.ts (V40).
  */
 export const NURSE_MIN_WORKERS = 3;
 
@@ -700,12 +697,12 @@ export const FOOD_PILE_HARD_CAP = FOOD_PILE_COUNT * 4;
 /**
  * A2 — corpse-food yields (pickup-charges), by victim kind. Fixed constants,
  * NEVER RNG-drawn: this is the single most important determinism property of
- * battlefield scavenging — a drop advances only the entity-ID counter, so every
- * drop site is gated `simVersion >= SIM_VERSION_V37_CORPSE_FOOD`. worker/fighter
- * each yield 1 (a lone battlefield morsel; a real battle's kills top up the same
- * tile toward FOOD_PILE_INITIAL_PICKUPS_MAX); the queen's 8 is forward-compat only
- * (queen death ends the match today, so it is deterministic-but-inert); the
- * spider's 100 is a genuine scavenging bonanza when a colony brings it down.
+ * battlefield scavenging — a drop advances only the entity-ID counter (V37).
+ * worker/fighter each yield 1 (a lone battlefield morsel; a real battle's kills top
+ * up the same tile toward FOOD_PILE_INITIAL_PICKUPS_MAX); the queen's 8 is
+ * forward-compat only (queen death ends the match today, so it is
+ * deterministic-but-inert); the spider's 100 is a genuine scavenging bonanza when a
+ * colony brings it down.
  */
 export const CORPSE_PICKUPS_WORKER = 1;
 export const CORPSE_PICKUPS_FIGHTER = 1;
@@ -871,8 +868,7 @@ export const SEARCH_LEASH_MAX_WAVE = SEARCH_LEASH_RADII.length - 1;
  * the deadband — explicit user intent always wins. The hysteresis
  * only suppresses ambient scent/pheromone signals.
  *
- * Gated on `world.simVersion >= SIM_VERSION_V8_LEASH_HYSTERESIS`. Must
- * remain strictly less than `SEARCH_LEASH_RADII[0]` (= 25) — otherwise
+ * (V8.) Must remain strictly less than `SEARCH_LEASH_RADII[0]` (= 25) — otherwise
  * the v8 deadband threshold (`radius - LEASH_HYSTERESIS_TILES`) would
  * be ≤ 0, permanently suppressing the breakout for any wave-0 ant.
  * See `constants.test.ts` for the invariant.
@@ -1149,16 +1145,6 @@ export const SPIDER_FEEDING_TICKS = 600 as const;
  */
 export const SPIDER_HUNT_INTERVAL_TICKS = 1200 as const;
 
-/**
- * S3 legacy — DEAD in the sim and in render. It was the pre-V23 "hunger before
- * Rampaging" cap; the sim's real threshold is SPIDER_HUNGER_THRESHOLD_TICKS
- * (V23, spider.ts), and the render hunger ring now divides by that too (#290 D9).
- * Kept only because spider / spider-tiebreak / determinism tests still use it as a
- * "well past hungry" fixture value; delete it once those tests stop importing it
- * (#290 PR 3). Tier triplet [Easy, Normal, Hard]: 2700 / 1800 / 1350 ticks.
- */
-export const SPIDER_HUNGER_MAX_TICKS = [2700, 1800, 1350] as const;
-
 /** S3 — Minimum fighters on spider's tile + priority required to activate swarm bonus. */
 export const SPIDER_SWARM_FIGHTER_THRESHOLD = 6 as const;
 
@@ -1216,7 +1202,7 @@ export const SPIDER_SPEED = 256 as const;
 export const SPIDER_DANGER_DEPOSIT = 1280 as const;
 
 // ---------------------------------------------------------------------------
-// V23 — Hunger-gated meandering predator redesign (gated on simVersion >= V23)
+// V23 — Hunger-gated meandering predator redesign
 // ---------------------------------------------------------------------------
 
 /**

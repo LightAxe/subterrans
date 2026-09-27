@@ -298,9 +298,8 @@ function tileHash(tileX: number, tileY: number, salt: number, terrainSeed: numbe
 // gameplay-suppressed (entrance/food zone) shadowers. Pre-v8 only checked
 // overlap-suppression — a higher-priority anchor inside a suppression zone
 // would never render but would still suppress lower-priority anchors
-// outside the zone, producing unintended empty halos. v8+ closes that gap
-// (Codex P2 on PR #49 round 3); pre-v8 saves replay with the original
-// terrain layout for byte-identity (SCEN-06).
+// outside the zone, producing unintended empty halos. v8 closed that gap
+// (Codex P2 on PR #49 round 3).
 // ---------------------------------------------------------------------------
 
 /**

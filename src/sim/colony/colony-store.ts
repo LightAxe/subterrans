@@ -233,8 +233,7 @@ export interface ColonyRecord {
    *  civilian (Idle or Foraging) of this colony flees underground as though its own
    *  tile were dangerous, and sheltering workers do not poke out. Entrance-safety
    *  checks keep reading real DangerTrail, so the alarm never routes a worker into a
-   *  camped door. Player-set via the SetColonyAlarm command; the AI never sets it.
-   *  Read only when `simVersion >= SIM_VERSION_V42_COLONY_ALARM`. */
+   *  camped door. Player-set via the SetColonyAlarm command; the AI never sets it. */
   alarmActive: boolean;
 
   /** S4 V21+ — world tick at which the queen most recently laid an egg.

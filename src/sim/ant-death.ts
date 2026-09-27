@@ -10,14 +10,11 @@
 // miss the non-combat deaths. scripts/check-sim-boundary.sh now fails any other
 // `alive[…] = 0` in production src/.
 //
-// Replay contract. The kill path is the old combat.ts `killAnt`, unchanged at every
-// simVersion. The non-kill paths are gated: below V41 they do exactly what the old
-// inline sites did — `alive = 0`, plus `broodFieldDirty` for a larva or worker but
-// NOT for a starving queen, and nothing else (carry pointers stay stale, no
-// queen-death context, no combat-state reset) — because saves serialise dead slots
-// too and a pre-V41 replay must land on the same bytes. From V41 every death gets
-// the full cleanup whatever its cause. Nothing here draws from `world.rngState`;
-// the only ID-counter advance (the V37 corpse drop) is kill-only and unchanged.
+// Replay contract. The kill path is the old combat.ts `killAnt`. Since V41 every
+// death gets the full cleanup whatever its cause (the pre-V41 non-kill path, which
+// only flipped `alive`, was reaped once MIN_ACCEPTED passed V41). Nothing here draws
+// from `world.rngState`; the only ID-counter advance (the V37 corpse drop) is
+// kill-only.
 //
 // V41 is NOT a pure-bookkeeping bump: clearing the live carrier's `carryingBroodId`
 // (step 1) re-routes a bereaved nurse at step 16, because ant-motion.ts picks its flow
@@ -45,11 +42,6 @@
 // MUST NOT import Phaser, DOM, or any non-sim module.
 
 import { AntTask, PheromoneType } from './enums.js';
-import {
-  SIM_VERSION_V34_IDLE_RESERVE_FLEE,
-  SIM_VERSION_V37_CORPSE_FOOD,
-  SIM_VERSION_V41_DEATH_CHOKEPOINT,
-} from './types.js';
 import type { WorldState, KillerKind, QueenDeathContext } from './types.js';
 import type { ColonyId } from './colony/colony-store.js';
 import { FP_SHIFT } from './fixed.js';
@@ -82,17 +74,16 @@ export type AntDeath =
 
 /**
  * Despawn ant `antIndex` (cause per `death`). Side effects, in this order
- * (`[kill]` = kill-only, `[V41+]` = also applied to non-kill deaths from V41; before V41 a non-kill death
- * performs only steps 5a and 2 (larva/worker), exactly as its old inline site did):
+ * (`[kill]` = kill-only; every other step applies to every death, whatever its cause):
  *
- *   1. bidirectional carry-pointer clear (#107)                              [V41+]
- *   2. victim colony `broodFieldDirty` (#235)                    [V41+ for a queen]
+ *   1. bidirectional carry-pointer clear (#107)
+ *   2. victim colony `broodFieldDirty` (#235)
  *   3. combat_kill event (S1)                                                [kill]
  *   4. pendingQueenDeathContexts[victim colony] if the victim is a queen — read
  *      and cleared by checkQueenDeath later the same tick to fill the queen_death
- *      cause ('Environment' infers 'Starvation')                            [V41+]
- *   5. alive = 0 (5a); attackCooldown = 0, combatOpponentId = -1 (5b)   [5b: V41+]
- *   6. S2 AI operation death counters                                       [V41+]
+ *      cause ('Environment' infers 'Starvation')
+ *   5. alive = 0 (5a); attackCooldown = 0, combatOpponentId = -1 (5b)
+ *   6. S2 AI operation death counters
  *   7. killer colony killCount                                              [kill]
  *   8. V34 cross-colony kill alarm (DangerTrail cross at the death tile)    [kill]
  *   9. V37 corpse food at the death tile                                    [kill]
@@ -103,22 +94,6 @@ export function despawnAnt(world: WorldState, antIndex: number, death: AntDeath)
   const victimColonyId = ants.colonyId[antIndex]!;
   const victimColony = world.colonies[victimColonyId];
   const isQueenVictim = victimColony !== undefined && antIndex === victimColony.queenEntityId;
-
-  if (death.cause !== 'kill' && world.simVersion < SIM_VERSION_V41_DEATH_CHOKEPOINT) {
-    // Pre-V41 non-kill death: the old inline sites, verbatim. tickFoodConsumption's
-    // larva branch and the lifespan check flagged broodFieldDirty; its queen branch
-    // did not. Saves serialise dead slots, so nothing else may change here.
-    //
-    // The old sites flagged the ColonyRecord they were iterating; this resolves it
-    // from `ants.colonyId[antIndex]` instead. Same record for every ant a colony
-    // bucket contains (initAnt is the only writer of colonyId, and it writes the
-    // owning colony), so the two agree — but an ant whose colonyId names a colony
-    // absent from `world.colonies` would skip the flag here where the old code set
-    // it. No production path constructs that; bare test worlds can.
-    ants.alive[antIndex] = 0;
-    if (victimColony !== undefined && !isQueenVictim) victimColony.broodFieldDirty = true;
-    return;
-  }
 
   // 1. Carry pointers — both ends, atomically (#107): a carried brood is orphaned, a
   // carrier's slot is freed. The second write lands on a LIVE ant and is the one
@@ -240,7 +215,6 @@ export function despawnAnt(world: WorldState, antIndex: number, death: AntDeath)
   // same-colony kills do NOT alarm. Grid-guarded: skip if the victim colony's
   // surface DangerTrail grid is absent (bare/test worlds).
   if (
-    world.simVersion >= SIM_VERSION_V34_IDLE_RESERVE_FLEE &&
     killerKind === 'Ant' &&
     killerColonyId !== null &&
     killerColonyId !== victimColonyId &&
@@ -272,11 +246,9 @@ export function despawnAnt(world: WorldState, antIndex: number, death: AntDeath)
   // null killer), starvation/lifespan deaths and underground deaths never drop —
   // widening to every corpse is #290's call, and is now a one-predicate change
   // here. Classify the victim explicitly — queen → fighter → worker → else no drop
-  // (brood / unknown roles yield nothing). Gated `simVersion >= V37` so pre-V37
-  // replays byte-identically (no ID-counter advance, no food-pile mutation). The
-  // victim is dead + stationary, so its tile is unambiguous.
+  // (brood / unknown roles yield nothing). The victim is dead + stationary, so its
+  // tile is unambiguous.
   if (
-    world.simVersion >= SIM_VERSION_V37_CORPSE_FOOD &&
     killerKind === 'Ant' &&
     killerColonyId !== null &&
     killerColonyId !== victimColonyId && // enemy kill only (matches the V34 alarm predicate above)

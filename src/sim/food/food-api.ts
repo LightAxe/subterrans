@@ -31,7 +31,7 @@
 // tooling only.
 
 import type { WorldState } from '../types.js';
-import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V37_CORPSE_FOOD } from '../types.js';
+import { allocateEntityId, INVALID_ENTITY_ID } from '../types.js';
 import type { ChamberRecord, ColonyRecord } from '../colony/colony-store.js';
 import type { FoodPileId } from '../food.js';
 import {
@@ -584,9 +584,7 @@ export function recordFoodPileDepletion(world: WorldState, slot: number): void {
   const store = world.food;
   if (slot < 0 || slot >= store.kind.length || store.kind[slot] !== FoodKind.Pile) return;
 
-  const skipBarren =
-    world.simVersion >= SIM_VERSION_V37_CORPSE_FOOD &&
-    (store.flags[slot]! & FOOD_FLAG_CORPSE) !== 0;
+  const skipBarren = (store.flags[slot]! & FOOD_FLAG_CORPSE) !== 0;
   if (!skipBarren) {
     if (world.recentlyDepletedFood.length >= FOOD_PILE_SOFT_CEILING) {
       world.recentlyDepletedFood.shift();
@@ -703,8 +701,7 @@ export function spawnPile(
 
 /**
  * A2 (V37) — drop `amountFp` (whole pickups) of corpse food at surface tile
- * (x, y). Callers MUST gate on `simVersion >= SIM_VERSION_V37_CORPSE_FOOD`: a new
- * pile advances the entity-id counter.
+ * (x, y). A new pile advances the entity-id counter.
  *
  * Top-up on an occupied tile is a correctness requirement (the save rejects two
  * piles on one tile): the existing pile grows, both its size and its birth size

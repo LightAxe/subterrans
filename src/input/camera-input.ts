@@ -117,11 +117,6 @@ export function isPointerOverHUD(
     hud.MINIMAP,
     hud.VIEW_TOGGLE,
     // C1 — the alarm toggle is drawn on BOTH views, so it masks unconditionally.
-    // It stays masked even on a pre-V42 save where the button is hidden: the
-    // alternative is that clicks on that strip fall through as WORLD clicks and
-    // issue a stray dig/command order. A small inert region beats an accidental
-    // order, and making it conditional would mean threading simVersion through
-    // the gesture arbiter's injected isPointerOverHUD closure.
     hud.ALARM_TOGGLE,
   ];
   // Stage 3b (issue #18, Codex R1#2) — the hint strip masks world input ONLY

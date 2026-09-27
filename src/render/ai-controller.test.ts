@@ -31,12 +31,7 @@ import {
   aiExtraFoodStorageWanted,
 } from './ai-controller.js';
 
-import {
-  createWorldState,
-  allocateEntityId,
-  SIM_VERSION_V39_SPIDER_TIEBREAK,
-  SIM_VERSION_V52_RAIDING,
-} from '../sim/types.js';
+import { createWorldState, allocateEntityId, SIM_VERSION_V52_RAIDING } from '../sim/types.js';
 import { initAnt } from '../sim/ant/ant-store.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
@@ -1378,20 +1373,6 @@ describe('#293 survival mode', () => {
     }>;
     expect(back).toHaveLength(1);
     expect(back[0]!.ratio).toEqual({ forage: 3, fight: 7 });
-  });
-
-  it('sticky version: a continued pre-V40 world never enters survival mode, whatever its state', () => {
-    const { world, colony } = survivalWorld(
-      AI_SURVIVAL_MAX_WORKERS,
-      QUEEN_EGG_FOOD_THRESHOLD - 1,
-      3,
-    );
-    world.simVersion = SIM_VERSION_V39_SPIDER_TIEBREAK;
-    expect(aiSurvivalMode(world, colony)).toBe(true); // the rule itself would fire...
-    runAIController(world, AI);
-    const c = counts(world); // ...but the V39 world keeps the legacy dig/chamber policy
-    expect(c.cancel).toBe(0);
-    expect(c.mark).toBeGreaterThan(0);
   });
 
   it('cannot fire during the normal opening: 3 workers with an empty larder still digs', () => {

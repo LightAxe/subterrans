@@ -23,7 +23,7 @@
 // and rally points are inlined to avoid a separate noGoTiles staging array.
 
 import type { WorldState } from './types.js';
-import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V37_CORPSE_FOOD } from './types.js';
+import { allocateEntityId, INVALID_ENTITY_ID } from './types.js';
 import {
   naturalPileCount,
   pileCount,
@@ -84,9 +84,8 @@ export function corpseYield(kind: CorpseKind): number {
  * A2 (V37) — drop `pickups` charges of corpse food at surface tile (tileX, tileY):
  * the charge-unit wrapper over the facade's `topUpOrSpawnCorpsePile`, which owns
  * the top-up-on-occupied-tile rule, the hard-cap and surface-component guards and
- * the corpse flag. Callers (ant-death.ts `despawnAnt`, spider.ts death path) MUST
- * gate on `simVersion >= SIM_VERSION_V37_CORPSE_FOOD`: a new pile advances the
- * entity-id counter. Fixed `pickups` → no RNG draw.
+ * the corpse flag. Callers: ant-death.ts `despawnAnt`, spider.ts death path. A new
+ * pile advances the entity-id counter. Fixed `pickups` → no RNG draw.
  */
 export function spawnCorpseFood(
   world: WorldState,
@@ -140,22 +139,15 @@ export function tickFoodPileSpawn(world: WorldState, rng: Rng): void {
   if (world.tick % FOOD_PILE_SPAWN_INTERVAL_TICKS !== 0) return;
 
   // Soft-ceiling gate — skip silently when at or above the soft cap.
-  if (world.simVersion >= SIM_VERSION_V37_CORPSE_FOOD) {
-    // A2 (V37) — corpse piles are EXEMPT from the natural-spawn soft ceiling, so a
-    // corpse-littered war doesn't starve natural regrowth: count non-corpse piles
-    // only. But the exemption breaks the old "hard cap 60 is 2×, we never approach
-    // it" assumption — naturals-only would let the spawner append natural piles on
-    // top of up-to-HARD_CAP corpse piles, pushing the pile count past the hard cap
-    // so deserializeWorldState hard-rejects the save. The HARD_CAP backstop below is
-    // therefore MANDATORY, not optional (Codex). Both clauses are V37-gated so pre-V37
-    // replays byte-identically on the legacy total-count path.
-    if (pileCount(world) >= FOOD_PILE_HARD_CAP) return;
-    if (naturalPileCount(world) >= FOOD_PILE_SOFT_CEILING) return;
-  } else {
-    // Pre-V37 legacy: total-count soft ceiling (total ≤ 30 < HARD_CAP, so it never
-    // nears the hard cap). Hard cap (= 60 from #109) sits at 2×; never approached.
-    if (pileCount(world) >= FOOD_PILE_SOFT_CEILING) return;
-  }
+  // A2 (V37) — corpse piles are EXEMPT from the natural-spawn soft ceiling, so a
+  // corpse-littered war doesn't starve natural regrowth: count non-corpse piles
+  // only. But the exemption breaks the old "hard cap 60 is 2×, we never approach
+  // it" assumption — naturals-only would let the spawner append natural piles on
+  // top of up-to-HARD_CAP corpse piles, pushing the pile count past the hard cap
+  // so deserializeWorldState hard-rejects the save. The HARD_CAP backstop is
+  // therefore MANDATORY, not optional (Codex).
+  if (pileCount(world) >= FOOD_PILE_HARD_CAP) return;
+  if (naturalPileCount(world) >= FOOD_PILE_SOFT_CEILING) return;
 
   // Spawn-time prune of stale recentlyDepletedFood entries. Append-time cap
   // bounds the array; this prune drops entries by age so an old entry doesn't
@@ -276,9 +268,8 @@ export function tickFoodPileSpawn(world: WorldState, rng: Rng): void {
     if (newId === INVALID_ENTITY_ID) return;
 
     // Cannot hit spawnPile's hard-cap refusal (which would burn `newId`): the
-    // V37+ branch returned above when pileCount >= FOOD_PILE_HARD_CAP, and the
-    // pre-V37 branch caps the total at FOOD_PILE_SOFT_CEILING (30) < HARD_CAP
-    // (60). Keep those gates BEFORE allocateEntityId if this is ever reordered.
+    // soft-ceiling gate above returned when pileCount >= FOOD_PILE_HARD_CAP.
+    // Keep that gate BEFORE allocateEntityId if this is ever reordered.
     spawnPile(world, newId, tileX, tileY, pickups * FOOD_PICKUP_AMOUNT, 0);
     return;
   }

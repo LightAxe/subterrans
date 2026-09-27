@@ -142,8 +142,8 @@ export interface MarkSpiderPriorityCommand extends SimCommandBase {
 
 /**
  * C1 (V42) — the player sounds or clears the colony alarm ("recall to nest").
- * tick() ignores it below V42; `active` is validated as a boolean because
- * replayed/saved command objects are not schema-checked upstream.
+ * `active` is validated as a boolean because replayed/saved command objects are
+ * not schema-checked upstream.
  */
 export interface SetColonyAlarmCommand extends SimCommandBase {
   readonly type: 'SetColonyAlarm';

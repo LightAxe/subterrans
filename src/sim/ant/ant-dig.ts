@@ -7,7 +7,7 @@ import type { DigFlowFields } from '../dig-system.js';
 import { AntTask, DiggingSubState, ForagingSubState } from '../enums.js';
 import { FP_SHIFT } from '../fixed.js';
 import { UndergroundTileState, Zone, ugSet } from '../terrain.js';
-import { SIM_VERSION_V49_ALARM_MUSTER, type WorldState } from '../types.js';
+import type { WorldState } from '../types.js';
 import { clearRecentTiles } from './ant-store.js';
 
 /**
@@ -53,8 +53,7 @@ export function tickSearchLeash(world: WorldState): void {
   // (regardless of wave-radius) avoids the eddy at the entrance that
   // forms when waves of would-be carriers can't unload. Step 10a will
   // re-promote them to Foraging once a deposit target opens (chamber built
-  // or queen consumes pool down). v6+ only — pre-v6 saves replay byte-
-  // identical, only the demote-on-cap behavior is new.
+  // or queen consumes pool down).
   const forageBackpressure: Record<number, boolean> = {};
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
@@ -87,7 +86,7 @@ export function tickSearchLeash(world: WorldState): void {
     // #322 (V49): while the colony alarm sounds, step 9c recalls the searcher
     // home instead. Demoting it to Idle here would leave it standing wherever it
     // is (an alarmed Idle civilian with no safe entrance holds in place).
-    if (world.simVersion >= SIM_VERSION_V49_ALARM_MUSTER && colony.alarmActive === true) continue;
+    if (colony.alarmActive === true) continue;
 
     const tileX = ants.posX[id]! >> FP_SHIFT;
     const tileY = ants.posY[id]! >> FP_SHIFT;

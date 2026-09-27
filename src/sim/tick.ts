@@ -1,11 +1,6 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import {
-  allocateEntityId,
-  INVALID_ENTITY_ID,
-  SIM_VERSION_V32_AI_OP_VALIDATION,
-  SIM_VERSION_V42_COLONY_ALARM,
-} from './types.js';
+import { allocateEntityId, INVALID_ENTITY_ID } from './types.js';
 import { tickSpider } from './spider.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath, checkTiebreaks } from './game-over.js';
@@ -34,6 +29,7 @@ import {
   SPIDER_SCATTER_RADIUS_TILES,
   PLAYER_COLONY_ID,
   SURFACE_ROOT_CLEARANCE_RADIUS,
+  NURSE_MIN_WORKERS,
 } from './constants.js';
 import { isSurfaceTileInComponent, ensureSurfaceComponentMask } from './surface-features.js';
 import { FP_SHIFT, FP_ONE } from './fixed.js';
@@ -47,7 +43,6 @@ import {
   checkPendingChambers,
   checkEntranceCompletion,
   hasCompletedChamber,
-  nurseMinWorkersFor,
 } from './colony/colony-system.js';
 import {
   colonyFoodTotal,
@@ -396,7 +391,7 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
           brood0,
           colony.targetRatio,
           hasNursery0,
-          nurseMinWorkersFor(world),
+          NURSE_MIN_WORKERS,
         );
         colony.computedAllocation.nurse = alloc0.nurse;
         colony.computedAllocation.forage = alloc0.forage;
@@ -595,13 +590,12 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         // this refusal is unreachable; it keeps a full store from ever being asked
         // for a stock at promotion.
         if (cmd.chamberType === ChamberType.FoodStorage && !foodStoreHasFreeSlot(world)) break;
-        // (c) Anchor tile state.
-        //   pre-v5: must be Open (the legacy tunnel-end gate).
-        //   v5+: Open OR Solid OR Marked. BeingDug remains rejected by gate
-        //        (e) below so an in-flight excavation can't be re-anchored.
-        // (d) Solid 4-neighbor "tunnel-end" check (pre-v5 only). v5 drops it
-        //     because chambers can now be planned in untouched dirt; the
-        //     v5 reachability BFS below subsumes the connectivity intent.
+        // (c) Anchor tile state: Open OR Solid OR Marked (v5). BeingDug remains
+        //     rejected by gate (e) below so an in-flight excavation can't be
+        //     re-anchored.
+        // (d) (The pre-v5 Solid 4-neighbor "tunnel-end" check is gone: chambers
+        //     can be planned in untouched dirt; the reachability BFS below
+        //     subsumes the connectivity intent.)
         // Solid / Marked / Open anchors are all accepted; BeingDug is rejected by the
         // footprint scan in gate (e) below (anchor is at offset (0,0),
         // so it's covered). Auto-mark at the end of the handler
@@ -665,14 +659,7 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         // BeingDug tile gets dug to Open AND the new footprint's Solid
         // tiles get auto-Marked-and-dug — at least one footprint tile
         // would be reachable from at least one of the colony's
-        // entrances. Not run pre-v5 because pre-v5 saves' inputLogs
-        // never include unreachable placements (the old gates (c)+(d)
-        // required anchor=Open + adjacent Solid, which is naturally
-        // tunnel-network-adjacent for any entrance-rooted dig). Strictly
-        // speaking the old gates didn't PROVE reachability — a
-        // disconnected pre-existing Open cavern could pass them — but
-        // those edge cases are unchanged by this PR (pre-v5 replays use
-        // the legacy gates verbatim).
+        // entrances.
         if (
           !isFootprintReachableAfterDigs(
             world,
@@ -847,10 +834,7 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         if (!Array.isArray(cmd.fighterIds) || cmd.fighterIds.length === 0) break;
         // Invasion cohorts < 3 fighters trigger immediate rout on first tick; reject them.
         if (cmd.kind === 'Invasion' && cmd.fighterIds.length < 3) break;
-        // V32 (#226): validate against the colony's current AI state. ALL gated so
-        // pre-V32 replays keep their exact apply — a malformed kind is coerced to the
-        // Invasion branch by setAIRallyOperation there, and dropping it ungated would
-        // break byte-identical replay of accepted old saves. At V32+: reject a
+        // V32 (#226): validate against the colony's current AI state. Reject a
         // malformed kind before the state ternary can mis-route it, then require the
         // legal source state — Probe launches only from WarFooting, Invasion
         // cohort-commit only while already Invading (advanceAIState performs
@@ -859,13 +843,11 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         // invalid-command semantics). No legit-command-rejection race: applyCommands
         // runs at step 1, before advanceAIState (step 18b), so the apply-time state
         // is exactly what the emitter read.
-        if (world.simVersion >= SIM_VERSION_V32_AI_OP_VALIDATION) {
-          if (cmd.kind !== 'Probe' && cmd.kind !== 'Invasion') break;
-          const aiStateForCmd = getAIStateForColony(world, cmd.colonyId);
-          if (aiStateForCmd === null) break;
-          const legalSource = cmd.kind === 'Probe' ? 'WarFooting' : 'Invading';
-          if (aiStateForCmd.state !== legalSource) break;
-        }
+        if (cmd.kind !== 'Probe' && cmd.kind !== 'Invasion') break;
+        const aiStateForCmd = getAIStateForColony(world, cmd.colonyId);
+        if (aiStateForCmd === null) break;
+        const legalSource = cmd.kind === 'Probe' ? 'WarFooting' : 'Invading';
+        if (aiStateForCmd.state !== legalSource) break;
         setAIRallyOperation(
           world,
           cmd.colonyId,
@@ -889,10 +871,6 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         break;
       }
       case 'SetColonyAlarm': {
-        // C1 (V42) — gate the WRITE, not just the reads: a pre-V42 world must not
-        // be able to carry a true `alarmActive` at all, so a replay pinned below
-        // V42 stays byte-identical even if a newer inputLog is fed to it.
-        if (world.simVersion < SIM_VERSION_V42_COLONY_ALARM) break;
         // Validate payload — save/replay objects are not schema-checked upstream.
         if (typeof cmd.active !== 'boolean') break;
         if (!Number.isInteger(cmd.colonyId) || cmd.colonyId <= 0) break;
@@ -971,7 +949,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       brood8,
       colony.targetRatio,
       hasNursery8,
-      nurseMinWorkersFor(world),
+      NURSE_MIN_WORKERS,
     );
     colony.computedAllocation.nurse = alloc8.nurse;
     colony.computedAllocation.forage = alloc8.forage;
@@ -991,10 +969,8 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // V40 (#299): the living-worker floor has zeroed the nurse count — release the
     // nurses already in Attending / on their way (a carrier deposits first) so they
     // are Idle for step 10a THIS tick instead of dwelling for up to
-    // NURSE_ATTEND_DWELL_TICKS while the queen starves. `nurseMinWorkersFor` is 0
-    // below V40, so `workerCount < 0` never holds there: pre-V40 worlds keep their
-    // nurses, tick order and PRNG draws unchanged.
-    if (colony.workerCount < nurseMinWorkersFor(world)) {
+    // NURSE_ATTEND_DWELL_TICKS while the queen starves.
+    if (colony.workerCount < NURSE_MIN_WORKERS) {
       if (colony.computedAllocation.nurse === 0) releaseExcessNurses(world, colony);
       // Same floor, same tick: fighters the ratio no longer asks for stand down
       // (nothing else in the sim ever demotes a Fighting ant), so a collapsed
@@ -1342,8 +1318,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     //     that PUT an ant into AntTask.Idle — NOT sub-state predicates against the current task.
     //     AntTask.Fighting not eligible in Phase 6 — no combat resolution yet (Phase 9 scope).
     // C1 (V42) — read once: while the alarm sounds this colony reassigns nobody.
-    const alarmRecallActive =
-      world.simVersion >= SIM_VERSION_V42_COLONY_ALARM && colony.alarmActive === true;
+    const alarmRecallActive = colony.alarmActive === true;
     const eligible = getScratch(world).tickIdle;
     eligible.length = 0;
     for (let i = 0; i < colony.workers.length; i++) {
@@ -1357,8 +1332,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       // flee state machine (movement skips its movement, and no task change
       // resets the timer), so reassigning it to fight/nurse/dig would count it as
       // an active worker that never moves for the whole threat window. Leave it
-      // in reserve; it resumes on the all-clear. The field is -1 pre-V34, so this
-      // is a no-op for pre-V34 replays.
+      // in reserve; it resumes on the all-clear.
       if (world.ants.fleeShelterUntilTick[id]! > 0) continue;
       // C1 (V42) — an alarmed colony recruits NOBODY. The timer check above only
       // covers workers that are ALREADY sheltering, and this step runs at 10a,
@@ -1591,7 +1565,6 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   //           pheromone decay (step 15) so danger reads are post-decay, and
   //           BEFORE movement (step 16) so its flee/mill target writes take
   //           precedence over routeForagerPriority (step 13) for fleeing ants.
-  //           Inert below V34 (early return) — no pre-V34 replay divergence.
   // ---------------------------------------------------------------------------
   tickIdleReserveAndFlee(world);
 

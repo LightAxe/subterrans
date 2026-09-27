@@ -2788,22 +2788,18 @@ describe('V40 (#299) — stuck-forager releases', () => {
     }
   }
 
-  it('boxed in: legacy answers {0,0} and leaves the ring alone; releaseWhenBoxed takes the proposed step and clears it', () => {
+  it('boxed in: takes the proposed step and clears the ring', () => {
     const { world, antId } = setupForagerWorld(10 << FP_SHIFT, 10 << FP_SHIFT);
     boxIn(world, antId, 10, 10);
     const out = { dx: 0, dy: 0 };
     pickNoRevisitSurfaceAlternate(world.ants, antId, 0, 1, undefined, out);
-    expect(out).toEqual({ dx: 0, dy: 0 });
-    expect(isRecentTile(world.ants, antId, 10, 11)).toBe(true);
-
-    pickNoRevisitSurfaceAlternate(world.ants, antId, 0, 1, undefined, out, true);
     expect(out).toEqual({ dx: 0, dy: 1 });
     for (const [dx, dy] of NEIGHBOURS) {
       expect(isRecentTile(world.ants, antId, 10 + dx, 10 + dy)).toBe(false);
     }
   });
 
-  it('boxed in at the map edge (only five neighbours exist): legacy pauses, release takes the recent proposal', () => {
+  it('boxed in at the map edge (only five neighbours exist): release takes the recent proposal', () => {
     const edgeX = SURFACE_GRID_WIDTH - 1;
     const { world, antId } = setupForagerWorld(edgeX << FP_SHIFT, 10 << FP_SHIFT);
     // Only the five in-bounds neighbours can ever be recent; the ring is boxed.
@@ -2812,23 +2808,18 @@ describe('V40 (#299) — stuck-forager releases', () => {
     }
     const out = { dx: 0, dy: 0 };
     pickNoRevisitSurfaceAlternate(world.ants, antId, 0, 1, undefined, out);
-    expect(out).toEqual({ dx: 0, dy: 0 });
-    pickNoRevisitSurfaceAlternate(world.ants, antId, 0, 1, undefined, out, true);
     expect(out).toEqual({ dx: 0, dy: 1 });
     expect(isRecentTile(world.ants, antId, edgeX, 11)).toBe(false);
   });
 
-  it('not boxed in (one fresh neighbour): the flag changes nothing', () => {
+  it('not boxed in (one fresh neighbour): takes the fresh alternate', () => {
     const { world, antId } = setupForagerWorld(10 << FP_SHIFT, 10 << FP_SHIFT);
     for (const [dx, dy] of NEIGHBOURS) {
       if (!(dx === -1 && dy === 0)) pushRecentTile(world.ants, antId, 10 + dx, 10 + dy);
     }
-    const legacy = { dx: 0, dy: 0 };
-    const v40 = { dx: 0, dy: 0 };
-    pickNoRevisitSurfaceAlternate(world.ants, antId, 0, 1, undefined, legacy);
-    pickNoRevisitSurfaceAlternate(world.ants, antId, 0, 1, undefined, v40, true);
-    expect(legacy).toEqual({ dx: -1, dy: 0 });
-    expect(v40).toEqual(legacy);
+    const out = { dx: 0, dy: 0 };
+    pickNoRevisitSurfaceAlternate(world.ants, antId, 0, 1, undefined, out);
+    expect(out).toEqual({ dx: -1, dy: 0 });
     // The ring is not cleared on the non-boxed path.
     expect(isRecentTile(world.ants, antId, 10, 11)).toBe(true);
   });

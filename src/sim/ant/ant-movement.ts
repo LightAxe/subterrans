@@ -473,7 +473,6 @@ export function tickAntMovement(
               DIR_DX[dir]!,
               DIR_DY[dir]!,
               task,
-              world.simVersion,
               cardinalStep,
             );
             dx = cardinalStep.dx;
@@ -541,7 +540,6 @@ export function tickAntMovement(
               DIR_DX[dir]!,
               DIR_DY[dir]!,
               task,
-              world.simVersion,
               cardinalStep,
             );
             dx = cardinalStep.dx;
@@ -1135,7 +1133,7 @@ export function tickAntMovement(
       const noRevisitDangerGrid = surfaceDangerByColony[ants.colonyId[id]!];
       // V40 (#299): release a boxed-in searcher instead of pausing it forever (see
       // pickNoRevisitSurfaceAlternate).
-      pickNoRevisitSurfaceAlternate(ants, id, dx, dy, noRevisitDangerGrid, noRevisitAlt, true);
+      pickNoRevisitSurfaceAlternate(ants, id, dx, dy, noRevisitDangerGrid, noRevisitAlt);
       dx = noRevisitAlt.dx;
       dy = noRevisitAlt.dy;
     }

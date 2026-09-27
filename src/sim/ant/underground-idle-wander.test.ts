@@ -7,20 +7,16 @@
 // resolveSameColonyOccupancy (a ~44% economy drag), so idle ants only wander when both
 // their current tile AND the target are inside a chamber; idle ants elsewhere (tunnels)
 // hold. Idle ants at the shaft row ALWAYS clear + ascend to the surface reserve.
-// Reuses targetPosX/Y (no new save field); V35-gated.
+// Reuses targetPosX/Y (no new save field).
 //
 // Covers: chamber-confined wander target + step, de-clump, tunnel/tunnel-adjacent HOLD,
-// shaft-row ALWAYS clears + ascends, the pre-V35 byte gate (absolute), passability +
-// blocked-mid-window, the shelter-release V35 target-clear, exclusions, LATEST === V35.
+// shaft-row ALWAYS clears + ascends, passability + blocked-mid-window, the
+// shelter-release V35 target-clear, exclusions.
 
 import { describe, it, expect } from 'vitest';
 import { createScenario } from '../scenario.js';
 import { allocateEntityId, copyWorldState } from '../types.js';
-import {
-  LATEST_SIM_VERSION,
-  SIM_VERSION_V34_IDLE_RESERVE_FLEE,
-  SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER,
-} from '../types.js';
+import { LATEST_SIM_VERSION } from '../types.js';
 import type { WorldState } from '../types.js';
 import { AntTask, ChamberType } from '../enums.js';
 import { Zone, UndergroundTileState, ugSet, type UndergroundGrid } from '../terrain.js';
@@ -90,7 +86,6 @@ const move = (world: WorldState, t: number): void =>
 describe('underground idle wander — chamber-confined target (#209 PR C)', () => {
   it('an idle worker INSIDE a chamber gets an in-chamber cardinal-neighbour target', () => {
     const world = createScenario(SEED);
-    world.simVersion = SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER;
     world.tick = 0; // bucket boundary → fresh pick
     carveChamber(world, 18, 4, 5, 5); // chamber tiles (18..22, 4..8)
     const id = spawnUndergroundIdle(world, 20, 6);
@@ -108,7 +103,6 @@ describe('underground idle wander — chamber-confined target (#209 PR C)', () =
 
   it('steps toward the in-chamber wander target on a divisor tick', () => {
     const world = createScenario(SEED);
-    world.simVersion = SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER;
     world.tick = 0;
     carveChamber(world, 18, 4, 5, 5);
     const id = spawnUndergroundIdle(world, 20, 6);
@@ -129,7 +123,6 @@ describe('underground idle wander — chamber-confined target (#209 PR C)', () =
 
   it('de-clumps: co-located idle workers in a chamber get >1 distinct target', () => {
     const world = createScenario(SEED);
-    world.simVersion = SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER;
     world.tick = 0;
     carveChamber(world, 16, 4, 9, 5);
     const ids: number[] = [];
@@ -146,7 +139,6 @@ describe('underground idle wander — chamber-confined target (#209 PR C)', () =
 describe('underground idle wander — chamber CONFINEMENT (#209 PR C, the drag fix)', () => {
   it('an idle worker in a TUNNEL (no chamber) HOLDS — never wanders into non-exempt tiles', () => {
     const world = createScenario(SEED);
-    world.simVersion = SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER;
     world.tick = 0;
     carveOpen(ug(world), 18, 4, 22, 8); // open, but NOT a chamber
     const id = spawnUndergroundIdle(world, 20, 6);
@@ -159,7 +151,6 @@ describe('underground idle wander — chamber CONFINEMENT (#209 PR C, the drag f
     // (the ant occupies the non-exempt tunnel during it). Requiring the CURRENT tile
     // in-chamber too closes it: a tunnel-adjacent idle ant holds.
     const world = createScenario(SEED);
-    world.simVersion = SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER;
     world.tick = 0;
     carveChamber(world, 20, 4, 3, 3); // chamber (20..22, 4..6)
     carveOpen(ug(world), 20, 7, 20, 7); // a tunnel tile just below the chamber
@@ -170,7 +161,6 @@ describe('underground idle wander — chamber CONFINEMENT (#209 PR C, the drag f
 
   it('never picks an out-of-chamber neighbour (target stays inside the footprint)', () => {
     const world = createScenario(SEED);
-    world.simVersion = SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER;
     world.tick = 0;
     // A 1-wide vertical chamber; the E/W neighbours are open tunnel but NOT chamber.
     carveChamber(world, 20, 4, 1, 5); // chamber (20, 4..8)
@@ -186,7 +176,6 @@ describe('underground idle wander — chamber CONFINEMENT (#209 PR C, the drag f
     // Structural proof of confinement over time: drive 15b + movement across several
     // retarget buckets and assert the ant's tile stays inside the chamber every tick.
     const world = createScenario(SEED);
-    world.simVersion = SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER;
     const ax = 16;
     const ay = 4;
     const w = 7;
@@ -212,7 +201,6 @@ describe('underground idle wander — chamber CONFINEMENT (#209 PR C, the drag f
 describe('underground idle wander — passability + drift (#209 PR C)', () => {
   it('an in-chamber worker with no enterable in-chamber neighbour clears + holds', () => {
     const world = createScenario(SEED);
-    world.simVersion = SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER;
     world.tick = 0;
     carveChamber(world, 20, 6, 1, 1); // a 1×1 chamber — no in-chamber neighbour
     const id = spawnUndergroundIdle(world, 20, 6);
@@ -222,7 +210,6 @@ describe('underground idle wander — passability + drift (#209 PR C)', () => {
 
   it('a target that goes Solid mid-window is revalidated and cleared on the next step', () => {
     const world = createScenario(SEED);
-    world.simVersion = SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER;
     world.tick = 0;
     const grid = ug(world);
     carveChamber(world, 18, 4, 5, 5);
@@ -238,7 +225,6 @@ describe('underground idle wander — passability + drift (#209 PR C)', () => {
 
   it('holds its target across a mid-window tick (no directional re-pick until the bucket boundary)', () => {
     const world = createScenario(SEED);
-    world.simVersion = SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER;
     world.tick = 0;
     carveChamber(world, 16, 2, 9, 9);
     const id = spawnUndergroundIdle(world, 20, 6);
@@ -283,7 +269,6 @@ describe('underground idle wander — shaft row ALWAYS clears + ascends (#209 PR
   for (const variant of VARIANTS) {
     it(`a V35 idle worker at the shaft with ${variant.label} clears its target and ASCENDS`, () => {
       const world = createScenario(SEED);
-      world.simVersion = SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER;
       world.tick = 0;
       const { id, ex } = shaftSetup(world);
       variant.set(world, id, ex);
@@ -325,7 +310,6 @@ describe('underground idle wander — a wandering worker is not pumped up the sh
 describe('underground idle wander — byte gate + round-trip (#209 PR C)', () => {
   it('is ACTIVE at V35 for the same setup (behavioural delta proves the gate)', () => {
     const world = createScenario(SEED);
-    world.simVersion = SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER;
     world.tick = 0;
     carveChamber(world, 16, 2, 9, 9);
     const id = spawnUndergroundIdle(world, 20, 6);
@@ -336,16 +320,12 @@ describe('underground idle wander — byte gate + round-trip (#209 PR C)', () =>
     expect(world.ants.posX[id] !== px || world.ants.posY[id] !== center(6)).toBe(true);
   });
 
-  it('new scenarios start at LATEST_SIM_VERSION (PR C V35 is no longer the latest — A1 V36 supersedes it)', () => {
-    // A1 (V36) bumped LATEST past this PR's V35. The durable invariant is that a
-    // fresh scenario tracks LATEST_SIM_VERSION; V35 stays a sticky in-window gate.
-    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER);
+  it('new scenarios start at LATEST_SIM_VERSION', () => {
     expect(createScenario(42).simVersion).toBe(LATEST_SIM_VERSION);
   });
 
   it('targetPosX/Y wander target round-trips through copyWorldState (no new column)', () => {
     const world = createScenario(SEED);
-    world.simVersion = SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER;
     world.tick = 0;
     carveChamber(world, 18, 4, 5, 5);
     const id = spawnUndergroundIdle(world, 20, 6);
@@ -363,7 +343,6 @@ describe('underground idle wander — byte gate + round-trip (#209 PR C)', () =>
 describe('underground idle wander — exclusions (#209 PR C)', () => {
   it('a sheltering (phase > 0) underground ant gets no wander target', () => {
     const world = createScenario(SEED);
-    world.simVersion = SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER;
     world.tick = 0;
     carveChamber(world, 18, 4, 5, 5);
     const id = spawnUndergroundIdle(world, 20, 6);
@@ -376,7 +355,6 @@ describe('underground idle wander — exclusions (#209 PR C)', () => {
 
   it('a non-Idle underground worker (Digging) gets no wander target', () => {
     const world = createScenario(SEED);
-    world.simVersion = SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER;
     world.tick = 0;
     carveChamber(world, 18, 4, 5, 5);
     const id = spawnUndergroundIdle(world, 20, 6);
@@ -389,7 +367,7 @@ describe('underground idle wander — exclusions (#209 PR C)', () => {
 });
 
 // ---------------------------------------------------------------------------
-describe('shelter-release V35 target-clear (#209 PR C, byte-gated)', () => {
+describe('shelter-release V35 target-clear (#209 PR C)', () => {
   function setupSheltered(world: WorldState): number {
     const ent = world.colonies[PLAYER_COLONY_ID]!.entrances.find((e) => e.isOpen)!;
     carveOpen(ug(world), ent.surfaceTileX, 0, ent.surfaceTileX, 2);
@@ -401,24 +379,11 @@ describe('shelter-release V35 target-clear (#209 PR C, byte-gated)', () => {
     return id;
   }
 
-  it('V35: resume clears the stale surface target (ant not captured underground)', () => {
+  it('resume clears the stale surface target (ant not captured underground)', () => {
     const world = createScenario(SEED);
-    world.simVersion = SIM_VERSION_V35_UNDERGROUND_IDLE_WANDER;
     const id = setupSheltered(world);
     tickIdleReserveAndFlee(world);
     expect(world.ants.fleeShelterUntilTick[id]).toBe(-1);
     expect(world.ants.targetPosX[id]).toBe(-1);
-  });
-
-  it('V34: resume leaves the serialized target UNCHANGED (byte identity)', () => {
-    const world = createScenario(SEED);
-    world.simVersion = SIM_VERSION_V34_IDLE_RESERVE_FLEE;
-    const id = setupSheltered(world);
-    const tpx = world.ants.targetPosX[id]!;
-    const tpy = world.ants.targetPosY[id]!;
-    tickIdleReserveAndFlee(world);
-    expect(world.ants.fleeShelterUntilTick[id]).toBe(-1);
-    expect(world.ants.targetPosX[id]).toBe(tpx);
-    expect(world.ants.targetPosY[id]).toBe(tpy);
   });
 });

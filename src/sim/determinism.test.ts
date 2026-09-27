@@ -14,13 +14,6 @@ import {
   SIM_VERSION_V13_INVARIANT_FIXES,
   SIM_VERSION_V20_SPIDER,
   SIM_VERSION_V23_SPIDER_AGGRO,
-  SIM_VERSION_V32_AI_OP_VALIDATION,
-  SIM_VERSION_V37_CORPSE_FOOD,
-  SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH,
-  SIM_VERSION_V39_SPIDER_TIEBREAK,
-  SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
-  SIM_VERSION_V41_DEATH_CHOKEPOINT,
-  SIM_VERSION_V42_COLONY_ALARM,
 } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
@@ -39,7 +32,6 @@ import {
   ENEMY_COLONY_ID,
   ENEMY_START_X,
   ENEMY_START_Y,
-  SPIDER_HUNGER_MAX_TICKS,
   SPIDER_HUNGER_THRESHOLD_TICKS,
   SPIDER_GRACE_TICKS,
   SPIDER_HP_FULL,
@@ -64,6 +56,9 @@ import {
 import { LARVA_HUNGER, QUEEN_HUNGER } from './hunger.js';
 // eslint-disable-next-line no-restricted-imports -- #229: this SCEN-06 serializer consumes the canonical serialized-field list from the platform layer (same pattern as telemetry.test.ts:8)
 import { SERIALIZED_ANT_SOA_FIELDS } from '../platform/save-schema.js';
+
+/** Hunger well past the Normal-tier threshold (SPIDER_HUNGER_THRESHOLD_TICKS[1] = 1200). */
+const WELL_PAST_HUNGRY_TICKS = 1800;
 
 // ---------------------------------------------------------------------------
 // Helper: deterministic serialization
@@ -947,7 +942,7 @@ describe('S3 V20: spider replay determinism (Hunting → Striking → Rampaging)
       // (62,40) from (24,64) in 200 ticks of pheromone-guided wandering. The lair coord
       // assertion on lines above will catch a future _placeSpider regression that places
       // the lair near a colony start before the margin narrows.
-      spider.hungerTicks = SPIDER_HUNGER_MAX_TICKS[1];
+      spider.hungerTicks = WELL_PAST_HUNGRY_TICKS;
       return world;
     }
 
@@ -1140,7 +1135,7 @@ describe('S3 V23 redesign: meander + feed-after-kill replay determinism', () => 
 // deterministically through the full tick pipeline (AGENTS.md:132 — command-
 // application changes must include a deterministic replay test).
 // ---------------------------------------------------------------------------
-describe('SCEN-06: StartAIOperation V32 gate replay (#226)', () => {
+describe('SCEN-06: StartAIOperation validation replay (#226, V32)', () => {
   const probeCmd: SimCommand = {
     type: 'StartAIOperation',
     colonyId: ENEMY_COLONY_ID as ColonyId,
@@ -1152,7 +1147,6 @@ describe('SCEN-06: StartAIOperation V32 gate replay (#226)', () => {
   };
   function runFrom(sourceState: 'WarFooting' | 'Peacetime', ticks: number): WorldState {
     const world = createScenario(7);
-    world.simVersion = SIM_VERSION_V32_AI_OP_VALIDATION;
     const ai = world.aiState.find((a) => a.colonyId === ENEMY_COLONY_ID)!;
     ai.state = sourceState;
     ai.operationKind = 'None';
@@ -1167,7 +1161,7 @@ describe('SCEN-06: StartAIOperation V32 gate replay (#226)', () => {
   it('applies a legal Probe (WarFooting), drops an illegal one (Peacetime), and replays deterministically', () => {
     // Legal source → the gate lets the Probe through the full tick pipeline.
     expect(appliedProbe(runFrom('WarFooting', 1))).toBe(true);
-    // Illegal source → the V32 gate silently drops it (no transition to Probing).
+    // Illegal source → the V32 validation silently drops it (no transition to Probing).
     expect(appliedProbe(runFrom('Peacetime', 1))).toBe(false);
     // Deterministic replay: two identical legal runs reach byte-identical world AND
     // the same AI operation state (which serializeWorldState does not itself cover).
@@ -1253,9 +1247,8 @@ describe('#297 (V38) homebound-forager doorstep push-through — replay determin
     }
   }
 
-  function run(simVersion: number): WorldState {
+  function run(): WorldState {
     const world = createScenario(SEED);
-    world.simVersion = simVersion;
     world.spider = null; // isolate the flee machine from spider RNG
     for (let t = 0; t < TICKS; t++) {
       campAllEntrances(world);
@@ -1264,125 +1257,23 @@ describe('#297 (V38) homebound-forager doorstep push-through — replay determin
     return world;
   }
 
-  it('V38 with the doorstep release active replays byte-identically', () => {
-    expect(serializeWorldState(run(SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH))).toBe(
-      serializeWorldState(run(SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH)),
-    );
-  });
-
-  it('V37 under the same camp replays byte-identically (gated-off legacy hold)', () => {
-    expect(serializeWorldState(run(SIM_VERSION_V37_CORPSE_FOOD))).toBe(
-      serializeWorldState(run(SIM_VERSION_V37_CORPSE_FOOD)),
-    );
-  });
-
-  it('V38 diverges from V37 under the same camp — behavioral, not just the version field', () => {
-    // Compare ant positions rather than the full serialization: that string carries
-    // the simVersion field itself (38 vs 37), so a whole-string compare would pass
-    // even with the gated behavior inert (the V36 test makes the same point).
-    const a = run(SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH);
-    const b = run(SIM_VERSION_V37_CORPSE_FOOD);
-    expect(Array.from(a.ants.posX)).not.toEqual(Array.from(b.ants.posX));
+  it('the doorstep release under a full camp replays byte-identically', () => {
+    expect(serializeWorldState(run())).toBe(serializeWorldState(run()));
   });
 });
 
 // ---------------------------------------------------------------------------
-// V39 — spider seat-bias tie-breaks: the pre-V39 path is untouched, and the V39 path
-// is live.
-//
-// The V39 keys replace ascending-id tie-breaks in pickRampageTarget, findChaseTarget,
-// findNearestAttackingFighter and resolveSpiderCombatOnTile. Two obligations:
-//   (a) a save pinned below V39 keeps replaying under the OLD rule, and
-//   (b) the new rule actually changes a real scenario, measured against V38 (V39's
-//       immediate predecessor) so the divergence cannot be the #297 doorstep change.
-//
-// SCOPE NOTE on (a): a single build can only prove it did not introduce
-// NON-determinism at V37 — that is the same-build self-compare below, and it is all
-// this file can assert. Proving the pre-V39 stream is unchanged RELATIVE TO THE
-// PRE-CHANGE BUILD is a cross-build claim no in-repo test makes: note that
-// `src/platform/byte-gate.test.ts` does NOT cover it either — it pins nothing and runs
-// at whatever LATEST_SIM_VERSION is, so it cannot compare a pinned older version
-// across builds. The claim was checked out-of-band instead, with a throwaway harness
-// that runs `createScenario` + `tick` on each tree with `world.simVersion` pinned and
-// hashes the serialized WorldState (via world-hash.ts) at 1 000-tick checkpoints.
-// Result: byte-identical at every pinned version from 30 (= MIN_ACCEPTED) through 38,
-// up to 25 seeds x 12 000 ticks each; the pinned-38 arm was compared against this
-// branch's own base (the #297 V38 branch), not against main.
-// The pinned OLD-rule unit assertions live in spider-tiebreak.test.ts.
-//
-// Both arms run fully passive (`aiState = []`, no commands) so the only thing that can
-// move is the simulation itself. The spider is dormant for the start-of-match grace
-// window and only ties occasionally afterwards, so divergence needs a few thousand
-// ticks — hence the seed sweep rather than one pinned seed/tick pair.
-// ---------------------------------------------------------------------------
-
-describe('SCEN-06: pre-V39 replay determinism under V39 code', () => {
-  const TICKS = 3000;
-
-  function runPassive(seed: number, simVersion: number): WorldState {
-    const world = createScenario(seed, 'Normal');
-    world.aiState = [];
-    world.simVersion = simVersion; // sticky, exactly as a loaded save arrives
-    for (let t = 0; t < TICKS; t++) {
-      if (tick(world, []) !== 0) break;
-    }
-    return world;
-  }
-
-  it('a V37-pinned world replays byte-identically across two independent runs', () => {
-    expect(serializeWorldState(runPassive(2, SIM_VERSION_V37_CORPSE_FOOD))).toBe(
-      serializeWorldState(runPassive(2, SIM_VERSION_V37_CORPSE_FOOD)),
-    );
-  }, 60_000);
-
-  it('V39 diverges from its IMMEDIATE predecessor V38 on at least one seed (the gate is live)', () => {
-    // Compared against V38, not V37: V39 implies V38, so a V37 baseline would also
-    // carry the #297 doorstep change and a divergence could be entirely that. Pinning
-    // the low side at V38 makes any difference attributable to the V39 tie-breaks
-    // alone.
-    //
-    // Compare rngState, NOT the full serialization: the serialized string carries the
-    // simVersion field itself (38 vs 39), so a full-string compare would pass even
-    // with the gated behaviour inert. rngState moves only once a different spider
-    // target has actually changed who lives, forages and draws from the PRNG.
-    //
-    // If a future balance retune makes every seed here agree, this fails as a false
-    // alarm — re-point it at a seed that still diverges rather than deleting it. The
-    // per-selector liveness proofs are the fast ones in spider-tiebreak.test.ts. Seed
-    // 21 is listed first as the earliest known divergence (rngState at tick ~2794);
-    // 8, 19, 22 and 24 also diverge inside the 3000-tick budget. `.some`
-    // short-circuits, so the usual cost is 2 sims, not 10.
-    const diverged = [21, 8, 19, 22, 24].some(
-      (seed) =>
-        runPassive(seed, SIM_VERSION_V39_SPIDER_TIEBREAK).rngState !==
-        runPassive(seed, SIM_VERSION_V38_FORAGER_DOORSTEP_PUSH).rngState,
-    );
-    expect(diverged).toBe(true);
-  }, 120_000);
-});
-
-// ---------------------------------------------------------------------------
-// V41 — single ant-death chokepoint (#289): the pre-V41 path is untouched, and the
-// V41 path is live.
-//
-// Same two obligations as SCEN-06 for V39 above: (a) a save pinned below V41
-// keeps replaying under the OLD rule (same-build self-compare — see the scope note
-// on the V39 block for why a single build can assert no more than that), and (b) the
-// new rule actually changes a real run, measured against V40, V41's immediate
-// predecessor.
+// V41 — single ant-death chokepoint (#289): replay determinism, and the V41 rule is
+// live at the real call sites.
 //
 // Liveness scenario: a nurse carrying a larva that starves at step 3
 // (tickFoodConsumption, colony food 0 and the larva's grace timer at 1). The clear is
 // bidirectional (#107), so it has TWO observable effects, one on each end of the
 // pointer pair:
 //
-//   - On the DEAD larva, `carriedBy`. Pre-V41 the inline site flipped `alive = 0` and
-//     flagged `broodFieldDirty`, and nothing else on the ant slot, so the corpse keeps
-//     pointing at its carrier forever — step 16c's
-//     dead-brood release clears the carrier's forward pointer but deliberately leaves
-//     the back pointer on the corpse. Inert (nothing reads a dead slot's pointers) but
-//     serialized: dead slots round-trip through saves, which is exactly why the old
-//     bytes had to be preserved below the gate.
+//   - On the DEAD larva, `carriedBy`: cleared by despawnAnt. (Before V41 the inline
+//     site only flipped `alive = 0`, so the corpse kept pointing at its carrier —
+//     step 16c's dead-brood release deliberately leaves the back pointer alone.)
 //   - On the LIVE carrier, `carryingBroodId`, and this one is NOT inert. Step 16
 //     (tickAntMovement → ant-motion.ts `v10Carrying`) picks the nurse's flow field by
 //     `subTask === Feeding && carryingBroodId !== -1`: `nurseDeposit` when carrying,
@@ -1391,20 +1282,17 @@ describe('SCEN-06: pre-V39 replay determinism under V39 code', () => {
 //     `nurseDeposit` field a tick early — it no longer carries a corpse toward the
 //     Nursery. Where it goes instead depends on the `nursing` pickup field, which
 //     seeds from RECLAIMABLE BROOD TILES ONLY (chamber-flow.ts computeNursingPickupField
-//     — Queen-tile seeding is the removed "Seed (1)"). That is an intended V41
-//     behaviour change, pinned by the second test below.
+//     — Queen-tile seeding is the removed "Seed (1)"). Pinned by the second test below.
 //
-// Both are driven through tick(), not despawnAnt directly, so the gate is exercised at
-// the real call sites; the per-cause unit pins (both sides of the gate) live in
-// ant-death.test.ts.
+// Both are driven through tick(), not despawnAnt directly, so the rule is exercised at
+// the real call sites; the per-cause unit pins live in ant-death.test.ts.
 // ---------------------------------------------------------------------------
 
-describe('SCEN-06: pre-V41 replay determinism under V41 code', () => {
+describe('SCEN-06: V41 ant-death chokepoint — replay determinism and liveness', () => {
   const TICKS = 3; // death lands on tick 1; two more ticks let the nurse react
 
-  function runStarvingCarrier(simVersion: number): WorldState {
+  function runStarvingCarrier(): WorldState {
     const world = createWorldState(42);
-    world.simVersion = simVersion; // sticky, exactly as a loaded save arrives
     const queenId = allocateEntityId(world);
     initAnt(world.ants, queenId, {
       colonyId: 1,
@@ -1469,25 +1357,17 @@ describe('SCEN-06: pre-V41 replay determinism under V41 code', () => {
     return world.ants.carriedBy[2]!;
   }
 
-  it('a V40-pinned world replays byte-identically across two independent runs', () => {
-    expect(serializeWorldState(runStarvingCarrier(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL))).toBe(
-      serializeWorldState(runStarvingCarrier(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL)),
+  it('replays byte-identically across two independent runs', () => {
+    expect(serializeWorldState(runStarvingCarrier())).toBe(
+      serializeWorldState(runStarvingCarrier()),
     );
   });
 
-  it('V41 diverges from its IMMEDIATE predecessor V40 (the gate is live): the dead larva keeps a stale carriedBy only below V41', () => {
-    // Compare the field, NOT the full serialization: the serialized string carries
-    // the simVersion field itself (40 vs 41), so a full-string compare would pass
-    // even with the gated behaviour inert.
-    const v40 = runStarvingCarrier(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL);
-    const v41 = runStarvingCarrier(SIM_VERSION_V41_DEATH_CHOKEPOINT);
-    expect(v40.ants.alive[2]).toBe(0); // the larva really did starve on both sides
-    expect(v41.ants.alive[2]).toBe(0);
-    expect(deadLarvaCarriedBy(v40)).toBe(1); // stale back pointer at the carrier
-    expect(deadLarvaCarriedBy(v41)).toBe(-1); // cleared atomically by despawnAnt
-    // The live nurse ends up released either way (at step 3 for V41, step 16c for V40).
-    expect(v40.ants.carryingBroodId[1]).toBe(-1);
-    expect(v41.ants.carryingBroodId[1]).toBe(-1);
+  it('the dead larva has no stale carriedBy: both carry pointers are cleared at the death', () => {
+    const world = runStarvingCarrier();
+    expect(world.ants.alive[2]).toBe(0); // the larva really did starve
+    expect(deadLarvaCarriedBy(world)).toBe(-1); // cleared atomically by despawnAnt
+    expect(world.ants.carryingBroodId[1]).toBe(-1);
   });
 
   // The second, NOT-inert end of the same clear. Needs real chamber topology: a
@@ -1496,9 +1376,8 @@ describe('SCEN-06: pre-V41 replay determinism under V41 code', () => {
   // reclaimable brood tiles and nothing else). So dropping off `nurseDeposit` a tick
   // early is visible as the nurse NOT taking that step. The Queen chamber is here
   // only to make the colony well-formed; it seeds neither field.
-  function runMidTunnelCarrier(simVersion: number): WorldState {
+  function runMidTunnelCarrier(): WorldState {
     const world = createWorldState(7, 256);
-    world.simVersion = simVersion;
     const underground = createUndergroundGrid(20, 20);
     world.undergroundGrids[1] = underground;
 
@@ -1584,62 +1463,47 @@ describe('SCEN-06: pre-V41 replay determinism under V41 code', () => {
     return world;
   }
 
-  it('V41 re-routes the bereaved carrier on the death tick: no more `nurseDeposit` step with a corpse', () => {
-    const v40 = runMidTunnelCarrier(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL);
-    const v41 = runMidTunnelCarrier(SIM_VERSION_V41_DEATH_CHOKEPOINT);
+  it('re-routes the bereaved carrier on the death tick: no more `nurseDeposit` step with a corpse', () => {
+    const v41 = runMidTunnelCarrier();
     // Entity 1 is the carrier (0 = queen, 2 = larva).
-    expect(v40.ants.alive[2]).toBe(0); // the larva starved on both sides
-    expect(v41.ants.alive[2]).toBe(0);
+    expect(v41.ants.alive[2]).toBe(0); // the larva starved
     const START = (8 << FP_SHIFT) + (FP_ONE >> 1);
-    // Below V41 the stale forward pointer survives step 16, so the nurse takes one
-    // more `nurseDeposit` step east — carrying a corpse toward the Nursery.
+    // With a stale forward pointer surviving step 16, the nurse would take one more
+    // `nurseDeposit` step east (to START + half a tile) — carrying a corpse toward
+    // the Nursery.
     //
-    // At V41 the pointer is already -1, so step 16 selects the `nursing` pickup field
+    // The pointer is already -1, so step 16 selects the `nursing` pickup field
     // instead. In THIS fixture the colony's only brood is the larva that just died,
     // and a dead brood does not seed (isBroodReclaimable requires alive === 1), so
     // that field has no seeds at all — every tile is -2 and ant-motion's unreachable
     // failsafe holds the nurse still. With other reclaimable brood present it would
     // step toward that brood instead; what V41 guarantees either way is that it does
-    // NOT take the `nurseDeposit` step. Both end Idle: step 16c releases the carry
-    // either way, one tick's movement apart.
-    expect(v40.ants.posX[1]).toBe(START + (FP_ONE >> 1));
+    // NOT take the `nurseDeposit` step. It ends Idle: step 16c releases the carry.
     expect(v41.ants.posX[1]).toBe(START);
-    expect(v41.ants.posY[1]).toBe(v40.ants.posY[1]);
-    expect(v40.ants.task[1]).toBe(AntTask.Idle);
+    expect(v41.ants.posY[1]).toBe((3 << FP_SHIFT) + (FP_ONE >> 1));
     expect(v41.ants.task[1]).toBe(AntTask.Idle);
   });
 });
 
 // ---------------------------------------------------------------------------
-// V42 — colony alarm (C1): the pre-V42 path is untouched, and the V42 path is live.
-//
-// Same two obligations as SCEN-06 for V39/V40/V41 above: (a) a save pinned below
-// V42 keeps replaying under the OLD rule (same-build self-compare — see the scope
-// note on the V39 block for why a single build can assert no more than that), and
-// (b) the new rule actually changes a real run, measured against V41, V42's
-// immediate predecessor.
+// V42 — colony alarm (C1): replay determinism, and the alarm is live at the real
+// call site.
 //
 // Liveness scenario: a colony on a PERFECTLY QUIET map (danger zeroed around the
-// entrance) with `alarmActive` set directly on the record. Below V42 nothing reads
-// that field, so the surface idle reserve mills as usual; at V42 the four gated
-// reads answer "dangerous" and the reserve pours underground. Driven through
-// tick(), not tickIdleReserveAndFlee, so the gate is exercised at the real call
-// site. The per-site pins (all four, each with its own failing mutation) live in
-// ant/idle-reserve-flee.test.ts.
-//
-// Note the field is set directly here rather than through SetColonyAlarm: tick()
-// drops that command below V42 by design, so the command path cannot be used to
-// build the V41 arm of the comparison.
+// entrance) with `alarmActive` set directly on the record, against the same run with
+// the alarm off. Without the alarm the surface idle reserve mills as usual; with it
+// the gated reads answer "dangerous" and the reserve heads home. Driven through
+// tick(), not tickIdleReserveAndFlee, so the rule is exercised at the real call
+// site. The per-site pins live in ant/idle-reserve-flee.test.ts.
 // ---------------------------------------------------------------------------
 
-describe('SCEN-06: pre-V42 replay determinism under V42 code', () => {
+describe('SCEN-06: V42 colony alarm — replay determinism and liveness', () => {
   const TICKS = 25;
 
-  function runAlarmed(simVersion: number): WorldState {
+  function runAlarmed(alarm: boolean): WorldState {
     const world = createScenario(7, 'Normal');
     world.spider = null; // the alarm, not a predator, is the only thing that can move anyone
     world.aiState = [];
-    world.simVersion = simVersion; // sticky, exactly as a loaded save arrives
     const colony = world.colonies[PLAYER_COLONY_ID]!;
     const ent = colony.entrances.find((e) => e.isOpen)!;
     // Zero the danger field around the door so no real threat can confound this.
@@ -1652,7 +1516,7 @@ describe('SCEN-06: pre-V42 replay determinism under V42 code', () => {
         phSet(grid, ent.surfaceTileX + dx, ent.surfaceTileY + dy, 0);
       }
     }
-    colony.alarmActive = true;
+    colony.alarmActive = alarm;
     for (let t = 0; t < TICKS; t++) tick(world, []);
     return world;
   }
@@ -1667,19 +1531,14 @@ describe('SCEN-06: pre-V42 replay determinism under V42 code', () => {
     return n;
   }
 
-  it('a V41-pinned world replays byte-identically across two independent runs', () => {
-    expect(serializeWorldState(runAlarmed(SIM_VERSION_V41_DEATH_CHOKEPOINT))).toBe(
-      serializeWorldState(runAlarmed(SIM_VERSION_V41_DEATH_CHOKEPOINT)),
-    );
+  it('an alarmed world replays byte-identically across two independent runs', () => {
+    expect(serializeWorldState(runAlarmed(true))).toBe(serializeWorldState(runAlarmed(true)));
   }, 30_000);
 
-  it('V42 diverges from its IMMEDIATE predecessor V41 (the gate is live): the alarm empties the surface only at V42', () => {
-    // Compare the surface population, NOT the full serialization: the serialized
-    // string carries the simVersion field itself (41 vs 42), so a full-string
-    // compare would pass even with the gated behaviour inert.
-    const v41 = surfaceWorkers(runAlarmed(SIM_VERSION_V41_DEATH_CHOKEPOINT));
-    const v42 = surfaceWorkers(runAlarmed(SIM_VERSION_V42_COLONY_ALARM));
-    expect(v41).toBeGreaterThan(0); // pre-V42 the alarm field is inert — they mill on
-    expect(v42).toBeLessThan(v41); // at V42 they head for the door
+  it('the alarm empties the surface on a quiet map: fewer surface workers than the same run without it', () => {
+    const quiet = surfaceWorkers(runAlarmed(false));
+    const alarmed = surfaceWorkers(runAlarmed(true));
+    expect(quiet).toBeGreaterThan(0); // without the alarm they mill on
+    expect(alarmed).toBeLessThan(quiet); // with it they head for the door
   }, 30_000);
 });

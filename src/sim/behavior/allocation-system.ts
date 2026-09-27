@@ -37,7 +37,7 @@ import { NURSE_RATIO } from '../constants.js';
  * @param broodCount  - Total brood (larvae + eggs) currently in the colony.
  * @param workerCount - Total available workers.
  * @param hasNursery  - True iff the colony owns a completed Nursery chamber.
- * @param nurseMinWorkers - V40 (#299) living-worker floor below which no nurse is carved out (0 = legacy).
+ * @param nurseMinWorkers - V40 (#299) living-worker floor below which no nurse is carved out (0 = no floor).
  * @returns Number of workers that must be assigned as nurses.
  */
 export function computeNurseCount(
@@ -49,8 +49,9 @@ export function computeNurseCount(
   // 09 memo gate: no Nursery → no nurses, even if legacy brood exists.
   if (!hasNursery) return 0;
   if (workerCount <= 0 || broodCount <= 0) return 0;
-  // V40 (#299): no carve-out below the living-worker floor (NURSE_MIN_WORKERS at
-  // V40+, 0 = legacy). A 1-2 worker colony forages; nursing resumes at the floor.
+  // V40 (#299): no carve-out below the living-worker floor (the sim passes
+  // NURSE_MIN_WORKERS; 0 = no floor). A 1-2 worker colony forages; nursing resumes
+  // at the floor.
   if (workerCount < nurseMinWorkers) return 0;
   // eslint-disable-next-line no-restricted-syntax -- PRD §7a integer ratio, not float math
   const needed = (broodCount / NURSE_RATIO) | 0;
@@ -91,7 +92,7 @@ export function computeNurseCount(
  * @param broodCount  - Colony brood count, used for nurse carveout.
  * @param ratio       - Player/AI target task distribution (two roles: forage / fight).
  * @param hasNursery  - True iff the colony owns a completed Nursery chamber.
- * @param nurseMinWorkers - V40 (#299) living-worker floor passed through to computeNurseCount (0 = legacy).
+ * @param nurseMinWorkers - V40 (#299) living-worker floor passed through to computeNurseCount (0 = no floor).
  * @returns WorkerAllocation; the `dig` field is always 0 from this function.
  */
 export function allocateWorkers(

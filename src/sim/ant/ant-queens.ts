@@ -299,7 +299,6 @@ export function moveQueens(
               DIR_DX[dir]!,
               DIR_DY[dir]!,
               AntTask.Idle,
-              world.simVersion,
               cardinalStep,
             );
             dx = cardinalStep.dx;

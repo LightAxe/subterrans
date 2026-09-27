@@ -5,11 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { createWorldState } from './types.js';
 import type { WorldState } from './types.js';
-import {
-  SIM_VERSION_V19_AI_STATE,
-  SIM_VERSION_V31_SPIDER_TERRAIN,
-  SIM_VERSION_V32_AI_OP_VALIDATION,
-} from './types.js';
+import { LATEST_SIM_VERSION, SIM_VERSION_V19_AI_STATE } from './types.js';
 import { applyCommands } from './tick.js';
 import type { SimCommand } from './commands.js';
 import {
@@ -489,27 +485,24 @@ describe('StartAIOperation validation (#226, V32 gate)', () => {
   ) => {
     getAIStateForColony(world, AI)!.state = state;
   };
-  const setup = (
-    simVersion: number,
-    state: 'Peacetime' | 'WarFooting' | 'Probing' | 'Invading',
-  ) => {
+  const setup = (state: 'Peacetime' | 'WarFooting' | 'Probing' | 'Invading') => {
     const world = makeMinimalWorld();
-    world.simVersion = simVersion;
+    world.simVersion = LATEST_SIM_VERSION;
     spawnFighters(world, ENEMY_COLONY_ID, 3, 10);
     setState(world, state);
     return world;
   };
 
-  it('V32 + WarFooting + Probe → applies', () => {
-    const world = setup(SIM_VERSION_V32_AI_OP_VALIDATION, 'WarFooting');
+  it('WarFooting + Probe → applies', () => {
+    const world = setup('WarFooting');
     applyCommands(world, [startOp('Probe', [10, 11, 12])]);
     const ai = getAIStateForColony(world, AI)!;
     expect(ai.state).toBe('Probing');
     expect(ai.operationKind).toBe('Probe');
   });
 
-  it('V32 + Peacetime + Probe → dropped (silent)', () => {
-    const world = setup(SIM_VERSION_V32_AI_OP_VALIDATION, 'Peacetime');
+  it('Peacetime + Probe → dropped (silent)', () => {
+    const world = setup('Peacetime');
     const before = world.events.length;
     applyCommands(world, [startOp('Probe', [10, 11, 12])]);
     const ai = getAIStateForColony(world, AI)!;
@@ -518,42 +511,33 @@ describe('StartAIOperation validation (#226, V32 gate)', () => {
     expect(world.events.length).toBe(before);
   });
 
-  it('V32 + Invading + Invasion → applies', () => {
-    const world = setup(SIM_VERSION_V32_AI_OP_VALIDATION, 'Invading');
+  it('Invading + Invasion → applies', () => {
+    const world = setup('Invading');
     applyCommands(world, [startOp('Invasion', [10, 11, 12])]);
     expect(getAIStateForColony(world, AI)!.operationKind).toBe('Invasion');
     expect(world.events.some((e) => e.type === 'invasion_start')).toBe(true);
   });
 
-  it('V32 + Probing + Invasion → dropped (Probing→Invading via this command is illegal)', () => {
-    const world = setup(SIM_VERSION_V32_AI_OP_VALIDATION, 'Probing');
+  it('Probing + Invasion → dropped (Probing→Invading via this command is illegal)', () => {
+    const world = setup('Probing');
     applyCommands(world, [startOp('Invasion', [10, 11, 12])]);
     const ai = getAIStateForColony(world, AI)!;
     expect(ai.operationKind).toBe('None');
     expect(ai.state).toBe('Probing');
   });
 
-  it('malformed kind: dropped at V32, coerced to the Invasion branch pre-V32', () => {
-    // V32: rejected by the kind-enum check before the state ternary can mis-route it.
-    const wV32 = setup(SIM_VERSION_V32_AI_OP_VALIDATION, 'Invading');
-    applyCommands(wV32, [startOp('Garbage' as 'Invasion', [10, 11, 12])]);
-    expect(getAIStateForColony(wV32, AI)!.operationKind).toBe('None');
-    expect(wV32.events.some((e) => e.type === 'invasion_start')).toBe(false);
-    // pre-V32: no gate — setAIRallyOperation's else-branch runs the Invasion path.
-    const wV31 = setup(SIM_VERSION_V31_SPIDER_TERRAIN, 'Invading');
-    applyCommands(wV31, [startOp('Garbage' as 'Invasion', [10, 11, 12])]);
-    expect(wV31.events.some((e) => e.type === 'invasion_start')).toBe(true);
-  });
-
-  it('pre-V32: Probe from Peacetime still applies (unvalidated old behavior preserved)', () => {
-    const world = setup(SIM_VERSION_V31_SPIDER_TERRAIN, 'Peacetime');
-    applyCommands(world, [startOp('Probe', [10, 11, 12])]);
-    expect(getAIStateForColony(world, AI)!.state).toBe('Probing');
+  it('malformed kind: dropped before the state ternary can mis-route it', () => {
+    const world = setup('Invading');
+    applyCommands(world, [startOp('Garbage' as 'Invasion', [10, 11, 12])]);
+    expect(getAIStateForColony(world, AI)!.operationKind).toBe('None');
+    expect(world.events.some((e) => e.type === 'invasion_start')).toBe(false);
   });
 
   it('ai_state_transition reports the ACTUAL from-state (Peacetime), not a hardcoded WarFooting', () => {
-    const world = setup(SIM_VERSION_V31_SPIDER_TERRAIN, 'Peacetime'); // pre-gate so the illegal Probe applies
-    applyCommands(world, [startOp('Probe', [10, 11, 12])]);
+    // Called directly: the command path now rejects a Probe from Peacetime, so
+    // this is the only way to reach setAIRallyOperation from a non-WarFooting state.
+    const world = setup('Peacetime');
+    setAIRallyOperation(world, AI, 50, 50, [10, 11, 12], 'Probe');
     const evt = world.events.find((e) => e.type === 'ai_state_transition');
     expect(evt).toBeDefined();
     if (evt?.type === 'ai_state_transition') {
@@ -562,7 +546,7 @@ describe('StartAIOperation validation (#226, V32 gate)', () => {
   });
 
   it('command-pair: a legit StartAIOperation + paired SetRallyPoint both apply consistently', () => {
-    const world = setup(SIM_VERSION_V32_AI_OP_VALIDATION, 'WarFooting');
+    const world = setup('WarFooting');
     applyCommands(world, [
       startOp('Probe', [10, 11, 12]),
       {

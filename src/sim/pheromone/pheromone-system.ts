@@ -12,10 +12,9 @@
 // IS read for routing: sampleForagingDirection (via the penalizedStrength helper
 // below) and chooseExcursionDirection penalize/steer candidate steps by their
 // danger. (The excursion-boundary leash scan hasNearbyPheromoneSignal is
-// deliberately danger-blind — Option B; see ant-foraging.ts.) Gated at the call
-// sites so pre-V36 replays
-// never consult it (dangerGrid === undefined = byte-identical legacy path). The
-// penalty is fixed-point (Math.imul >> FP_SHIFT) and consumes NO additional RNG.
+// deliberately danger-blind — Option B; see ant-foraging.ts.) Callers pass
+// `dangerGrid === undefined` where there is no surface danger to read (the plain,
+// unpenalized path). The penalty is fixed-point (Math.imul >> FP_SHIFT) and consumes NO additional RNG.
 //
 // MUST NOT use: Math.floor, Math.round, division (/), Date, performance, setTimeout, Math.random.
 // All fixed-point operations use >>  and Math.imul.
@@ -181,9 +180,8 @@ const REACQUIRE_RADIUS = 3;
 /**
  * A1 (V36) — apply the DangerTrail penalty to a candidate cell's FoodTrail
  * strength: `net = food − (Math.imul(danger, DANGER_ROUTE_WEIGHT_FP) >> FP_SHIFT)`,
- * clamped ≥ 0. When `dangerGrid` is undefined (pre-V36; gated at the call site)
- * or the food strength is already 0, the raw strength is returned unchanged — the
- * byte-identical legacy path. `Math.imul` per this module's fixed-point rule.
+ * clamped ≥ 0. When `dangerGrid` is undefined or the food strength is already 0,
+ * the raw strength is returned unchanged. `Math.imul` per this module's fixed-point rule.
  */
 function penalizedStrength(
   foodStrength: number,
@@ -227,8 +225,7 @@ function penalizedStrength(
  *   each candidate cell's FoodTrail strength is penalized by its danger
  *   (`net = food − (Math.imul(danger, DANGER_ROUTE_WEIGHT_FP) >> FP_SHIFT)`,
  *   clamped ≥ 0), so foragers prefer safer routes — a SOFT bias, not a wall.
- *   `undefined` (pre-V36, gated at the call site) = byte-identical legacy
- *   behaviour. NOTE (Option B): the excursion-boundary leash check
+ *   `undefined` = no penalty. NOTE (Option B): the excursion-boundary leash check
  *   `hasNearbyPheromoneSignal` is deliberately danger-BLIND — it is NOT passed this
  *   grid — so a danger-poisoned or danger-blocked trail can register as leash
  *   "signal" there while this sampler returns {0,0}. That over-leash linger is
@@ -284,9 +281,8 @@ export function sampleForagingDirection(
       // scoring just rejected. If the rolled cardinal is a spider-wake tile, fall
       // through to the (danger-penalized) exploit pick rather than explore into
       // danger. BOTH RNG draws (the roll + idx) are still consumed above, so replay
-      // determinism holds regardless of the branch; undefined dangerGrid (pre-V36)
-      // takes the rolled direction unconditionally, byte-identical to the legacy
-      // random explore.
+      // determinism holds regardless of the branch; an undefined dangerGrid takes
+      // the rolled direction unconditionally (the plain random explore).
       if (
         dangerGrid === undefined ||
         phGet(dangerGrid, tileX + dir.dx, tileY + dir.dy) < DANGER_ROUTE_AVOID_THRESHOLD

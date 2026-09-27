@@ -24,20 +24,20 @@ const center = (r: { x: number; y: number; w: number; h: number }) => ({
 describe('tooltipTargetAt', () => {
   it('hits the stats bar', () => {
     const c = center(hud.STATS);
-    expect(tooltipTargetAt(c.x, c.y, 'surface', hud, true)?.kind).toBe('stats');
+    expect(tooltipTargetAt(c.x, c.y, 'surface', hud)?.kind).toBe('stats');
   });
 
   it('hits the view toggle', () => {
     const c = center(hud.VIEW_TOGGLE);
-    expect(tooltipTargetAt(c.x, c.y, 'surface', hud, true)?.kind).toBe('view-toggle');
+    expect(tooltipTargetAt(c.x, c.y, 'surface', hud)?.kind).toBe('view-toggle');
   });
 
   it('hits the colony toggle ONLY on the underground view', () => {
     const c = center(hud.UNDERGROUND_COLONY_TOGGLE);
-    expect(tooltipTargetAt(c.x, c.y, 'underground', hud, true)?.kind).toBe('colony-toggle');
+    expect(tooltipTargetAt(c.x, c.y, 'underground', hud)?.kind).toBe('colony-toggle');
     // On the surface the toggle isn't rendered, so its rect is not a tooltip
     // target (and nothing else lives there).
-    expect(tooltipTargetAt(c.x, c.y, 'surface', hud, true)).toBeNull();
+    expect(tooltipTargetAt(c.x, c.y, 'surface', hud)).toBeNull();
   });
 
   it('the alarm tooltip names BOTH halves of the cost, not just the foraging stall', () => {
@@ -50,39 +50,35 @@ describe('tooltipTargetAt', () => {
     expect(text).toContain('fighter');
   });
 
-  it('hits the alarm toggle ONLY when the alarm is available (V42+)', () => {
-    // Mirrors the colony-toggle case above. Below V42 the button is not drawn,
-    // so its rect must not be a tooltip target either — otherwise a pre-V42 save
-    // pops a tooltip promising a feature that does not exist, over nothing.
+  it('hits the alarm toggle in both views', () => {
     const c = center(hud.ALARM_TOGGLE);
-    expect(tooltipTargetAt(c.x, c.y, 'surface', hud, true)?.kind).toBe('alarm-toggle');
-    expect(tooltipTargetAt(c.x, c.y, 'underground', hud, true)?.kind).toBe('alarm-toggle');
-    expect(tooltipTargetAt(c.x, c.y, 'surface', hud, false)).toBeNull();
+    expect(tooltipTargetAt(c.x, c.y, 'surface', hud)?.kind).toBe('alarm-toggle');
+    expect(tooltipTargetAt(c.x, c.y, 'underground', hud)?.kind).toBe('alarm-toggle');
   });
 
   it('hits an enabled tool button', () => {
     const c = center(toolButtonRect(1, hud.TOOLS)); // Dig
-    const t = tooltipTargetAt(c.x, c.y, 'underground', hud, true);
+    const t = tooltipTargetAt(c.x, c.y, 'underground', hud);
     expect(t).toEqual({ kind: 'tool', tool: 'dig', enabled: true, anchor: hud.TOOLS });
   });
 
   it('STILL hits the DISABLED Chamber button on the surface (enabled:false)', () => {
     const c = center(toolButtonRect(2, hud.TOOLS)); // Chamber
-    const t = tooltipTargetAt(c.x, c.y, 'surface', hud, true);
+    const t = tooltipTargetAt(c.x, c.y, 'surface', hud);
     expect(t).toEqual({ kind: 'tool', tool: 'chamber', enabled: false, anchor: hud.TOOLS });
     // …and it's enabled underground.
-    const u = tooltipTargetAt(c.x, c.y, 'underground', hud, true);
+    const u = tooltipTargetAt(c.x, c.y, 'underground', hud);
     expect(u).toMatchObject({ kind: 'tool', tool: 'chamber', enabled: true });
   });
 
   it('hits the speed widget (pause + a preset)', () => {
     const pause = center(speedControlRect(0, hud.SPEED));
-    expect(tooltipTargetAt(pause.x, pause.y, 'surface', hud, true)).toMatchObject({
+    expect(tooltipTargetAt(pause.x, pause.y, 'surface', hud)).toMatchObject({
       kind: 'speed',
       control: 'pause',
     });
     const two = center(speedControlRect(2, hud.SPEED)); // 2×
-    expect(tooltipTargetAt(two.x, two.y, 'surface', hud, true)).toMatchObject({
+    expect(tooltipTargetAt(two.x, two.y, 'surface', hud)).toMatchObject({
       kind: 'speed',
       control: 2,
     });
@@ -90,13 +86,13 @@ describe('tooltipTargetAt', () => {
 
   it('hits the Forage↔Fight slider', () => {
     const c = center(hud.TRIANGLE);
-    expect(tooltipTargetAt(c.x, c.y, 'surface', hud, true)?.kind).toBe('slider');
+    expect(tooltipTargetAt(c.x, c.y, 'surface', hud)?.kind).toBe('slider');
   });
 
   it('returns null over open world / the minimap (excluded)', () => {
-    expect(tooltipTargetAt(400, 300, 'surface', hud, true)).toBeNull();
+    expect(tooltipTargetAt(400, 300, 'surface', hud)).toBeNull();
     const m = center(hud.MINIMAP);
-    expect(tooltipTargetAt(m.x, m.y, 'underground', hud, true)).toBeNull();
+    expect(tooltipTargetAt(m.x, m.y, 'underground', hud)).toBeNull();
   });
 });
 

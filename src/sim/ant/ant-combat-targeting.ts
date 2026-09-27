@@ -1186,8 +1186,7 @@ export function pickFighterTargetEntrance(
  * colony that collapses to 1-2 workers while they are Fighting keeps zero foragers
  * and starves — the render-side survival policy can only steer NEW assignments
  * through the ratio. Called from the step-8 allocation checkpoint only when the
- * colony is below NURSE_MIN_WORKERS living workers (tick.ts gates it to V40+ via
- * `nurseMinWorkersFor`, so pre-V40 worlds never reach here). Releases fighters in
+ * colony is below NURSE_MIN_WORKERS living workers. Releases fighters in
  * EXCESS of `computedAllocation.fight` — never the ones the ratio still asks for,
  * so a fight-heavy ratio at 2 workers does not churn Idle→Fighting→Idle each tick.
  * A fighter inside a FOREIGN underground grid (an invader) is never released here:

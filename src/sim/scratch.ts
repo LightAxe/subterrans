@@ -120,8 +120,7 @@ export interface ScratchArena {
    * Reset (`length = 0`) then repopulated once per tick so the per-ant risk-aware
    * routing lookups (sampler / no-revisit / obstacle detour) index by colonyId
    * instead of building a `pheromoneGridKey` string per ant per tick (AGENTS.md
-   * hot-loop rule). Left empty (all undefined) pre-V36, so V35 replays are
-   * byte-identical. Transient scratch — never serialized.
+   * hot-loop rule). Transient scratch — never serialized.
    */
   surfaceDangerByColony: (PheromoneGrid | undefined)[];
   /**
