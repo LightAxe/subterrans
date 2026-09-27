@@ -194,6 +194,13 @@ import {
   resetRaidCaptionState,
 } from './raid-captions.js';
 import {
+  createRampageCaptionState,
+  noteRampageStart,
+  offerOwedRampageCaption,
+  offerRecurringCaption,
+  resetRampageCaptionState,
+} from './recurring-captions.js';
+import {
   captionForEvent,
   checkAndTrigger,
   oneShotKeyForEvent,
@@ -294,8 +301,9 @@ interface UIScenePhase9 {
   hudButtonGeometry?(): HudButtonGeometry[];
   // #290 PR 6 — Dev/E2E observability for __phase9_test.getCaptionsShown().
   captionsShown?(): string[];
-  // #290 PR 6 — true while nothing is showing and nothing is pending, so recurring
-  // raid news may enter without taking the slot a one-shot caption would need.
+  // #290 PR 6 / #350 — true while nothing is showing and nothing is pending, so
+  // recurring captions (raid news, the spider-rampage warning) may enter without
+  // taking the slot a one-shot caption would need.
   captionQueueIdle?(): boolean;
 }
 
@@ -723,6 +731,8 @@ export class GameScene extends Phaser.Scene {
   // #290 PR 6 — raid captions: last-seen player raid counters + per-caption
   // throttle. Re-baselined in finishBoot (fresh or loaded world).
   private readonly raidCaptions = createRaidCaptionState();
+  // #350 — the spider-rampage warning owed until the caption queue is idle.
+  private readonly rampageCaption = createRampageCaptionState();
   private renderFrame = 0; // frame counter for glow fade maps
   private readonly contestedGlowFrames: Map<number, number> = new Map(); // surface glow fade
   private readonly undergroundGlowFrames: Map<number, number> = new Map(); // underground glow fade
@@ -1525,14 +1535,11 @@ export class GameScene extends Phaser.Scene {
       }
 
       if (ev.type === 'spider_rampage_start') {
-        // Spider rampage caption: fires on EVERY rampage, not just the first.
-        // The recurring-vs-one-shot decision lives in captionForEvent; the
-        // spider is surface-only now (#146/#176/#177) so the copy no longer
-        // mentions tunnels. No one-shot key — recurring captions never dedup.
-        const captionText = captionForEvent(ev.type);
-        if (captionText && uiScene) {
-          uiScene.showCaption(captionText, this.layout.w / 2, 60);
-        }
+        // Spider rampage warning, on EVERY rampage (recurring, no one-shot key).
+        // #350: owed here, shown by checkQueenStatusForEffects once the caption
+        // queue is idle (recurring-captions.ts), so it never takes a one-shot
+        // caption's slot.
+        noteRampageStart(this.rampageCaption, ev.tick);
       }
 
       if (ev.type === 'ai_state_transition' && ev.payload.to === 'Invading') {
@@ -1622,22 +1629,27 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
+    // Recurring captions (no one-shot key) enter only while the caption queue is
+    // fully idle (offerRecurringCaption, fail-closed). Taking the pending slot
+    // behind an active caption would make an arriving one-shot caption (rallyRaid,
+    // queen damage, invasion) get dropped, so each waits, owed, and is retried each
+    // frame (recurring-captions.ts).
+    //
+    // #350 — the spider-rampage warning, owed from its spider_rampage_start until
+    // it shows or goes stale. Offered first: it outranks raid news.
+    if (uiScene) {
+      offerOwedRampageCaption(this.rampageCaption, this.world, uiScene, this.layout.w / 2, 60);
+    }
+
     // #290 PR 6 — raid captions (being raided / raiding / a haul home), driven by
     // the player colony's raid counters and throttled per caption (raid-captions.ts).
-    // Recurring: no one-shot key.
-    // The cooldown starts only once the queue has taken the caption. An owed
-    // caption is offered only while the queue is fully idle (nothing showing or
-    // pending). Taking the pending slot behind an active caption would make an
-    // arriving one-shot caption (rallyRaid, queen damage, invasion) get dropped,
-    // so raid news waits instead; it stays owed (up to RAID_CAPTION_OWED_TICKS)
-    // and is retried each frame until then. The check fails closed: a UIScene
-    // without captionQueueIdle shows no raid news rather than skipping the gate.
+    // The cooldown starts only once the queue has taken the caption; until then it
+    // stays owed (up to RAID_CAPTION_OWED_TICKS).
     const raidCaption = nextRaidCaption(this.raidCaptions, this.world, PLAYER_COLONY_ID);
     if (
       raidCaption !== null &&
       uiScene &&
-      uiScene.captionQueueIdle?.() === true &&
-      uiScene.showCaption(RAID_CAPTION_TEXTS[raidCaption], this.layout.w / 2, 60)
+      offerRecurringCaption(uiScene, RAID_CAPTION_TEXTS[raidCaption], this.layout.w / 2, 60)
     ) {
       markRaidCaptionShown(this.raidCaptions, this.world, raidCaption);
     }
@@ -1851,6 +1863,8 @@ export class GameScene extends Phaser.Scene {
     // #290 PR 6 — only raid-counter increases from here on raise a caption (a
     // loaded save's earlier raids must not).
     resetRaidCaptionState(this.raidCaptions, this.world, PLAYER_COLONY_ID);
+    // #350 — a prior round's owed rampage warning must not carry over.
+    resetRampageCaptionState(this.rampageCaption);
     // Stage 2 §B: a fresh/loaded world must rebake every allocated terrain RT (the prior
     // session's RTs are stale). Optional chaining — finishBoot can run before create() has
     // instantiated the cache in some boot orderings; the first frame then lazily bakes.
