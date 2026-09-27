@@ -439,6 +439,28 @@ describe('Deny (V60)', () => {
     expect(r.player.raidTrips).toBe(0);
   });
 
+  it('at its shaft top with only the pool full it walks on to the larder (no pile)', () => {
+    const r = raidWorld();
+    const w = r.world;
+    order(r, RaidType.Deny);
+    setPoolFoodForTest(w, r.player, BASE_FOOD_STORAGE_CAPACITY);
+    setChamberStockForTest(w, r.player, r.playerLarder, 0);
+    const piles = pileCount(w);
+    const id = addHauler(w, P, r.playerDoor.x, 0, P, RAID_CARRY_FP);
+    tickRaidActions(w);
+    expect(w.ants.foodCarrying[id]).toBe(RAID_CARRY_FP);
+    expect(pileCount(w)).toBe(piles);
+    const keep = (): void => {
+      w.ants.lastMealTick[r.player.queenEntityId] = w.tick;
+      for (const l of r.player.larvae) w.ants.lastMealTick[l] = w.tick;
+      w.ants.lastMealTick[id] = w.tick;
+    };
+    expect(run(w, 400, () => w.ants.foodCarrying[id] === 0, keep)).toBeGreaterThan(0);
+    expect(chamberStock(w, r.playerLarder)).toBe(RAID_CARRY_FP);
+    expect(pileCount(w)).toBe(piles);
+    expect(r.player.raidTrips).toBe(1);
+  });
+
   it('down its own shaft with no room after all, it leaves the load outside by the door (Loot waits)', () => {
     for (const type of [RaidType.Deny, RaidType.Loot]) {
       const r = raidWorld();

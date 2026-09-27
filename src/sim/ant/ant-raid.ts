@@ -730,11 +730,17 @@ export function tickRaidActions(world: WorldState): void {
     if (left === 0) {
       ants.subTask[id] = FightingSubState.MovingToRally;
       colony.raidTrips += 1;
-    } else if (ty === 0 && ents != null && colonyRaidType(world, colony) === RaidType.Deny) {
+    } else if (
+      ty === 0 &&
+      ents != null &&
+      colonyRaidType(world, colony) === RaidType.Deny &&
+      colonyDepositableRoom(world, colony) < left
+    ) {
       // #352 (V60): a Deny hauler that went down with room at the door and found
       // none (another hauler or a forager filled it first, or it came down under
       // Loot) does not wait for room: at the top of its shaft it leaves the rest
-      // outside, beside the open entrance above it, and goes back.
+      // outside, beside the open entrance above it, and goes back. With room in a
+      // chamber (only the pool is full) it walks on to it, as any hauler does.
       for (let e = 0; e < ents.length; e++) {
         const ent = ents[e]!;
         if (!ent.isOpen || ent.surfaceTileX !== tx) continue;

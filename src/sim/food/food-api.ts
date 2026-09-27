@@ -713,18 +713,6 @@ export function spawnPile(
 }
 
 /**
- * A2 (V37) — drop `amountFp` (whole pickups) of corpse food at surface tile
- * (x, y). A new pile advances the entity-id counter.
- *
- * Top-up on an occupied tile is a correctness requirement (the save rejects two
- * piles on one tile): the existing pile grows, both its size and its birth size
- * clamped to FOOD_PILE_INITIAL_PICKUPS_MAX pickups, and keeps its corpse flag (a
- * corpse topping up a natural pile leaves it natural). Otherwise a NEW corpse pile
- * is created, only while below FOOD_PILE_HARD_CAP and only on a walkable tile in
- * the surface component (the save's connectivity check would reject anything
- * else). Entity-id exhaustion is a silent skip. No RNG.
- */
-/**
  * #352 — the food a `topUpOrSpawnCorpsePile` at surface tile (x, y) would keep, at
  * most: the room left in the pile there (PILE_MAX_FP less its initial size), or,
  * with none, a whole new pile's worth when a pile may be made there (under
@@ -744,6 +732,18 @@ export function wholeLoadFp(fp: number): number {
   return wholePickupsFp(fp);
 }
 
+/**
+ * A2 (V37) — drop `amountFp` (whole pickups) of corpse food at surface tile
+ * (x, y). A new pile advances the entity-id counter.
+ *
+ * Top-up on an occupied tile is a correctness requirement (the save rejects two
+ * piles on one tile): the existing pile grows, both its size and its birth size
+ * clamped to FOOD_PILE_INITIAL_PICKUPS_MAX pickups, and keeps its corpse flag (a
+ * corpse topping up a natural pile leaves it natural). Otherwise a NEW corpse pile
+ * is created, only while below FOOD_PILE_HARD_CAP and only on a walkable tile in
+ * the surface component (the save's connectivity check would reject anything
+ * else). Entity-id exhaustion is a silent skip. No RNG.
+ */
 export function topUpOrSpawnCorpsePile(
   world: WorldState,
   x: number,
