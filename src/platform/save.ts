@@ -1762,11 +1762,17 @@ function deserializeSpider(s: SerializedWorldState): SpiderState | null {
     // is dropped as a pair, so the single-entrance cooldown never reads a garbage clock.
     // The pin goes with its target colony: a pin without one would camp an entrance
     // of a colony the step-4 re-pick did not choose.
+    // It must also be an entrance OF that target colony: campedEntrance looks the id
+    // up across every colony, so a pin naming another colony's entrance would send
+    // the gate-hold and movement to the wrong colony.
     rampageEntranceId:
       rampageTargetValid &&
       typeof r.rampageEntranceId === 'number' &&
       Number.isInteger(r.rampageEntranceId) &&
-      r.rampageEntranceId >= 0
+      r.rampageEntranceId >= 0 &&
+      (s.colonies[String(r.rampageTargetColonyId)]?.entrances ?? []).some(
+        (e) => e.entranceId === r.rampageEntranceId,
+      )
         ? r.rampageEntranceId
         : -1,
     rampageRotationEntranceId: rotationValid ? (r.rampageRotationEntranceId as number) : -1,

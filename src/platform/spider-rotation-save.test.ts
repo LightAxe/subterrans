@@ -93,8 +93,27 @@ describe('V54 (#337) — save validation of the new spider fields', () => {
     expect(a.rampageRotationEntranceId).toBe(7);
     expect(a.rampageRotationTick).toBe(0);
     expect(a.rampageEntranceId).toBe(-1);
-    const b = roundTrip({ state: 'Rampaging', rampageTargetColonyId: 1, rampageEntranceId: 9 });
-    expect(b.rampageEntranceId).toBe(9);
+    const w = createScenario(3);
+    const own = w.colonies[1]!.entrances[0]!.entranceId;
+    const b = roundTrip({ state: 'Rampaging', rampageTargetColonyId: 1, rampageEntranceId: own });
+    expect(b.rampageEntranceId).toBe(own);
+  });
+
+  it("drops a pin that is not one of the target colony's entrances", () => {
+    const w = createScenario(3);
+    const other = w.colonies[2]!.entrances[0]!.entranceId;
+    const crossColony = roundTrip({
+      state: 'Rampaging',
+      rampageTargetColonyId: 1,
+      rampageEntranceId: other,
+    });
+    expect(crossColony.rampageEntranceId).toBe(-1);
+    const unknown = roundTrip({
+      state: 'Rampaging',
+      rampageTargetColonyId: 1,
+      rampageEntranceId: 9999,
+    });
+    expect(unknown.rampageEntranceId).toBe(-1);
   });
 
   it('drops malformed values; a cursor without a valid tick is dropped as a pair', () => {
