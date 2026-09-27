@@ -258,6 +258,12 @@ _Avoid_: spider mode.
 **Rampage**:
 The spider's hungry surface hunt — it camps a colony entrance and eats ants.
 (Stored food only influences *which* colony it targets; it doesn't consume stored food.)
+A rampage gives up after `SPIDER_RAMPAGE_MAX_TICKS` without a kill (it **times out**).
+Since **#337 (simVersion V54)** a timed-out spider moves on: its next rampage camps the
+next open entrance by `entranceId` (across both colonies, wrapping), and it keeps
+**rotating** that way until it kills an ant. If the entrance it left is the only open one
+in the world, it may camp it again only `SPIDER_RAMPAGE_REVISIT_COOLDOWN_TICKS` later, and
+patrols and hunts meanwhile. So a colony sheltering underground gets a window to come out.
 _Avoid_: frenzy, attack.
 
 **Reticle** (`scatterReticleTile`):

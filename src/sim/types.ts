@@ -1144,7 +1144,39 @@ export const SIM_VERSION_V52_RAIDING = 52 as const;
  * byte-identically. MIN_ACCEPTED is UNCHANGED (V50).
  */
 export const SIM_VERSION_V53_NO_LOOT_WHEN_FULL = 53 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V53_NO_LOOT_WHEN_FULL;
+
+/**
+ * #337 (V54) — a timed-out rampage moves on to another entrance (owner decision,
+ * 2026-09-26).
+ *
+ * Up to V53 a hungry spider whose rampage timed out (SPIDER_RAMPAGE_MAX_TICKS with no
+ * kill) could start a new one on the same entrance the next tick, so a colony
+ * sheltering underground could be camped until its queen starved. From V54:
+ *   - When a rampage TIMES OUT without a kill, the spider records the entrance it was camping as its
+ *     rotation cursor (`SpiderState.rampageRotationEntranceId`, plus the timeout tick
+ *     in `rampageRotationTick`).
+ *   - While the cursor is set, a new rampage does not use the 60/40 colony picker. It
+ *     camps the NEXT open entrance in ascending `entranceId` order across every colony
+ *     (wrapping), skipping the cursor's entrance, and pins it
+ *     (`SpiderState.rampageEntranceId`) so it camps that entrance, not merely the
+ *     nearest one of its colony. When that rampage times out too, the cursor advances
+ *     to it; so the spider cycles through all open entrances of both colonies.
+ *   - Single-entrance rule: when the cursor's entrance is the only open entrance in the
+ *     world, the spider may camp it again only SPIDER_RAMPAGE_REVISIT_COOLDOWN_TICKS
+ *     after the timeout. Until then it does not rampage; it keeps patrolling, and still
+ *     chases and hunts (density strikes) as a hungry spider does.
+ *   - Any kill (whatever resets `hungerTicks`: step 3 of tickSpider) clears the cursor,
+ *     and the next hungry spell starts from the 60/40 picker again. A rampage that ends
+ *     for any other reason (a kill, a chase-divert, self-defense, a sealed entrance)
+ *     does not move the cursor.
+ * New serialized SpiderState fields (all -1 = none, and never written at V53):
+ * rampageEntranceId, rampageRotationEntranceId, rampageRotationTick. No command, no
+ * world.rngState draw (the order is by entranceId), no entity-ID advance, no tick-order
+ * change. A V53 save replays byte-identically (apart from the three new fields, which
+ * stay -1). MIN_ACCEPTED is UNCHANGED (V50).
+ */
+export const SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES = 54 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES;
 
 /**
  * S2 — AI colony state machine states.
@@ -1195,6 +1227,14 @@ export interface SpiderState {
   feedAwayTileX: number; // V23: ~10-tile feed destination after a kill; -1 default
   feedAwayTileY: number;
   feedArrivedTick: number; // V23: tick the spider reached feedAwayTile (heal-window clock); -1 while traveling
+  /** V54 (#337): entranceId the current rampage camps (a rotated rampage); -1 = the
+   *  nearest open entrance of rampageTargetColonyId (the pre-V54 rule). */
+  rampageEntranceId: number;
+  /** V54 (#337): entranceId of the entrance whose rampage most recently timed out, the
+   *  rotation cursor; -1 = not rotating. Cleared by any kill. */
+  rampageRotationEntranceId: number;
+  /** V54 (#337): tick that timeout happened (single-entrance revisit cooldown); -1 = none. */
+  rampageRotationTick: number;
 }
 
 export interface AIStateRecord {
@@ -1629,6 +1669,9 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
     ds.feedAwayTileX = ss.feedAwayTileX;
     ds.feedAwayTileY = ss.feedAwayTileY;
     ds.feedArrivedTick = ss.feedArrivedTick;
+    ds.rampageEntranceId = ss.rampageEntranceId;
+    ds.rampageRotationEntranceId = ss.rampageRotationEntranceId;
+    ds.rampageRotationTick = ss.rampageRotationTick;
   }
   dst.spiderPriorityColonyId = src.spiderPriorityColonyId;
   // scatterReticleTile

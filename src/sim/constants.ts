@@ -1178,6 +1178,17 @@ export const SPIDER_TERRITORY_RADIUS_TILES = 24 as const;
 export const SPIDER_RAMPAGE_KILL_QUOTA = 2 as const;
 export const SPIDER_RAMPAGE_MAX_TICKS = 1200 as const; // timeout if no kills after 60s (1200 ticks @ 20Hz)
 
+/**
+ * V54 (#337) — single-entrance rule. After a rampage times out on an entrance, the
+ * spider rotates to another open entrance; when there is no other open entrance in the
+ * world it may camp the same one again only this many ticks after the timeout, and
+ * meanwhile patrols (still chasing and hunting). Equal to SPIDER_RAMPAGE_MAX_TICKS, so a
+ * lone entrance gets the same break it would get in a two-entrance rotation (the time
+ * the spider spends camping the other one). Well past the ~100-tick DangerTrail decay
+ * tail, so sheltering ants can come out before the spider may return.
+ */
+export const SPIDER_RAMPAGE_REVISIT_COOLDOWN_TICKS = 1200 as const;
+
 /** S3 — HP threshold below which spider retreats. */
 export const SPIDER_RAMPAGE_RETREAT_HP = 20 as const;
 

@@ -877,6 +877,9 @@ describe('drawSurfaceEntities — spider facing direction (issue #216)', () => {
       feedAwayTileX: -1,
       feedAwayTileY: -1,
       feedArrivedTick: -1,
+      rampageEntranceId: -1,
+      rampageRotationEntranceId: -1,
+      rampageRotationTick: -1,
     };
     w.spider = spider;
     return w;
@@ -1259,6 +1262,9 @@ describe('drawSurfaceEntities — spider health bar (issue #148)', () => {
       feedAwayTileX: -1,
       feedAwayTileY: -1,
       feedArrivedTick: -1,
+      rampageEntranceId: -1,
+      rampageRotationEntranceId: -1,
+      rampageRotationTick: -1,
     };
     w.spider = spider;
     return w;

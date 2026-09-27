@@ -748,6 +748,10 @@ interface SerializedSpiderState {
   feedAwayTileX: number;
   feedAwayTileY: number;
   feedArrivedTick: number;
+  // V54 (#337) — absent on a pre-V54 save; restored as -1 (none).
+  rampageEntranceId?: number;
+  rampageRotationEntranceId?: number;
+  rampageRotationTick?: number;
 }
 
 /** S2 — serialized form of AIStateRecord. operationFighterIds stored as number[]. */
@@ -1660,6 +1664,13 @@ function deserializeSpider(s: SerializedWorldState): SpiderState | null {
       ? 'Patrolling'
       : rawState;
   if (safeState === 'Chasing' && !chaseTargetValid) safeState = 'Patrolling';
+  const rotationValid =
+    typeof r.rampageRotationEntranceId === 'number' &&
+    Number.isInteger(r.rampageRotationEntranceId) &&
+    r.rampageRotationEntranceId >= 0 &&
+    typeof r.rampageRotationTick === 'number' &&
+    Number.isInteger(r.rampageRotationTick) &&
+    r.rampageRotationTick >= 0;
   return {
     state: safeState,
     posX: typeof r.posX === 'number' && Number.isInteger(r.posX) ? r.posX : 0,
@@ -1743,6 +1754,19 @@ function deserializeSpider(s: SerializedWorldState): SpiderState | null {
       typeof r.feedArrivedTick === 'number' && Number.isInteger(r.feedArrivedTick)
         ? r.feedArrivedTick
         : -1,
+    // V54 (#337). The pinned entrance only means something mid-rampage (as
+    // rampageTargetColonyId); the rotation cursor and its timeout tick outlive the
+    // rampage (they last until the spider's next kill). A cursor without a valid tick
+    // is dropped as a pair, so the single-entrance cooldown never reads a garbage clock.
+    rampageEntranceId:
+      safeState === 'Rampaging' &&
+      typeof r.rampageEntranceId === 'number' &&
+      Number.isInteger(r.rampageEntranceId) &&
+      r.rampageEntranceId >= 0
+        ? r.rampageEntranceId
+        : -1,
+    rampageRotationEntranceId: rotationValid ? (r.rampageRotationEntranceId as number) : -1,
+    rampageRotationTick: rotationValid ? (r.rampageRotationTick as number) : -1,
   };
 }
 
