@@ -6,7 +6,11 @@ import { ENTRANCE_SHAFT_DEPTH, FIGHT_AGGRO_RADIUS } from '../constants.js';
 import { AntTask, FightingSubState } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
 import { Zone, type UndergroundGrid } from '../terrain.js';
-import { SIM_VERSION_V55_ROUTED_HOMING, type WorldState } from '../types.js';
+import {
+  SIM_VERSION_V55_ROUTED_HOMING,
+  SIM_VERSION_V57_ROUTED_DOORWARD,
+  type WorldState,
+} from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
 import { antIsAtHome, fighterIsHungry } from '../hunger.js';
 import { isSurfaceTileInComponent } from '../surface-features.js';
@@ -44,6 +48,12 @@ const SENTRY_MOVING_HOME = 2;
  * ant and steps by the surface entrance flow field.
  */
 const FIGHTER_MOVING_TO_EAT = 3;
+/**
+ * #357 (V57) — `sentryMoving` value for a tunnel-defence fighter walking on the
+ * surface to the entrance it defends (defenderWalksToDoor). Bumped like any ant;
+ * steps down the surface goal field seeded at that entrance.
+ */
+const DEFENDER_MOVING_TO_DOOR = 4;
 const SENTRY_TO_POST = 1; // walking to its post
 const SENTRY_HOLD = 2; // holding its post
 const SENTRY_NO_POST = 3; // its entrance has no post
@@ -418,6 +428,21 @@ export function invaderTakesReachableExit(
   return (
     fighterWalksHomeToEat(world, id) || hauling || world.simVersion >= SIM_VERSION_V55_ROUTED_HOMING
   );
+}
+
+/**
+ * #357 (V57) — step 10c sent fighter `id` of a tunnel-defence colony (its rally on
+ * one of its own open entrances) across the surface to that entrance this tick:
+ * it reached step 10c's ordinary rally routing (not the D11 walk home, a chase or
+ * a sentry route). A hungry fighter at home gets here, as does a fed one, or a
+ * hungry one in a duel. Step 16 steps it down the surface goal field seeded at its target
+ * tile, which routes round obstacles; before V57 it stepped in a straight line and
+ * an obstacle in the way pinned it. (Same-tick scratch, rebuilt by every 10c pass;
+ * never set below V57.)
+ */
+export function defenderWalksToDoor(world: WorldState, id: number): boolean {
+  const moving = getScratch(world).antTargeting.sentryMoving;
+  return id < moving.length && moving[id] === DEFENDER_MOVING_TO_DOOR;
 }
 
 /**
@@ -1702,6 +1727,15 @@ export function updateFightAntTargets(world: WorldState): void {
     }
     ants.targetPosX[id] = (rp.tileX << FP_SHIFT) + (FP_ONE >> 1);
     ants.targetPosY[id] = (rp.tileY << FP_SHIFT) + (FP_ONE >> 1);
+    // #357 (V57): on the surface, bound for the entrance its colony defends (the
+    // rally is on it), it routes round obstacles (defenderWalksToDoor).
+    if (
+      world.simVersion >= SIM_VERSION_V57_ROUTED_DOORWARD &&
+      ants.zone[id] === Zone.Surface &&
+      defendedEntrance(world, colony) !== null
+    ) {
+      sentryMoving[id] = DEFENDER_MOVING_TO_DOOR;
+    }
   }
 }
 

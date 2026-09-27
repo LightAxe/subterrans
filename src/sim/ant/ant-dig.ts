@@ -1,14 +1,69 @@
 // src/sim/ant/ant-dig.ts
-// #212 Layer 1 (behavior): search-leash dig assignment + dig execution. Tick steps
-// invoked by tick.ts; depend only on Layer-0 ant-motion (+ sibling sim modules).
+// #212 Layer 1 (behavior): search-leash dig assignment + dig execution, and the
+// surface digger's doorward-routing policy (#358, V57) that tickAntMovement reads.
+// Tick steps invoked by tick.ts; depend only on Layer-0 ant-motion (+ sibling sim
+// modules).
 import { colonyForageBackpressure } from '../food/food-api.js';
-import { DIG_TICKS_PER_TILE, SEARCH_LEASH_MAX_WAVE, SEARCH_LEASH_RADII } from '../constants.js';
+import {
+  DIG_TICKS_PER_TILE,
+  SEARCH_LEASH_MAX_WAVE,
+  SEARCH_LEASH_RADII,
+  SURFACE_GRID_HEIGHT,
+  SURFACE_GRID_WIDTH,
+} from '../constants.js';
 import type { DigFlowFields } from '../dig-system.js';
 import { AntTask, DiggingSubState, ForagingSubState } from '../enums.js';
 import { FP_SHIFT } from '../fixed.js';
+import { SURFACE_GOAL_UNREACHED, surfaceGoalDistance } from '../surface-routing.js';
 import { UndergroundTileState, Zone, ugSet } from '../terrain.js';
-import type { WorldState } from '../types.js';
+import { SIM_VERSION_V57_ROUTED_DOORWARD, type WorldState } from '../types.js';
 import { clearRecentTiles } from './ant-store.js';
+
+/**
+ * #358 (V57) — digger `id` on the surface walks to its entrance target (the
+ * nearest of its colony's entrances, closed ones included: a designated shaft is
+ * dug from the top) down the surface goal field seeded at that entrance, and picks
+ * that target by path distance (surfaceDiggerEntranceDistance); tickAntMovement
+ * takes the step. A closed entrance is not on the entrance flow field, and the
+ * field's nearest open entrance need not be the digger's target. Before V57 it
+ * picked by Manhattan distance and stepped in a straight line, and an obstacle in
+ * the way pinned it. Always false below V57 (and for any ant that is not a
+ * surface digger).
+ */
+export function surfaceDiggerWalksDoorward(world: WorldState, id: number): boolean {
+  const ants = world.ants;
+  return (
+    ants.task[id] === AntTask.Digging &&
+    ants.zone[id] === Zone.Surface &&
+    world.simVersion >= SIM_VERSION_V57_ROUTED_DOORWARD
+  );
+}
+
+/**
+ * #358 (V57) — how far a surface digger at (tileX, tileY) is from entrance `ent`,
+ * for picking its target: the path distance on the surface goal field seeded at
+ * the entrance. By Manhattan, a detour round an obstacle could make another
+ * entrance the nearer one mid-walk, and back again: a flip cycle. An entrance its
+ * tile cannot reach ranks after every reachable one, by Manhattan distance. Each
+ * doorward step lowers the path distance to the chosen entrance by at least one
+ * (two on a diagonal), so the least distance over all entrances only falls and the
+ * choice cannot cycle. (An occupancy bump or a blocked-step detour can raise it;
+ * neither depends on the choice.)
+ */
+export function surfaceDiggerEntranceDistance(
+  world: WorldState,
+  tileX: number,
+  tileY: number,
+  ent: { surfaceTileX: number; surfaceTileY: number },
+): number {
+  const path = surfaceGoalDistance(world, tileX, tileY, ent.surfaceTileX, ent.surfaceTileY);
+  if (path !== SURFACE_GOAL_UNREACHED) return path;
+  return (
+    SURFACE_GRID_WIDTH * SURFACE_GRID_HEIGHT +
+    Math.abs(ent.surfaceTileX - tileX) +
+    Math.abs(ent.surfaceTileY - tileY)
+  );
+}
 
 /**
  * Step-9b: release stuck SearchingFood surface foragers back to Idle so

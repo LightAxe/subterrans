@@ -3,7 +3,13 @@
 
 import { describe, it, expect } from 'vitest';
 import { antPickupFood, tickDigExecution, tickSearchLeash } from './ant-system.js';
-import { createWorldState, allocateEntityId } from '../types.js';
+import { surfaceDiggerWalksDoorward } from './ant-dig.js';
+import {
+  createWorldState,
+  allocateEntityId,
+  SIM_VERSION_V56_OPPONENT_FRONTAGE,
+  SIM_VERSION_V57_ROUTED_DOORWARD,
+} from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import { initAnt } from './ant-store.js';
 import { AntTask, ForagingSubState, DiggingSubState } from '../enums.js';
@@ -522,5 +528,34 @@ describe('tickSearchLeash (09 digger-reassignment memo)', () => {
     tickSearchLeash(world);
     // Closest is 2 ≤ 25 → not demoted.
     expect(world.ants.task[antId]).toBe(AntTask.Foraging);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #358 (V57) surfaceDiggerWalksDoorward — the digger's doorward-routing gate
+// ---------------------------------------------------------------------------
+
+describe('#358 (V57) surfaceDiggerWalksDoorward', () => {
+  it('is true for a surface digger from V57 only, and never below ground or for another task', () => {
+    const world = createWorldState(42, 8);
+    const id = allocateEntityId(world);
+    initAnt(world.ants, id, {
+      colonyId: COLONY_ID,
+      posX: 0,
+      posY: 0,
+      task: AntTask.Digging,
+      subTask: DiggingSubState.MovingToTile,
+      zone: Zone.Surface,
+    });
+    world.simVersion = SIM_VERSION_V57_ROUTED_DOORWARD;
+    expect(surfaceDiggerWalksDoorward(world, id)).toBe(true);
+    world.simVersion = SIM_VERSION_V56_OPPONENT_FRONTAGE;
+    expect(surfaceDiggerWalksDoorward(world, id)).toBe(false);
+    world.simVersion = SIM_VERSION_V57_ROUTED_DOORWARD;
+    world.ants.zone[id] = Zone.Underground;
+    expect(surfaceDiggerWalksDoorward(world, id)).toBe(false);
+    world.ants.zone[id] = Zone.Surface;
+    world.ants.task[id] = AntTask.Foraging;
+    expect(surfaceDiggerWalksDoorward(world, id)).toBe(false);
   });
 });

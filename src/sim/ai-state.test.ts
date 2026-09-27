@@ -574,8 +574,8 @@ describe('StartAIOperation validation (#226, V32 gate)', () => {
 // ---------------------------------------------------------------------------
 
 describe('#347 — a player-colony AI reads its opponent (V56)', () => {
-  it('LATEST is V56', () => {
-    expect(LATEST_SIM_VERSION).toBe(SIM_VERSION_V56_OPPONENT_FRONTAGE);
+  it('LATEST is V56 or later', () => {
+    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(SIM_VERSION_V56_OPPONENT_FRONTAGE);
   });
 
   it('opponentColonyId: player <-> enemy; null when there is no other colony', () => {
