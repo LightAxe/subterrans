@@ -77,6 +77,7 @@ import {
   type CameraView,
   clampCameraView,
   screenToTileZoom,
+  worldToScreen,
   resolveDotMode,
   setViewportSize,
   getViewportWidth,
@@ -92,6 +93,7 @@ import {
 } from './terrain-bake.js';
 import {
   PLAYER_COLONY_ID,
+  ENEMY_COLONY_ID,
   PLAYER_START_X,
   PLAYER_START_Y,
   STARVATION_GRACE_TICKS,
@@ -185,7 +187,7 @@ import { antActivityPanelState } from './ant-activity-panel-state.js';
 import { buildPlaytraceSummary, type GameOutcomeLabel } from './summary-builder.js';
 import { colonyFoodTotal } from '../sim/food/food-api.js';
 import {
-  RAID_CAPTION_TEXTS,
+  raidCaptionText,
   createRaidCaptionState,
   markRaidCaptionShown,
   nextRaidCaption,
@@ -193,6 +195,8 @@ import {
   rallyTargetsEnemyEntrance,
   resetRaidCaptionState,
 } from './raid-captions.js';
+import { activeRaidOrder, raidOrderCaption, raidOrderOfRally } from './raid-order-view.js';
+import { TILE_SIZE_PX } from './sprites.js';
 import {
   createRampageCaptionState,
   offerOwedRampageCaption,
@@ -380,6 +384,21 @@ declare global {
         raidTrips: number;
         foodTotalFp: number;
       } | null;
+      /** #352 — the player colony's rally and the raid type stored with it,
+       *  read-only. Null before the first boot. */
+      getPlayerRaidOrder?(): {
+        raidType: number;
+        rally: { tileX: number; tileY: number } | null;
+      } | null;
+      /** #352 — centre the surface camera on surface tile (tileX, tileY) and return
+       *  where that tile's centre now lands on the canvas (logical px), so a spec
+       *  can right-click a real entrance. View state only (no sim write); null
+       *  unless the surface view is up. Dev-build only. */
+      surfaceTileScreenPoint?(tileX: number, tileY: number): { x: number; y: number } | null;
+      /** #352 — the enemy colony's entrance tiles (read-only). */
+      getEnemyEntrances?(): Array<{ tileX: number; tileY: number; isOpen: boolean }>;
+      /** #352 — the context menu's state (visible, which menu, its top-left). */
+      getContextMenu?(): { visible: boolean; kind: string; screenX: number; screenY: number };
     };
   }
 }
@@ -659,6 +678,39 @@ export class GameScene extends Phaser.Scene {
           foodTotalFp: colonyFoodTotal(this.world, c),
         };
       },
+      getPlayerRaidOrder: () => {
+        const c = this.world?.colonies[PLAYER_COLONY_ID];
+        if (c === undefined) return null;
+        return {
+          raidType: c.raidType,
+          rally: c.rallyPoint === null ? null : { ...c.rallyPoint },
+        };
+      },
+      surfaceTileScreenPoint: (tileX: number, tileY: number) => {
+        if (this.viewState.activeView !== 'surface') return null;
+        const cam = this.viewState.surfaceCamera;
+        cam.centerX = tileX * TILE_SIZE_PX + TILE_SIZE_PX / 2;
+        cam.centerY = tileY * TILE_SIZE_PX + TILE_SIZE_PX / 2;
+        clampCameraView(cam, SURFACE_WORLD_PX_W, SURFACE_WORLD_PX_H);
+        const p = worldToScreen(
+          tileX * TILE_SIZE_PX + TILE_SIZE_PX / 2,
+          tileY * TILE_SIZE_PX + TILE_SIZE_PX / 2,
+          cam,
+        );
+        return { x: Math.round(p.screenX), y: Math.round(p.screenY) };
+      },
+      getEnemyEntrances: () =>
+        (this.world?.colonies[ENEMY_COLONY_ID]?.entrances ?? []).map((e) => ({
+          tileX: e.surfaceTileX,
+          tileY: e.surfaceTileY,
+          isOpen: e.isOpen,
+        })),
+      getContextMenu: () => ({
+        visible: contextMenuState.visible,
+        kind: contextMenuState.kind,
+        screenX: contextMenuState.screenX,
+        screenY: contextMenuState.screenY,
+      }),
       getHudButtonGeometry: (): HudButtonGeometry[] =>
         this.getUIScene()?.hudButtonGeometry?.() ?? [],
       sampleArea: (x: number, y: number, w: number, h: number): Promise<number[]> => {
@@ -1631,7 +1683,12 @@ export class GameScene extends Phaser.Scene {
     if (
       raidCaption !== null &&
       uiScene &&
-      offerRecurringCaption(uiScene, RAID_CAPTION_TEXTS[raidCaption], this.layout.w / 2, 60)
+      offerRecurringCaption(
+        uiScene,
+        raidCaptionText(raidCaption, activeRaidOrder(this.world, PLAYER_COLONY_ID)),
+        this.layout.w / 2,
+        60,
+      )
     ) {
       markRaidCaptionShown(this.raidCaptions, this.world, raidCaption);
     }
@@ -1904,7 +1961,13 @@ export class GameScene extends Phaser.Scene {
         // on an enemy's open entrance sends the fighters in to raid; it has its own
         // one-shot key, so it shows even after the generic rally caption has.
         const rally = finalRallyInBatch(cmds, PLAYER_COLONY_ID);
-        if (rally !== null) {
+        // #352 (V60): a rally on an enemy entrance is a raid order; its caption
+        // names the order ("Raiding: Deny. …") every time one is given.
+        const order = rally === null ? null : raidOrderOfRally(this.world, PLAYER_COLONY_ID, rally);
+        if (order !== null) {
+          if (uiScene)
+            uiScene.showCaption(raidOrderCaption(order), this.layout.w / 2, this.layout.h - 80);
+        } else if (rally !== null) {
           const key: CaptionKey = rallyTargetsEnemyEntrance(
             this.world,
             PLAYER_COLONY_ID,
@@ -2834,7 +2897,8 @@ export class GameScene extends Phaser.Scene {
    * the Queen option. Returns null when no menu is up / no item is highlighted.
    */
   private computeChamberHover(projected: WorldState): HoveredFeedforward | null {
-    if (!contextMenuState.visible) return null;
+    // #352: the raid menu (surface) places no chamber.
+    if (!contextMenuState.visible || contextMenuState.kind !== 'chamber') return null;
     if (this.world === undefined) return null;
     if (this.hoverScreenX === null || this.hoverScreenY === null) return null;
     const colony = projected.colonies[PLAYER_COLONY_ID];

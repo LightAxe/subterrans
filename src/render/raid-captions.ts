@@ -10,7 +10,10 @@
 //   - `looting`  the player colony's `foodRaidedFp` rose: one of its fighters
 //                picked up a load in an enemy nest;
 //   - `hauled`   the player colony's `raidTrips` rose: a hauler put its load
-//                into the player's stores.
+//                into the player's stores (or, #352 Deny, left it by its door);
+//   - `spoiling` (#352) the player is giving a Spoil order and another colony's
+//                `foodLostToRaidsFp` rose: its fighters destroyed a load.
+// A Deny raid's news names the order (raidCaptionText).
 //
 // Each is recurring but throttled: after it shows, the same caption stays quiet
 // for RAID_CAPTION_COOLDOWN_TICKS of game time, so a raid loop does not repeat
@@ -22,7 +25,9 @@
 // Also the rally copy: `rallyTargetsEnemyEntrance` tells GameScene a player
 // SetRallyPoint is on an enemy's open entrance (in a world that raids), which
 // then shows the one-shot 'rallyRaid' caption (onboarding-captions.ts: the
-// fighters will raid the larder) instead of the generic 'rally' one.
+// fighters will raid the larder) instead of the generic 'rally' one. From V60
+// (#352) a rally on an enemy entrance is a raid order instead, and GameScene
+// shows its caption, naming the order, every time (raid-order-view.ts).
 //
 // Pure + Phaser-free: reads WorldState, mutates only its own RaidCaptionState.
 // GameScene owns one per session, re-baselines it on boot/load (so a loaded
@@ -32,14 +37,30 @@ import type { WorldState } from '../sim/types.js';
 import { SIM_VERSION_V52_RAIDING } from '../sim/types.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import type { SetRallyPointCommand, SimCommand } from '../sim/commands.js';
+import { RaidType } from '../sim/enums.js';
+import { activeRaidOrder } from './raid-order-view.js';
 
-export type RaidCaptionKind = 'raided' | 'looting' | 'hauled';
+export type RaidCaptionKind = 'raided' | 'looting' | 'hauled' | 'spoiling';
 
 export const RAID_CAPTION_TEXTS: Record<RaidCaptionKind, string> = {
   raided: 'Raiders are stealing from your larder!',
   looting: 'Your fighters are raiding the enemy larder.',
   hauled: 'Your raiders hauled stolen food home.',
+  spoiling: 'Raiding: Spoil. Your fighters are destroying the enemy’s food.',
 };
+
+/**
+ * #352 — the text for `kind` under the raid order the colony is giving (null: no
+ * raid order, or a pre-V60 world). A Deny raid's news names it; Loot keeps the
+ * plain #290 wording, and 'spoiling' only ever fires under Spoil.
+ */
+export function raidCaptionText(kind: RaidCaptionKind, order: RaidType | null): string {
+  if (order === RaidType.Deny) {
+    if (kind === 'looting') return 'Raiding: Deny. Your fighters are taking the enemy’s food.';
+    if (kind === 'hauled') return 'Raiding: Deny. Your raiders brought stolen food home.';
+  }
+  return RAID_CAPTION_TEXTS[kind];
+}
 
 /** 60 s of game time (20 Hz) between two showings of the same raid caption. */
 export const RAID_CAPTION_COOLDOWN_TICKS = 1200;
@@ -51,13 +72,15 @@ export const RAID_CAPTION_COOLDOWN_TICKS = 1200;
 export const RAID_CAPTION_OWED_TICKS = 200;
 
 /** Checked in this order: being raided outranks your own raid news. */
-const RAID_CAPTION_KINDS: readonly RaidCaptionKind[] = ['raided', 'looting', 'hauled'];
+const RAID_CAPTION_KINDS: readonly RaidCaptionKind[] = ['raided', 'looting', 'hauled', 'spoiling'];
 
 export interface RaidCaptionState {
   /** Last-seen counter values for the watched colony. */
   lostFp: number;
   raidedFp: number;
   trips: number;
+  /** #352 — food (fp) the OTHER colonies have lost to raids (a Spoil destroys it). */
+  othersLostFp: number;
   /** world.tick at which each caption last showed (-Infinity: never). */
   lastShownTick: Record<RaidCaptionKind, number>;
   /** world.tick of a counter rise not yet shown (-Infinity: none owed). */
@@ -69,8 +92,19 @@ export function createRaidCaptionState(): RaidCaptionState {
     lostFp: 0,
     raidedFp: 0,
     trips: 0,
-    lastShownTick: { raided: -Infinity, looting: -Infinity, hauled: -Infinity },
-    owedSinceTick: { raided: -Infinity, looting: -Infinity, hauled: -Infinity },
+    othersLostFp: 0,
+    lastShownTick: {
+      raided: -Infinity,
+      looting: -Infinity,
+      hauled: -Infinity,
+      spoiling: -Infinity,
+    },
+    owedSinceTick: {
+      raided: -Infinity,
+      looting: -Infinity,
+      hauled: -Infinity,
+      spoiling: -Infinity,
+    },
   };
 }
 
@@ -87,6 +121,7 @@ export function resetRaidCaptionState(
   state.lostFp = c?.foodLostToRaidsFp ?? 0;
   state.raidedFp = c?.foodRaidedFp ?? 0;
   state.trips = c?.raidTrips ?? 0;
+  state.othersLostFp = othersLostToRaids(world, colonyId);
   for (const kind of RAID_CAPTION_KINDS) {
     state.lastShownTick[kind] = -Infinity;
     state.owedSinceTick[kind] = -Infinity;
@@ -117,9 +152,15 @@ export function nextRaidCaption(
   if (c.foodLostToRaidsFp > state.lostFp) owe(state, world, 'raided');
   if (c.foodRaidedFp > state.raidedFp) owe(state, world, 'looting');
   if (c.raidTrips > state.trips) owe(state, world, 'hauled');
+  // #352: a Spoil moves no food home, so it shows as the other colonies' loss.
+  const othersLost = othersLostToRaids(world, colonyId);
+  if (othersLost > state.othersLostFp && activeRaidOrder(world, colonyId) === RaidType.Spoil) {
+    owe(state, world, 'spoiling');
+  }
   state.lostFp = c.foodLostToRaidsFp;
   state.raidedFp = c.foodRaidedFp;
   state.trips = c.raidTrips;
+  state.othersLostFp = othersLost;
   for (const kind of RAID_CAPTION_KINDS) {
     const since = state.owedSinceTick[kind];
     if (since === -Infinity) continue;
@@ -130,6 +171,16 @@ export function nextRaidCaption(
     return kind;
   }
   return null;
+}
+
+/** #352 — the food (fp) every colony but `colonyId` has lost to raids. */
+function othersLostToRaids(world: WorldState, colonyId: ColonyId): number {
+  let sum = 0;
+  for (const key of Object.keys(world.colonies)) {
+    const other = world.colonies[Number(key)];
+    if (other !== undefined && other.colonyId !== colonyId) sum += other.foodLostToRaidsFp;
+  }
+  return sum;
 }
 
 /** A rise of `kind`'s counter: owe the caption unless it is cooling down. */

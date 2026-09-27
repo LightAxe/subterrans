@@ -263,7 +263,10 @@ import {
   drawContextMenuGeometry,
   visibleContextMenuItems,
   type ContextMenuItem,
+  type ContextMenuRow,
 } from './context-menu-layout.js';
+import { RAID_ORDER_OPTIONS, activeRaidOrder, raidMenuItemAt } from './raid-order-view.js';
+import { handleSetRallyPoint } from '../input/surface-input.js';
 import {
   computeHudStats,
   formatAntsLabel,
@@ -610,6 +613,8 @@ export class UIScene extends Phaser.Scene {
   // BEFORE the next update frame) uses the same filtered list the player saw.
   // Updated at the end of each update() when the menu is visible.
   private contextMenuVisibleItems: readonly ContextMenuItem[] = CONTEXT_MENU_ITEMS;
+  /** #352 — the raid menu's row labels (one per raid order), created once. */
+  private raidMenuLabels!: Phaser.GameObjects.Text[];
   private antActivityText!: Phaser.GameObjects.Text;
   private dragState!: SliderDragState;
 
@@ -869,6 +874,19 @@ export class UIScene extends Phaser.Scene {
       return t;
     });
 
+    // #352 — the raid menu's labels, one per raid order, in RAID_ORDER_OPTIONS order.
+    this.raidMenuLabels = RAID_ORDER_OPTIONS.map((option) => {
+      const t = this.add.text(0, 0, option.label, {
+        color: '#ffffff',
+        fontSize: '13px',
+        fontFamily: 'monospace',
+      });
+      t.setScrollFactor(0);
+      t.setVisible(false);
+      t.setDepth(10);
+      return t;
+    });
+
     // Ant-activity popup body — single multi-line Text widget anchored to the
     // top-left of the ant-activity panel rect. Created once, shown/hidden and
     // retargeted per frame in update() based on antActivityPanelState.visible.
@@ -1038,9 +1056,15 @@ export class UIScene extends Phaser.Scene {
             pointer.y,
             contextMenuState.screenX,
             contextMenuState.screenY,
-            items,
+            this.contextMenuRows(),
           )
         ) {
+          // #352 — a raid order: rally on the menu's enemy entrance with that type.
+          if (contextMenuState.kind === 'raid') {
+            this.dispatchRaidMenuClick(pointer.x, pointer.y);
+            requestHideContextMenu();
+            return;
+          }
           const choice = contextMenuItemAt(
             pointer.x,
             pointer.y,
@@ -1406,7 +1430,9 @@ export class UIScene extends Phaser.Scene {
     // from the underground view (via Tab key, toggle button, or minimap click).
     // The menu only makes sense while underground; leaving it visible on the
     // surface view would be a stale artifact.
-    if (contextMenuState.visible && this.viewState.activeView !== 'underground') {
+    // #352 — likewise the surface raid menu when the player goes underground.
+    const menuView = contextMenuState.kind === 'raid' ? 'surface' : 'underground';
+    if (contextMenuState.visible && this.viewState.activeView !== menuView) {
       hideContextMenu();
     }
 
@@ -1642,7 +1668,30 @@ export class UIScene extends Phaser.Scene {
     // the live `colonies[PLAYER_COLONY_ID]` shape and is guarded the same way.
     const projWorld = this.getProjectedWorld();
     const projColony = projWorld.colonies[PLAYER_COLONY_ID];
-    if (contextMenuState.visible && projColony) {
+    for (const label of this.raidMenuLabels) label.setVisible(false);
+    if (contextMenuState.visible && contextMenuState.kind === 'raid') {
+      // #352 — the raid menu: the five orders, the one in force on this entrance
+      // (in the PROJECTED world, so a queued pick shows while paused) outlined.
+      for (const label of this.contextMenuLabels) label.setVisible(false);
+      const rally = projColony?.rallyPoint ?? null;
+      const onThis =
+        rally !== null &&
+        rally.tileX === contextMenuState.anchorTileX &&
+        rally.tileY === contextMenuState.anchorTileY;
+      const current = onThis ? activeRaidOrder(projWorld, PLAYER_COLONY_ID) : null;
+      drawContextMenuGeometry(
+        this.contextMenuGfx as unknown as import('./draw-surface.js').GfxLike,
+        contextMenuState.screenX,
+        contextMenuState.screenY,
+        RAID_ORDER_OPTIONS,
+        current ?? -1,
+      );
+      for (let i = 0; i < this.raidMenuLabels.length; i++) {
+        const pos = itemLabelPos(i, contextMenuState.screenX, contextMenuState.screenY);
+        this.raidMenuLabels[i]!.setPosition(pos.x, pos.y);
+        this.raidMenuLabels[i]!.setVisible(true);
+      }
+    } else if (contextMenuState.visible && projColony) {
       const items = visibleContextMenuItems(projColony, projWorld);
       this.contextMenuVisibleItems = items;
       drawContextMenuGeometry(
@@ -1911,6 +1960,35 @@ export class UIScene extends Phaser.Scene {
     );
   }
 
+  /** #352 — the rows of the menu that is up: the raid orders, or the chamber
+   *  items last drawn. Hit tests and the tooltip guard read the same rows. */
+  private contextMenuRows(): readonly ContextMenuRow[] {
+    return contextMenuState.kind === 'raid' ? RAID_ORDER_OPTIONS : this.contextMenuVisibleItems;
+  }
+
+  /**
+   * #352 — a click on the raid menu: rally the player's fighters on the menu's
+   * enemy entrance with the order under the pointer (SetRallyPoint + raidType,
+   * through the input layer's enqueue and its paused cap). A one-shot command, so
+   * a drop at the cap shows the queue-full hint, as a chamber pick does.
+   */
+  private dispatchRaidMenuClick(px: number, py: number): void {
+    const world = this.getWorld();
+    if (!world) return;
+    const choice = raidMenuItemAt(px, py, contextMenuState.screenX, contextMenuState.screenY);
+    if (choice === null) return;
+    const paused = this.isPausedFn ? this.isPausedFn() : false;
+    const dropped = handleSetRallyPoint(
+      world,
+      contextMenuState.anchorTileX,
+      contextMenuState.anchorTileY,
+      PLAYER_COLONY_ID,
+      paused,
+      choice,
+    );
+    if (dropped) this.flashPausedQueueFull(paused);
+  }
+
   /** Per-move hover tracking that drives the tooltip show/hide timers. Called
    *  from the pointermove handler. */
   private updateTooltipHover(pointer: Phaser.Input.Pointer): void {
@@ -1928,7 +2006,7 @@ export class UIScene extends Phaser.Scene {
         pointer.y,
         contextMenuState.screenX,
         contextMenuState.screenY,
-        this.contextMenuVisibleItems,
+        this.contextMenuRows(),
       )
     ) {
       this.cancelTooltip();

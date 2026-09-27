@@ -47,7 +47,8 @@
 // refusal is silent throttling that catches up on the next move.
 //
 // Right-click is handled here too (tool-independent): underground Solid/Open →
-// chamber menu via tryOpenChamberMenu; surface RMB → no-op. Middle button is
+// chamber menu via tryOpenChamberMenu; surface RMB on an enemy entrance → the raid
+// menu via tryOpenRaidMenu (#352), elsewhere a no-op. Middle button is
 // reserved for registerDragPan's pan; the arbiter just cancels the left gesture
 // when any secondary button goes down so middle-pan can't run concurrently with
 // a pending left gesture.
@@ -76,7 +77,12 @@ import {
 } from '../sim/constants.js';
 import { panInputState } from './camera-input.js';
 import { classifyDragMode, hasCrossedDragThreshold, DRAG_THRESHOLD_PX } from './gesture.js';
-import { handleSurfaceCommandTap, handleSurfaceDigTap, isSpiderHit } from './surface-input.js';
+import {
+  handleSurfaceCommandTap,
+  handleSurfaceDigTap,
+  isSpiderHit,
+  tryOpenRaidMenu,
+} from './surface-input.js';
 import {
   handleUndergroundCommandTap,
   handleUndergroundDigTap,
@@ -1045,10 +1051,12 @@ export class GestureArbiter {
   private tryContextMenuAt(x: number, y: number, tileX: number, tileY: number): boolean {
     if (!this.deps.canEditWorld()) return false;
     const vs = this.deps.viewState;
-    if (vs.activeView !== 'underground') return false; // surface has no chamber menu
     if (this.deps.isPointerOverHUD(x, y)) return false;
     const world = this.deps.getWorld();
     if (!world) return false;
+    // #352: on the surface, an enemy entrance opens the raid menu.
+    if (vs.activeView === 'surface') return tryOpenRaidMenu(world, vs, x, y, tileX, tileY);
+    if (vs.activeView !== 'underground') return false;
     return tryOpenChamberMenu(world, this.deps.getProjectedWorld(), vs, x, y, tileX, tileY);
   }
 

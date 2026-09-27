@@ -2,7 +2,9 @@
 //
 // Shared state between UIScene (renderer) and underground-input (trigger).
 // underground-input calls requestShowContextMenu() when the player right-clicks
-// an Open tunnel-end; UIScene reads the state each frame to draw the menu.
+// an Open tunnel-end, and (#352) surface-input when the player right-clicks or
+// long-presses an enemy entrance (the raid menu, kind 'raid'); UIScene reads the
+// state each frame to draw the menu.
 //
 // Deferred show AND hide: UIScene and underground-input both register pointerdown
 // handlers in Phaser. The firing order across scenes is not guaranteed, so
@@ -24,8 +26,16 @@
 //
 // Tests use `hideContextMenu()` for immediate synchronous reset between cases.
 
+/**
+ * #352 — which menu is up: the underground chamber menu, or the surface raid
+ * menu (the five raid orders on an enemy entrance). Set with the anchor by
+ * requestShowContextMenu; both share this one state, so only one menu is ever up.
+ */
+export type ContextMenuKind = 'chamber' | 'raid';
+
 export interface ContextMenuState {
   visible: boolean;
+  kind: ContextMenuKind;
   screenX: number;
   screenY: number;
   anchorTileX: number;
@@ -38,6 +48,7 @@ export interface ContextMenuState {
 
 export const contextMenuState: ContextMenuState = {
   visible: false,
+  kind: 'chamber',
   screenX: 0,
   screenY: 0,
   anchorTileX: 0,
@@ -83,7 +94,9 @@ export function requestShowContextMenu(
   screenY: number,
   anchorTileX: number,
   anchorTileY: number,
+  kind: ContextMenuKind = 'chamber',
 ): void {
+  contextMenuState.kind = kind;
   contextMenuState.screenX = screenX;
   contextMenuState.screenY = screenY;
   contextMenuState.anchorTileX = anchorTileX;

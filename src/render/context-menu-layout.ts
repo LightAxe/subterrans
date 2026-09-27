@@ -38,11 +38,18 @@ export const CONTEXT_MENU = {
 export const CONTEXT_MENU_HEIGHT = CONTEXT_MENU.ITEM_HEIGHT * CONTEXT_MENU.ITEM_COUNT;
 
 /** Actual rendered height for a specific visible-items list. */
-export function contextMenuHeight(items: readonly ContextMenuItem[]): number {
+export function contextMenuHeight(items: readonly ContextMenuRow[]): number {
   return CONTEXT_MENU.ITEM_HEIGHT * items.length;
 }
 
-export interface ContextMenuItem {
+/** #352 — what the menu geometry needs of a row: the chamber menu's items and
+ *  the surface raid menu's orders (raid-order-view.ts) share it. */
+export interface ContextMenuRow {
+  readonly label: string;
+  readonly stripeColor: number;
+}
+
+export interface ContextMenuItem extends ContextMenuRow {
   chamberType: ChamberType;
   label: string;
   stripeColor: number;
@@ -120,7 +127,7 @@ export function isInsideContextMenu(
   py: number,
   anchorX: number,
   anchorY: number,
-  items: readonly ContextMenuItem[] = CONTEXT_MENU_ITEMS,
+  items: readonly ContextMenuRow[] = CONTEXT_MENU_ITEMS,
 ): boolean {
   return (
     px >= anchorX &&
@@ -156,7 +163,9 @@ export function drawContextMenuGeometry(
   gfx: GfxLike,
   anchorX: number,
   anchorY: number,
-  items: readonly ContextMenuItem[] = CONTEXT_MENU_ITEMS,
+  items: readonly ContextMenuRow[] = CONTEXT_MENU_ITEMS,
+  /** #352 — row index to outline (the raid menu's current order), or -1. */
+  selected = -1,
 ): void {
   const h = contextMenuHeight(items);
   gfx.fillStyle(0x222222, 0.95);
@@ -170,5 +179,14 @@ export function drawContextMenuGeometry(
       CONTEXT_MENU.WIDTH - 4,
       CONTEXT_MENU.ITEM_HEIGHT - 4,
     );
+  }
+  if (selected >= 0 && selected < items.length) {
+    // A 1-px light frame round the selected row, inside the row's 2-px gutter.
+    const y = anchorY + selected * CONTEXT_MENU.ITEM_HEIGHT;
+    gfx.fillStyle(0xdddddd, 1);
+    gfx.fillRect(anchorX + 1, y + 1, CONTEXT_MENU.WIDTH - 2, 1);
+    gfx.fillRect(anchorX + 1, y + CONTEXT_MENU.ITEM_HEIGHT - 2, CONTEXT_MENU.WIDTH - 2, 1);
+    gfx.fillRect(anchorX + 1, y + 1, 1, CONTEXT_MENU.ITEM_HEIGHT - 2);
+    gfx.fillRect(anchorX + CONTEXT_MENU.WIDTH - 2, y + 1, 1, CONTEXT_MENU.ITEM_HEIGHT - 2);
   }
 }
