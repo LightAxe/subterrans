@@ -952,7 +952,7 @@ export function idleWalksHome(
   if (ants.task[id] !== AntTask.Idle || ants.zone[id] !== ZONE_SURFACE) return false;
   if (ants.fleeShelterUntilTick[id] !== -1 || ants.targetPosX[id] === -1) return false;
   const colonyId = ants.colonyId[id]!;
-  const colony = world.colonies[colonyId as ColonyId];
+  const colony = world.colonies[colonyId];
   if (colony === undefined || colony.alarmActive === true) return false;
   const reticle = world.scatterReticleTile;
   if (reticle !== null) {
