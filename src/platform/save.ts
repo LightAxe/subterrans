@@ -2061,18 +2061,6 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     difficulty: s.difficulty === 'Easy' || s.difficulty === 'Hard' ? s.difficulty : 'Normal',
   };
 
-  // PR 4 — re-run the FULL connectivity check against the assembled world: every
-  // saved food pile and every saved entrance must sit in the single connected
-  // walkable component of the baked grid (not just the roots — R3-8/R5-2). A
-  // corrupt/old map fails loudly here rather than loading a broken world.
-  // #288 / #290 PR 2 — the hunger clock of every ant that eats (a live queen or
-  // larva; from V51 every live worker too, #290 PR 4) lies in
-  // [tick − starve-after, tick − 1] between ticks: it ate at most starve-after − 1
-  // ticks ago (else it would be dead) and not in the future. Outside that window
-  // the ant would never eat again, or never starve. (A worker's kind is read from
-  // its task at the check, so one stood down from Fighting since its last meal
-  // may be past its current kind's starve-after until step 3 next runs: the
-  // window uses the larger of the two.)
   // #290 PR 5 — the raid sub-states Looting (4) and Hauling (5) exist from V52
   // only, and only on a fighter. (The column check above admits up to 5.)
   const raidSubStates = world.simVersion >= SIM_VERSION_V52_RAIDING;
@@ -2086,6 +2074,18 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     }
   }
 
+  // PR 4 — re-run the FULL connectivity check against the assembled world: every
+  // saved food pile and every saved entrance must sit in the single connected
+  // walkable component of the baked grid (not just the roots — R3-8/R5-2). A
+  // corrupt/old map fails loudly here rather than loading a broken world.
+  // #288 / #290 PR 2 — the hunger clock of every ant that eats (a live queen or
+  // larva; from V51 every live worker too, #290 PR 4) lies in
+  // [tick − starve-after, tick − 1] between ticks: it ate at most starve-after − 1
+  // ticks ago (else it would be dead) and not in the future. Outside that window
+  // the ant would never eat again, or never starve. (A worker's kind is read from
+  // its task at the check, so one stood down from Fighting since its last meal
+  // may be past its current kind's starve-after until step 3 next runs: the
+  // window uses the larger of the two.)
   const workersEat = world.simVersion >= SIM_VERSION_V51_UNIFIED_HUNGER;
   const workerStarveAfter = Math.max(
     WORKER_HUNGER.starveAfterTicks,

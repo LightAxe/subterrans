@@ -588,7 +588,9 @@ function runSeed(seed: number): SeedResult {
     }
 
     const aiRec = getAIStateForColony(world, ENEMY_COLONY_ID);
-    if (res.matchEndTick === null) {
+    // Up to and including the terminal tick: an invasion entered on the tick the
+    // match ends still counts (matchEndTick was set just above for that tick).
+    if (res.matchEndTick === null || res.matchEndTick === world.tick) {
       if (aiRec !== null) {
         if (aiRec.state === 'Invading' && prevEnemyState !== 'Invading') res.enemyInvasions += 1;
         prevEnemyState = aiRec.state;
