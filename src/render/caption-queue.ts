@@ -51,10 +51,12 @@ export function createCaptionQueueState(): CaptionQueueState {
 }
 
 /**
- * #290 PR 6: may recurring news (raid captions) enter the queue now? Only when
- * the queue is fully idle. Taking the single pending slot behind an active
- * caption would make an arriving one-shot event (rally, queen damage, invasion)
- * overflow and be dropped for good, so recurring news waits instead.
+ * #290 PR 6 / #350: may a recurring caption (raid news, the spider-rampage
+ * warning) enter the queue now? Only when the queue is fully idle. Taking the
+ * single pending slot behind an active caption would make an arriving one-shot
+ * event (rally, queen damage, invasion) overflow and be dropped for good, so
+ * recurring news waits instead (callers go
+ * through recurring-captions.ts offerRecurringCaption).
  */
 export function recurringCaptionMayEnter(state: CaptionQueueState): boolean {
   return state.active === null && state.pending === null;

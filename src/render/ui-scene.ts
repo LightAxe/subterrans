@@ -1876,9 +1876,9 @@ export class UIScene extends Phaser.Scene {
     this.captionsShownLog = [];
   }
 
-  /** #290 PR 6 — true while nothing is showing and nothing is pending, so a
-   *  recurring caption (raid news) waits instead of taking the slot a one-shot
-   *  caption would need. */
+  /** #290 PR 6 / #350 — true while nothing is showing and nothing is pending, so
+   *  a recurring caption (raid news, the spider-rampage warning) waits instead
+   *  of taking the slot a one-shot caption would need. */
   captionQueueIdle(): boolean {
     return recurringCaptionMayEnter(this.captionState);
   }
