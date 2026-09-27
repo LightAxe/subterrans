@@ -52,11 +52,7 @@ import {
   setColonyFoodForTest,
   type TestChamber,
 } from './food-test-utils.js';
-import {
-  createWorldState,
-  SIM_VERSION_V36_RISK_AWARE_FORAGING,
-  SIM_VERSION_V37_CORPSE_FOOD,
-} from '../types.js';
+import { createWorldState } from '../types.js';
 import type { WorldState } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import type { ChamberRecord, ColonyId, ColonyRecord } from '../colony/colony-store.js';
@@ -455,22 +451,21 @@ describe('food-api — piles', () => {
     expect(order()).toEqual([82, 83]);
   });
 
-  it('recordFoodPileDepletion: V37+ corpse piles skip the barren cooldown; the log is capped', () => {
+  it('recordFoodPileDepletion: corpse piles skip the barren cooldown; the log is capped', () => {
     const { world, tiles } = emptyPileWorld(2);
-    world.simVersion = SIM_VERSION_V37_CORPSE_FOOD;
     const s = spawnPile(world, 90, tiles[0]!.x, tiles[0]!.y, P, FOOD_FLAG_CORPSE);
+    const natural = spawnPile(world, 91, tiles[1]!.x, tiles[1]!.y, P, 0);
     const n = world.recentlyDepletedFood.length;
     recordFoodPileDepletion(world, s);
     expect(world.recentlyDepletedFood.length).toBe(n);
-    world.simVersion = SIM_VERSION_V36_RISK_AWARE_FORAGING; // pre-V37 always records
-    recordFoodPileDepletion(world, s);
+    recordFoodPileDepletion(world, natural);
     expect(world.recentlyDepletedFood.length).toBe(n + 1);
     // Append-time cap: the oldest entry is dropped.
     world.recentlyDepletedFood.length = 0;
     for (let i = 0; i < FOOD_PILE_SOFT_CEILING; i++) {
       world.recentlyDepletedFood.push({ tick: i, tileX: 0, tileY: 0 });
     }
-    recordFoodPileDepletion(world, s);
+    recordFoodPileDepletion(world, natural);
     expect(world.recentlyDepletedFood.length).toBe(FOOD_PILE_SOFT_CEILING);
     expect(world.recentlyDepletedFood[0]!.tick).toBe(1);
     // A slot that holds no pile (free, a pool, or out of range) is a no-op.

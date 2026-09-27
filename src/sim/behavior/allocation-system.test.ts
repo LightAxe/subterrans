@@ -19,13 +19,6 @@
 import { describe, it, expect } from 'vitest';
 import { computeNurseCount, allocateWorkers } from './allocation-system.js';
 import { NURSE_MIN_WORKERS } from '../constants.js';
-import { nurseMinWorkersFor } from '../colony/colony-system.js';
-import {
-  createWorldState,
-  LATEST_SIM_VERSION,
-  SIM_VERSION_V39_SPIDER_TIEBREAK,
-  SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
-} from '../types.js';
 
 // ---------------------------------------------------------------------------
 // computeNurseCount
@@ -303,7 +296,7 @@ describe('allocateWorkers — sum invariant', () => {
 // ---------------------------------------------------------------------------
 
 describe('computeNurseCount — V40 living-worker floor', () => {
-  const FLOOR = NURSE_MIN_WORKERS; // 3 at V40+; call sites pass 0 pre-V40
+  const FLOOR = NURSE_MIN_WORKERS; // what the sim call sites pass
 
   it('1 worker, heavy brood: legacy (floor 0) carves the only worker out; V40 floor returns 0', () => {
     expect(computeNurseCount(6, 1, true)).toBe(1);
@@ -364,14 +357,5 @@ describe('allocateWorkers — V40 living-worker floor threads through', () => {
     expect(allocateWorkers(3, 6, { forage: 7, fight: 3 }, true, FLOOR)).toEqual(
       allocateWorkers(3, 6, { forage: 7, fight: 3 }, true),
     );
-  });
-
-  it('nurseMinWorkersFor: 0 below V40, NURSE_MIN_WORKERS at V40+', () => {
-    const world = createWorldState(1);
-    world.simVersion = SIM_VERSION_V39_SPIDER_TIEBREAK;
-    expect(nurseMinWorkersFor(world)).toBe(0);
-    world.simVersion = SIM_VERSION_V40_SMALL_COLONY_SURVIVAL;
-    expect(nurseMinWorkersFor(world)).toBe(NURSE_MIN_WORKERS);
-    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL);
   });
 });

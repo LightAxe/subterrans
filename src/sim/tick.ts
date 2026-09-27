@@ -1,11 +1,6 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import {
-  allocateEntityId,
-  INVALID_ENTITY_ID,
-  SIM_VERSION_V32_AI_OP_VALIDATION,
-  SIM_VERSION_V42_COLONY_ALARM,
-} from './types.js';
+import { allocateEntityId, INVALID_ENTITY_ID } from './types.js';
 import { tickSpider } from './spider.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath, checkTiebreaks } from './game-over.js';
@@ -34,6 +29,7 @@ import {
   SPIDER_SCATTER_RADIUS_TILES,
   PLAYER_COLONY_ID,
   SURFACE_ROOT_CLEARANCE_RADIUS,
+  NURSE_MIN_WORKERS,
 } from './constants.js';
 import { isSurfaceTileInComponent, ensureSurfaceComponentMask } from './surface-features.js';
 import { FP_SHIFT, FP_ONE } from './fixed.js';
@@ -47,7 +43,6 @@ import {
   checkPendingChambers,
   checkEntranceCompletion,
   hasCompletedChamber,
-  nurseMinWorkersFor,
 } from './colony/colony-system.js';
 import {
   colonyFoodTotal,
@@ -396,7 +391,7 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
           brood0,
           colony.targetRatio,
           hasNursery0,
-          nurseMinWorkersFor(world),
+          NURSE_MIN_WORKERS,
         );
         colony.computedAllocation.nurse = alloc0.nurse;
         colony.computedAllocation.forage = alloc0.forage;
@@ -847,10 +842,7 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         if (!Array.isArray(cmd.fighterIds) || cmd.fighterIds.length === 0) break;
         // Invasion cohorts < 3 fighters trigger immediate rout on first tick; reject them.
         if (cmd.kind === 'Invasion' && cmd.fighterIds.length < 3) break;
-        // V32 (#226): validate against the colony's current AI state. ALL gated so
-        // pre-V32 replays keep their exact apply — a malformed kind is coerced to the
-        // Invasion branch by setAIRallyOperation there, and dropping it ungated would
-        // break byte-identical replay of accepted old saves. At V32+: reject a
+        // V32 (#226): validate against the colony's current AI state. Reject a
         // malformed kind before the state ternary can mis-route it, then require the
         // legal source state — Probe launches only from WarFooting, Invasion
         // cohort-commit only while already Invading (advanceAIState performs
@@ -859,13 +851,11 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         // invalid-command semantics). No legit-command-rejection race: applyCommands
         // runs at step 1, before advanceAIState (step 18b), so the apply-time state
         // is exactly what the emitter read.
-        if (world.simVersion >= SIM_VERSION_V32_AI_OP_VALIDATION) {
-          if (cmd.kind !== 'Probe' && cmd.kind !== 'Invasion') break;
-          const aiStateForCmd = getAIStateForColony(world, cmd.colonyId);
-          if (aiStateForCmd === null) break;
-          const legalSource = cmd.kind === 'Probe' ? 'WarFooting' : 'Invading';
-          if (aiStateForCmd.state !== legalSource) break;
-        }
+        if (cmd.kind !== 'Probe' && cmd.kind !== 'Invasion') break;
+        const aiStateForCmd = getAIStateForColony(world, cmd.colonyId);
+        if (aiStateForCmd === null) break;
+        const legalSource = cmd.kind === 'Probe' ? 'WarFooting' : 'Invading';
+        if (aiStateForCmd.state !== legalSource) break;
         setAIRallyOperation(
           world,
           cmd.colonyId,
@@ -889,10 +879,6 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         break;
       }
       case 'SetColonyAlarm': {
-        // C1 (V42) — gate the WRITE, not just the reads: a pre-V42 world must not
-        // be able to carry a true `alarmActive` at all, so a replay pinned below
-        // V42 stays byte-identical even if a newer inputLog is fed to it.
-        if (world.simVersion < SIM_VERSION_V42_COLONY_ALARM) break;
         // Validate payload — save/replay objects are not schema-checked upstream.
         if (typeof cmd.active !== 'boolean') break;
         if (!Number.isInteger(cmd.colonyId) || cmd.colonyId <= 0) break;
@@ -971,7 +957,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       brood8,
       colony.targetRatio,
       hasNursery8,
-      nurseMinWorkersFor(world),
+      NURSE_MIN_WORKERS,
     );
     colony.computedAllocation.nurse = alloc8.nurse;
     colony.computedAllocation.forage = alloc8.forage;
@@ -991,10 +977,8 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // V40 (#299): the living-worker floor has zeroed the nurse count — release the
     // nurses already in Attending / on their way (a carrier deposits first) so they
     // are Idle for step 10a THIS tick instead of dwelling for up to
-    // NURSE_ATTEND_DWELL_TICKS while the queen starves. `nurseMinWorkersFor` is 0
-    // below V40, so `workerCount < 0` never holds there: pre-V40 worlds keep their
-    // nurses, tick order and PRNG draws unchanged.
-    if (colony.workerCount < nurseMinWorkersFor(world)) {
+    // NURSE_ATTEND_DWELL_TICKS while the queen starves.
+    if (colony.workerCount < NURSE_MIN_WORKERS) {
       if (colony.computedAllocation.nurse === 0) releaseExcessNurses(world, colony);
       // Same floor, same tick: fighters the ratio no longer asks for stand down
       // (nothing else in the sim ever demotes a Fighting ant), so a collapsed
@@ -1342,8 +1326,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     //     that PUT an ant into AntTask.Idle — NOT sub-state predicates against the current task.
     //     AntTask.Fighting not eligible in Phase 6 — no combat resolution yet (Phase 9 scope).
     // C1 (V42) — read once: while the alarm sounds this colony reassigns nobody.
-    const alarmRecallActive =
-      world.simVersion >= SIM_VERSION_V42_COLONY_ALARM && colony.alarmActive === true;
+    const alarmRecallActive = colony.alarmActive === true;
     const eligible = getScratch(world).tickIdle;
     eligible.length = 0;
     for (let i = 0; i < colony.workers.length; i++) {

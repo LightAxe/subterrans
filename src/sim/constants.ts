@@ -470,8 +470,8 @@ export const NURSE_RATIO = 3;
  * the ceil(workers/4) cap otherwise makes the ONLY worker of a 1-worker colony (or
  * one of two) a nurse the moment brood >= NURSE_RATIO, and nursing only accelerates
  * larvae that a starving queen cannot feed — traced on the #297 AI-economy seeds
- * (Hard 12 and 20: the last worker nursed while the queen starved). Applied at
- * simVersion >= V40 via the call sites in tick.ts / colony-system.ts; pre-V40 passes 0.
+ * (Hard 12 and 20: the last worker nursed while the queen starved). Passed to
+ * allocateWorkers by the call sites in tick.ts / colony-system.ts (V40).
  */
 export const NURSE_MIN_WORKERS = 3;
 
@@ -700,12 +700,12 @@ export const FOOD_PILE_HARD_CAP = FOOD_PILE_COUNT * 4;
 /**
  * A2 — corpse-food yields (pickup-charges), by victim kind. Fixed constants,
  * NEVER RNG-drawn: this is the single most important determinism property of
- * battlefield scavenging — a drop advances only the entity-ID counter, so every
- * drop site is gated `simVersion >= SIM_VERSION_V37_CORPSE_FOOD`. worker/fighter
- * each yield 1 (a lone battlefield morsel; a real battle's kills top up the same
- * tile toward FOOD_PILE_INITIAL_PICKUPS_MAX); the queen's 8 is forward-compat only
- * (queen death ends the match today, so it is deterministic-but-inert); the
- * spider's 100 is a genuine scavenging bonanza when a colony brings it down.
+ * battlefield scavenging — a drop advances only the entity-ID counter (V37).
+ * worker/fighter each yield 1 (a lone battlefield morsel; a real battle's kills top
+ * up the same tile toward FOOD_PILE_INITIAL_PICKUPS_MAX); the queen's 8 is
+ * forward-compat only (queen death ends the match today, so it is
+ * deterministic-but-inert); the spider's 100 is a genuine scavenging bonanza when a
+ * colony brings it down.
  */
 export const CORPSE_PICKUPS_WORKER = 1;
 export const CORPSE_PICKUPS_FIGHTER = 1;

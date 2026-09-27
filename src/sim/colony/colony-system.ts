@@ -31,12 +31,7 @@
 // No Math.floor, no floats, no division operator.
 
 import type { WorldState } from '../types.js';
-import {
-  allocateEntityId,
-  INVALID_ENTITY_ID,
-  SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
-  SIM_VERSION_V51_UNIFIED_HUNGER,
-} from '../types.js';
+import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V51_UNIFIED_HUNGER } from '../types.js';
 import type { ColonyRecord } from './colony-store.js';
 import type { ColonyId } from './colony-store.js';
 import {
@@ -126,14 +121,6 @@ export function largestNurseryTileCount(colony: ColonyRecord): number {
 // Queen processed first (CLNY-04); larvae processed in order (CLNY-05); then,
 // from V51, workers and fighters in `colony.workers` order (#288).
 // ---------------------------------------------------------------------------
-
-/**
- * V40 (#299) — the living-worker floor for the nurse carve-out, by simVersion.
- * Pre-V40 worlds pass 0 (no floor), so their allocation is byte-identical.
- */
-export function nurseMinWorkersFor(world: WorldState): number {
-  return world.simVersion >= SIM_VERSION_V40_SMALL_COLONY_SURVIVAL ? NURSE_MIN_WORKERS : 0;
-}
 
 /**
  * One ant's meal (#288, V50). When a meal is due (ticks since the last one ≥ the
@@ -397,7 +384,7 @@ export function tickReconcile(world: WorldState, colony: ColonyRecord): void {
     brood,
     colony.targetRatio,
     hasNursery,
-    nurseMinWorkersFor(world),
+    NURSE_MIN_WORKERS,
   );
   colony.computedAllocation.nurse = alloc.nurse;
   colony.computedAllocation.forage = alloc.forage;

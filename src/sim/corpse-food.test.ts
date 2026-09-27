@@ -4,18 +4,15 @@
 //   - spawnCorpseFood: new pile, top-up (tile-uniqueness + isCorpse fixed-at-birth),
 //     clamp to MAX, hard-cap skip-new / allow-top-up, entity-ID exhaustion.
 //   - killAnt corpse drop (V37): worker/fighter/queen yields; no-drop for spider-kill,
-//     underground, null-colony, null-id (synthetic), non-member, and pre-V37 (gate).
-//   - spider-death drop (100) + pre-V37 gate.
-//   - soft-ceiling exemption (V37 corpse exempt / natural counts / pre-V37 total-count).
+//     underground, null-colony, null-id (synthetic), non-member.
+//   - spider-death drop (100).
+//   - soft-ceiling exemption (corpse exempt / natural counts).
 //   - hard-cap backstop + save round-trip safety.
-//   - no-barren (V37 corpse depletion skips the recency cooldown; natural records;
-//     pre-V37 records regardless; priority pointer clears either way).
+//   - no-barren (corpse depletion skips the recency cooldown; natural records;
+//     priority pointer clears either way).
 //   - version-aware save validator (corpse floor 1 vs natural floor 20; smuggle defense;
 //     isCorpse round-trip / pre-V37 drop; corpse-topped natural pile round-trip).
 //   - integration: an ordinary forager retrieves corpse food on the following step.
-//
-// Determinism: every A2 effect is gated `simVersion >= V37`, so the pre-V37 cases here
-// double as byte-identical-replay guards (nothing spawns, nothing is counted differently).
 
 import { describe, it, expect } from 'vitest';
 import { killAnt } from './ant-death.js';
@@ -29,12 +26,7 @@ import {
   type TestPile,
 } from './food/food-test-utils.js';
 import { tickForagerActions } from './ant/ant-foraging.js';
-import {
-  createWorldState,
-  allocateEntityId,
-  SIM_VERSION_V36_RISK_AWARE_FORAGING,
-  SIM_VERSION_V37_CORPSE_FOOD,
-} from './types.js';
+import { createWorldState, allocateEntityId } from './types.js';
 import type { WorldState, SpiderState, SpiderBehaviorState } from './types.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import type { ColonyId } from './colony/colony-store.js';
@@ -67,13 +59,9 @@ import {
 // Harness
 // ---------------------------------------------------------------------------
 
-/** Minimal 2-colony world (surface queens), simVersion pinned by the caller. */
-function makeWorld2(
-  simVersion: number,
-  seed = 42,
-): { world: WorldState; cid1: ColonyId; cid2: ColonyId } {
+/** Minimal 2-colony world (surface queens) at LATEST_SIM_VERSION. */
+function makeWorld2(seed = 42): { world: WorldState; cid1: ColonyId; cid2: ColonyId } {
   const world = createWorldState(seed);
-  world.simVersion = simVersion;
 
   const queen1 = allocateEntityId(world);
   initAnt(world.ants, queen1, {
@@ -326,7 +314,7 @@ describe('spawnCorpseFood', () => {
 
 describe('killAnt corpse drop (V37)', () => {
   it('drops 1-charge corpse food when an enemy ant kills a surface worker', () => {
-    const { world, cid1, cid2 } = makeWorld2(SIM_VERSION_V37_CORPSE_FOOD);
+    const { world, cid1, cid2 } = makeWorld2();
     const victim = spawnWorker(world, cid1, 5, 7);
     const killer = spawnWorker(world, cid2, 6, 7);
     killAnt(world, victim, cid2, killer, 'Ant');
@@ -337,7 +325,7 @@ describe('killAnt corpse drop (V37)', () => {
   });
 
   it('drops corpse food for a surface fighter victim (task === Fighting)', () => {
-    const { world, cid1, cid2 } = makeWorld2(SIM_VERSION_V37_CORPSE_FOOD);
+    const { world, cid1, cid2 } = makeWorld2();
     const victim = spawnFighter(world, cid1, 8, 9);
     const killer = spawnWorker(world, cid2, 9, 9);
     killAnt(world, victim, cid2, killer, 'Ant');
@@ -347,7 +335,7 @@ describe('killAnt corpse drop (V37)', () => {
   });
 
   it('drops an 8-charge queen corpse (forward-compat, inert but deterministic; same-tick)', () => {
-    const { world, cid1, cid2 } = makeWorld2(SIM_VERSION_V37_CORPSE_FOOD);
+    const { world, cid1, cid2 } = makeWorld2();
     const queen2 = world.colonies[cid2]!.queenEntityId;
     // makeWorld2 seats queen2 on the off-component y=0 edge; reseat it onto an in-component
     // surface tile so the drop isn't suppressed by spawnCorpseFood's connectivity guard.
@@ -361,14 +349,14 @@ describe('killAnt corpse drop (V37)', () => {
   });
 
   it('does NOT drop for a spider kill', () => {
-    const { world, cid1 } = makeWorld2(SIM_VERSION_V37_CORPSE_FOOD);
+    const { world, cid1 } = makeWorld2();
     const victim = spawnWorker(world, cid1, 5, 7);
     killAnt(world, victim, null, null, 'Spider');
     expect(pileCount(world)).toBe(0);
   });
 
   it('does NOT drop for an underground death', () => {
-    const { world, cid1, cid2 } = makeWorld2(SIM_VERSION_V37_CORPSE_FOOD);
+    const { world, cid1, cid2 } = makeWorld2();
     const victim = spawnWorker(world, cid1, 5, 7);
     world.ants.zone[victim] = Zone.Underground;
     const killer = spawnWorker(world, cid2, 6, 7);
@@ -377,21 +365,21 @@ describe('killAnt corpse drop (V37)', () => {
   });
 
   it('does NOT drop when killerColonyId is null', () => {
-    const { world, cid1 } = makeWorld2(SIM_VERSION_V37_CORPSE_FOOD);
+    const { world, cid1 } = makeWorld2();
     const victim = spawnWorker(world, cid1, 5, 7);
     killAnt(world, victim, null, 5, 'Ant');
     expect(pileCount(world)).toBe(0);
   });
 
   it('does NOT drop for a synthetic non-null-colony/null-id kill (killerId === null)', () => {
-    const { world, cid1, cid2 } = makeWorld2(SIM_VERSION_V37_CORPSE_FOOD);
+    const { world, cid1, cid2 } = makeWorld2();
     const victim = spawnWorker(world, cid1, 5, 7);
     killAnt(world, victim, cid2, null, 'Ant'); // the exact synthetic case Codex flagged
     expect(pileCount(world)).toBe(0);
   });
 
   it('does NOT drop for a non-member victim (not worker/fighter/queen — e.g. brood-like)', () => {
-    const { world, cid2 } = makeWorld2(SIM_VERSION_V37_CORPSE_FOOD);
+    const { world, cid2 } = makeWorld2();
     const stray = allocateEntityId(world);
     initAnt(world.ants, stray, {
       colonyId: 1, // colony exists, but the ant is NOT in workers[], not fighting, not the queen
@@ -407,16 +395,6 @@ describe('killAnt corpse drop (V37)', () => {
     killAnt(world, stray, cid2, killer, 'Ant');
     expect(pileCount(world)).toBe(0);
   });
-
-  it('pre-V37 (V36): a surface enemy-ant worker kill drops NOTHING (byte-identical legacy)', () => {
-    const { world, cid1, cid2 } = makeWorld2(SIM_VERSION_V36_RISK_AWARE_FORAGING);
-    const victim = spawnWorker(world, cid1, 5, 7);
-    const killer = spawnWorker(world, cid2, 6, 7);
-    const nextIdBefore = world.nextEntityId;
-    killAnt(world, victim, cid2, killer, 'Ant');
-    expect(pileCount(world)).toBe(0);
-    expect(world.nextEntityId).toBe(nextIdBefore); // no ID-counter advance -> replay-safe
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -424,9 +402,8 @@ describe('killAnt corpse drop (V37)', () => {
 // ---------------------------------------------------------------------------
 
 describe('spider-death corpse drop', () => {
-  it('V37: the spider dying drops a 100-charge corpse cache at its tile', () => {
+  it('the spider dying drops a 100-charge corpse cache at its tile', () => {
     const world = createWorldState(42);
-    world.simVersion = SIM_VERSION_V37_CORPSE_FOOD;
     const spider = placeSpider(world, 10, 12, 'Chasing');
     spider.hp = 0; // combat brought it down this tick
     tickSpider(world);
@@ -434,16 +411,6 @@ describe('spider-death corpse drop', () => {
     const pile = findPile(world, 10, 12);
     expect(pile?.pickupsInitial).toBe(CORPSE_PICKUPS_SPIDER);
     expect(pile?.isCorpse).toBe(true);
-  });
-
-  it('pre-V37 (V36): a spider death drops nothing', () => {
-    const world = createWorldState(42);
-    world.simVersion = SIM_VERSION_V36_RISK_AWARE_FORAGING;
-    const spider = placeSpider(world, 10, 12, 'Chasing');
-    spider.hp = 0;
-    tickSpider(world);
-    expect(world.spider).toBeNull();
-    expect(pileCount(world)).toBe(0);
   });
 });
 
@@ -466,29 +433,20 @@ describe('tickFoodPileSpawn — soft-ceiling exemption (V37) + hard-cap backstop
     }
   }
 
-  it('V37: corpse piles are EXEMPT — a natural pile still spawns above the soft ceiling', () => {
-    const world = createScenario(42); // simVersion = LATEST (V37)
+  it('corpse piles are EXEMPT — a natural pile still spawns above the soft ceiling', () => {
+    const world = createScenario(42); // simVersion = LATEST
     fillPiles(world, FOOD_PILE_SOFT_CEILING, true);
     world.tick = FOOD_PILE_SPAWN_INTERVAL_TICKS;
     tickFoodPileSpawn(world, new Rng(world.rngState));
     expect(pileCount(world)).toBe(FOOD_PILE_SOFT_CEILING + 1); // naturalCount was 0 -> placed
   });
 
-  it('V37: natural piles DO count against the soft ceiling — spawn throttled', () => {
+  it('natural piles DO count against the soft ceiling — spawn throttled', () => {
     const world = createScenario(42);
     fillPiles(world, FOOD_PILE_SOFT_CEILING, false);
     world.tick = FOOD_PILE_SPAWN_INTERVAL_TICKS;
     tickFoodPileSpawn(world, new Rng(world.rngState));
     expect(pileCount(world)).toBe(FOOD_PILE_SOFT_CEILING); // throttled
-  });
-
-  it('pre-V37 (V36): counts TOTAL piles, ignoring isCorpse (gate)', () => {
-    const world = createScenario(42);
-    world.simVersion = SIM_VERSION_V36_RISK_AWARE_FORAGING;
-    fillPiles(world, FOOD_PILE_SOFT_CEILING, true); // corpse-flagged, but legacy ignores the flag
-    world.tick = FOOD_PILE_SPAWN_INTERVAL_TICKS;
-    tickFoodPileSpawn(world, new Rng(world.rngState));
-    expect(pileCount(world)).toBe(FOOD_PILE_SOFT_CEILING); // legacy total-count throttle
   });
 
   it('hard-cap backstop: the spawner never pushes past FOOD_PILE_HARD_CAP even with naturalCount 0', () => {
@@ -515,7 +473,7 @@ describe('tickFoodPileSpawn — soft-ceiling exemption (V37) + hard-cap backstop
 // ---------------------------------------------------------------------------
 
 describe('no-barren (corpse depletion does not seed the natural-spawn cooldown)', () => {
-  it('V37: a depleting corpse pile is NOT recorded in recentlyDepletedFood', () => {
+  it('a depleting corpse pile is NOT recorded in recentlyDepletedFood', () => {
     const world = createWorldState(42);
     const slot = addPileForTest(world, {
       foodPileId: 7,
@@ -529,7 +487,7 @@ describe('no-barren (corpse depletion does not seed the natural-spawn cooldown)'
     expect(world.recentlyDepletedFood).toHaveLength(0);
   });
 
-  it('V37: a depleting NATURAL pile IS recorded', () => {
+  it('a depleting NATURAL pile IS recorded', () => {
     const world = createWorldState(42);
     const slot = addPileForTest(world, {
       foodPileId: 7,
@@ -543,23 +501,8 @@ describe('no-barren (corpse depletion does not seed the natural-spawn cooldown)'
     expect(world.recentlyDepletedFood[0]).toMatchObject({ tileX: 4, tileY: 4 });
   });
 
-  it('pre-V37 (V36): a corpse-flagged pile is recorded regardless (gate)', () => {
-    const world = createWorldState(42);
-    world.simVersion = SIM_VERSION_V36_RISK_AWARE_FORAGING;
-    const slot = addPileForTest(world, {
-      foodPileId: 7,
-      tileX: 4,
-      tileY: 4,
-      pickupsRemaining: 0,
-      pickupsInitial: 1,
-      isCorpse: true,
-    });
-    recordFoodPileDepletion(world, slot);
-    expect(world.recentlyDepletedFood).toHaveLength(1);
-  });
-
-  it('V37: corpse depletion still clears a colony priority pointer', () => {
-    const { world, cid1 } = makeWorld2(SIM_VERSION_V37_CORPSE_FOOD);
+  it('corpse depletion still clears a colony priority pointer', () => {
+    const { world, cid1 } = makeWorld2();
     const slot = addPileForTest(world, {
       foodPileId: 77,
       tileX: 4,

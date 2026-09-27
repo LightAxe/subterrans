@@ -263,8 +263,7 @@ export interface AntComponents {
    * ant (suppresses movement, ascent, and deeper routing).
    *
    * Reset to -1 in initAnt. Round-trips through copyWorldState and save/load
-   * (optional-on-load; defaults to -1 on pre-V34 saves). All read/write paths
-   * are gated `simVersion >= V34`, so legacy replays never observe or mutate it.
+   * (optional-on-load; defaults to -1 when absent).
    */
   readonly fleeShelterUntilTick: Int32Array;
 }

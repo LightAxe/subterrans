@@ -246,9 +246,8 @@ export function tickNurseActions(world: WorldState, chamberFlowFields?: ChamberF
  * 10a reassigns Idle ants only, and a nurse left Attending keeps its dwell for up to
  * NURSE_ATTEND_DWELL_TICKS (a carrier until it deposits) — exactly the ticks a 1-2
  * worker colony needs every worker foraging. Called from the step-8 allocation
- * checkpoint when the floor has zeroed the nurse count (tick.ts gates it to V40+ via
- * `nurseMinWorkersFor`, so pre-V40 worlds never reach here and keep their nurses,
- * tick order and PRNG draws byte-for-byte).
+ * checkpoint when the floor has zeroed the nurse count (tick.ts, below
+ * NURSE_MIN_WORKERS living workers).
  *
  *   - Attending / MovingToBrood / Feeding-without-a-carry → Idle now, cleared exactly
  *     as tickNurseActions' own releases clear (subTask 0, dwell counter 0); step 10a

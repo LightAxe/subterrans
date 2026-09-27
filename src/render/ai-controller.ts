@@ -5,10 +5,7 @@
 // (GameScene's onBeforeTick calls runAIController only for non-player colonyIds).
 
 import type { WorldState } from '../sim/types.js';
-import {
-  SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
-  SIM_VERSION_V53_NO_LOOT_WHEN_FULL,
-} from '../sim/types.js';
+import { SIM_VERSION_V53_NO_LOOT_WHEN_FULL } from '../sim/types.js';
 import type { ColonyId, ColonyRecord } from '../sim/colony/colony-store.js';
 import type {
   CancelDigMarkCommand,
@@ -160,12 +157,9 @@ export function runAIController(world: WorldState, aiColonyId: ColonyId): void {
     }
   }
   // Survival policy (see aiSurvivalMode), decided once per call so the ratio sync
-  // and the dig branch below agree. Sticky-version gated (AGENTS.md #228 posture):
-  // a continued pre-V40 save keeps the AI policy its world was saved under — the
-  // policy drives the sim through commands, so it is an algorithm change, not a
-  // render-only tweak.
-  const survival =
-    world.simVersion >= SIM_VERSION_V40_SMALL_COLONY_SURVIVAL && aiSurvivalMode(world, colony);
+  // and the dig branch below agree. (Shipped at V40; its sticky-version gate was
+  // reaped once MIN_ACCEPTED passed V40.)
+  const survival = aiSurvivalMode(world, colony);
 
   // Sync behavior ratio to state — or, in survival mode, to forage-only so step
   // 10a promotes every released nurse/fighter into foraging and never back into
