@@ -1061,10 +1061,14 @@ export class UIScene extends Phaser.Scene {
             this.contextMenuRows(),
           )
         ) {
-          // #352 review — only a primary click picks a row: a right-click on the
-          // open menu (it opens over the tile right-clicked) reopens it (the
-          // arbiter's right-click) instead of silently choosing the row under it.
-          if (pointer.button !== 0) return;
+          // #352 review — only a primary click picks a row. A right-click on the
+          // open menu is left to the arbiter's right-click (a menu for the tile
+          // under it, if any; else the menu stays up) rather than silently
+          // choosing the row under it; any other button just dismisses it.
+          if (pointer.button !== 0) {
+            if (pointer.button !== 2) requestHideContextMenu();
+            return;
+          }
           // #352 — a raid order: rally on the menu's enemy entrance with that type.
           if (contextMenuState.kind === 'raid') {
             this.dispatchRaidMenuClick(pointer.x, pointer.y);

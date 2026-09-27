@@ -148,8 +148,9 @@ test.describe('#352 — raid orders', () => {
     await page.mouse.click(box.x + row0.x + (row0.w >> 1), box.y + row0.y + (row0.h >> 1), {
       button: 'right',
     });
-    // It reopens the menu there; pick Assault. Had the right-click picked Loot,
-    // that order would have gone first, and its caption would be among those shown.
+    // The menu is still up (reopened, or left open); pick Assault. Had the
+    // right-click picked Loot, that order would have gone first, and its caption
+    // would be among those shown.
     await expect
       .poll(async () => {
         const m = await contextMenu(page);
