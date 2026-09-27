@@ -69,11 +69,9 @@ export function pickCardinalStep(
   id: number,
   rawDx: number,
   rawDy: number,
-  _simVersion?: number,
 ): number {
   void ants;
   void id;
-  void _simVersion;
   const absDx = rawDx < 0 ? -rawDx : rawDx;
   const absDy = rawDy < 0 ? -rawDy : rawDy;
   if (absDx === 0 && absDy === 0) return packStep(0, 0);
@@ -483,8 +481,7 @@ export function pickSurfaceDetour(
     // detour doesn't undo the sampler's danger avoidance (Codex). Soft penalty —
     // dominates the neighbour-Manhattan spread (clean detour beats a dangerous one)
     // but stays below the pocket penalty so pocket-escape still wins over avoiding
-    // one flee-backstopped tick. Gated at the caller; danger read only, no RNG;
-    // undefined = byte-identical.
+    // one flee-backstopped tick. Danger read only, no RNG; undefined = no penalty.
     if (dangerGrid !== undefined && phGet(dangerGrid, cx, cy) >= DANGER_ROUTE_AVOID_THRESHOLD) {
       score += DANGER_DETOUR_PENALTY;
     }

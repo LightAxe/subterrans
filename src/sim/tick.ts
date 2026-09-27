@@ -590,13 +590,12 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         // this refusal is unreachable; it keeps a full store from ever being asked
         // for a stock at promotion.
         if (cmd.chamberType === ChamberType.FoodStorage && !foodStoreHasFreeSlot(world)) break;
-        // (c) Anchor tile state.
-        //   pre-v5: must be Open (the legacy tunnel-end gate).
-        //   v5+: Open OR Solid OR Marked. BeingDug remains rejected by gate
-        //        (e) below so an in-flight excavation can't be re-anchored.
-        // (d) Solid 4-neighbor "tunnel-end" check (pre-v5 only). v5 drops it
-        //     because chambers can now be planned in untouched dirt; the
-        //     v5 reachability BFS below subsumes the connectivity intent.
+        // (c) Anchor tile state: Open OR Solid OR Marked (v5). BeingDug remains
+        //     rejected by gate (e) below so an in-flight excavation can't be
+        //     re-anchored.
+        // (d) (The pre-v5 Solid 4-neighbor "tunnel-end" check is gone: chambers
+        //     can be planned in untouched dirt; the reachability BFS below
+        //     subsumes the connectivity intent.)
         // Solid / Marked / Open anchors are all accepted; BeingDug is rejected by the
         // footprint scan in gate (e) below (anchor is at offset (0,0),
         // so it's covered). Auto-mark at the end of the handler
@@ -660,14 +659,7 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         // BeingDug tile gets dug to Open AND the new footprint's Solid
         // tiles get auto-Marked-and-dug — at least one footprint tile
         // would be reachable from at least one of the colony's
-        // entrances. Not run pre-v5 because pre-v5 saves' inputLogs
-        // never include unreachable placements (the old gates (c)+(d)
-        // required anchor=Open + adjacent Solid, which is naturally
-        // tunnel-network-adjacent for any entrance-rooted dig). Strictly
-        // speaking the old gates didn't PROVE reachability — a
-        // disconnected pre-existing Open cavern could pass them — but
-        // those edge cases are unchanged by this PR (pre-v5 replays use
-        // the legacy gates verbatim).
+        // entrances.
         if (
           !isFootprintReachableAfterDigs(
             world,
@@ -1340,8 +1332,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       // flee state machine (movement skips its movement, and no task change
       // resets the timer), so reassigning it to fight/nurse/dig would count it as
       // an active worker that never moves for the whole threat window. Leave it
-      // in reserve; it resumes on the all-clear. The field is -1 pre-V34, so this
-      // is a no-op for pre-V34 replays.
+      // in reserve; it resumes on the all-clear.
       if (world.ants.fleeShelterUntilTick[id]! > 0) continue;
       // C1 (V42) — an alarmed colony recruits NOBODY. The timer check above only
       // covers workers that are ALREADY sheltering, and this step runs at 10a,
@@ -1574,7 +1565,6 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   //           pheromone decay (step 15) so danger reads are post-decay, and
   //           BEFORE movement (step 16) so its flee/mill target writes take
   //           precedence over routeForagerPriority (step 13) for fleeing ants.
-  //           Inert below V34 (early return) — no pre-V34 replay divergence.
   // ---------------------------------------------------------------------------
   tickIdleReserveAndFlee(world);
 

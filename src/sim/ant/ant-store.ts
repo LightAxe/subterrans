@@ -166,11 +166,7 @@ export interface AntComponents {
    * that reach this slot's storage again are inert reads guarded by the
    * alive check.
    *
-   * Round-trips through copyWorldState and save/load. simVersion < 3 saves
-   * load with the field absent → all-zero default (no ants in wait). The
-   * wait-set code paths (antDepositFood enter, tickForagerActions wake) are
-   * additionally gated on `world.simVersion >= 3`, so legacy replays never
-   * mutate this field at runtime.
+   * Round-trips through copyWorldState and save/load.
    */
   readonly waitingDeposit: Uint8Array;
   /**
@@ -179,44 +175,41 @@ export interface AntComponents {
    * step-picker filters candidates against this buffer so foragers cannot
    * loop in a small region near a saturated entrance pool.
    *
-   * Active only when `world.simVersion >= 6 && zone === Surface && task ===
-   * Foraging && subTask === SearchingFood`. Cleared on state change (subTask
-   * flip, food pickup, zone flip). Pushed on every actual step (not on
-   * pause ticks). If filtering eliminates every candidate, the ant pauses
-   * for one tick and the buffer stays as-is.
+   * Active only when `zone === Surface && task === Foraging && subTask ===
+   * SearchingFood`. Cleared on state change (subTask flip, food pickup, zone
+   * flip). Pushed on every actual step (not on pause ticks). If filtering
+   * eliminates every candidate, the ring is cleared and the proposed step is
+   * taken (V40, pickNoRevisitSurfaceAlternate).
    *
    * Layout: index = id * RECENT_TILES_LEN + slot. Each slot stores tx (or
    * SENTINEL_NO_TILE = -1 if unused). recentTilesY mirrors recentTilesX.
    * recentTilesHead[id] is the next-write slot (0..RECENT_TILES_LEN-1).
    *
-   * Round-trips through copyWorldState and save/load (optional fields on
-   * SerializedAnts; defaults to all-empty on pre-v6 saves).
+   * Round-trips through copyWorldState and save/load.
    */
   readonly recentTilesX: Int32Array;
   readonly recentTilesY: Int32Array;
   readonly recentTilesHead: Uint8Array;
   /**
-   * Issue #17 Phase 1 — visible brood carry. For nurses (task=Nursing) under
-   * simVersion >= 10, the entity ID of the brood (egg or larva) currently
+   * Issue #17 Phase 1 — visible brood carry. For nurses (task=Nursing), the
+   * entity ID of the brood (egg or larva) currently
    * being carried, or -1 if not carrying. The brood's posX/posY are synced
    * to the carrier each tick while carried; on Nursery-tile arrival the
    * carry slot clears and the brood is deposited via the same `pickId %
    * openCount` spread that pre-v10 `transportBroodToNursery` used.
    *
    * Reset to -1 in initAnt. Cleared by despawnAnt (ant-death.ts) on either
-   * end's death (#107; every cause from V41, kills only before) — the orphaned
+   * end's death (#107, every cause) — the orphaned
    * brood stays at the carrier's last-synced tile so the next nurse picks it
    * up via the v10 `nursing` flow-field (which seeds from uncarried-brood tiles
    * outside Nursery, and only those).
    *
-   * Round-trips through copyWorldState and save/load (optional field;
-   * defaults to all-(-1) on pre-v10 saves, which matches the v10+
-   * "no carries in flight" load default).
+   * Round-trips through copyWorldState and save/load.
    */
   readonly carryingBroodId: Int32Array;
   /**
    * Issue #17 Phase 1 — reverse pointer for the carry. For brood entities
-   * (eggs and larvae) under simVersion >= 10, the entity ID of the nurse
+   * (eggs and larvae), the entity ID of the nurse
    * currently carrying this brood, or -1 if uncarried. Set on pickup,
    * cleared on deposit OR when the carrier's `alive` flips to 0.
    *
@@ -225,7 +218,7 @@ export interface AntComponents {
    * by ant id.
    *
    * Reset to -1 in initAnt. Round-trips through copyWorldState and
-   * save/load (optional; defaults to all-(-1) on pre-v10 saves).
+   * save/load.
    */
   readonly carriedBy: Int32Array;
   // S1 — combat HP/damage/cooldown fields.
@@ -495,7 +488,7 @@ export function initAnt(ants: AntComponents, id: EntityId, spec: InitAntSpec): v
  * `recentTilesHead[id]` is overwritten; head advances mod RECENT_TILES_LEN.
  *
  * Caller is responsible for gating: only call on actual movement (not on
- * pause ticks) and only when world.simVersion >= 6 + Surface SearchingFood.
+ * pause ticks) and only for a Surface SearchingFood ant.
  */
 export function pushRecentTile(ants: AntComponents, id: EntityId, tx: number, ty: number): void {
   const slot = ants.recentTilesHead[id]!;

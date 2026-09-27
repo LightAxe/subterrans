@@ -2101,12 +2101,25 @@ describe('V49 (#322) — the alarm musters civilians home under a full camp', ()
     expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0);
   });
 
-  it('a held forager whose tile goes quiet is released under the alarm (V48 re-armed it)', () => {
+  it('a dashing forager whose door went bad is released on a quiet tile under the alarm, not held (dasher site)', () => {
     const { world, ent } = campedWorld();
     const id = returningForager(world, ent.surfaceTileX + 20, ent.surfaceTileY);
-    world.ants.fleeShelterUntilTick[id] = world.tick; // held, due for re-evaluation
+    world.ants.fleeShelterUntilTick[id] = 0; // phase 0: dashing, its only door now camped
     tickIdleReserveAndFlee(world);
-    expect(world.ants.fleeShelterUntilTick[id] > 0).toBe(false);
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(-1);
+  });
+
+  it('a HELD forager whose tile goes quiet is released under the alarm (V48 re-armed it; hold re-arm site)', () => {
+    // phase > 0 on the surface is the homebound hold; a phase equal to the tick
+    // makes the re-arm site re-evaluate it. (Phase 0 would be a dasher instead.)
+    const { world, ent } = campedWorld();
+    world.tick = 100;
+    const id = returningForager(world, ent.surfaceTileX + 20, ent.surfaceTileY);
+    world.ants.fleeShelterUntilTick[id] = world.tick; // held, due for re-evaluation
+    world.ants.targetPosX[id] = center(ent.surfaceTileX); // stale flee target
+    tickIdleReserveAndFlee(world);
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(-1); // released, not re-armed
+    expect(world.ants.targetPosX[id]).toBe(-1); // handed back to normal homebound routing
   });
 
   it('a searching forager turns homebound at step 9c while the alarm sounds, and a returning one never breaks out', () => {

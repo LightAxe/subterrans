@@ -9,13 +9,7 @@ import {
   unpackStepDy,
   getTaskDirection,
 } from './ant-system.js';
-import {
-  createWorldState,
-  allocateEntityId,
-  LEGACY_SIM_VERSION,
-  SIM_VERSION_V3,
-  SIM_VERSION_V4_DIAGONAL_MOTION,
-} from '../types.js';
+import { createWorldState, allocateEntityId } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import { initAnt, createAntComponents } from './ant-store.js';
 import { AntTask, DiggingSubState } from '../enums.js';
@@ -68,13 +62,8 @@ function setupWorldWithUnderground(
 // ---------------------------------------------------------------------------
 // Issue #34 — pickCardinalStep
 //
-// Two simVersion modes:
-//   v2/v3 (LEGACY_SIM_VERSION / SIM_VERSION_V3) — legacy greedy major-axis
-//                                                 cardinal pick. Pre-issue-#34
-//                                                 behavior preserved verbatim
-//                                                 for replay determinism.
-//   v4 (SIM_VERSION_V4_DIAGONAL_MOTION) — 8-connected diagonal step when both
-//                                         axes have non-zero delta.
+// 8-connected diagonal step when both axes have non-zero delta (v4); a pure
+// cardinal otherwise.
 //
 // Issue #69: pickCardinalStep now returns a packed int (dx + 1) | ((dy + 1) << 2).
 // Test helper `step(p)` decodes back to {dx, dy} for assertion convenience.
@@ -292,51 +281,22 @@ describe('canEnterUndergroundTile', () => {
   });
 });
 
-describe('pickCardinalStep (issue #34) — v2/v3 legacy greedy cardinal', () => {
+describe('pickCardinalStep (issue #34) — 8-connected diagonal', () => {
   function emptyAnts(): ReturnType<typeof createAntComponents> {
     return createAntComponents(8);
   }
 
-  it('zero delta returns (0, 0) under v3', () => {
+  it('pure cardinals and a zero delta (single-axis targets step on that axis only)', () => {
     const ants = emptyAnts();
-    expect(step(pickCardinalStep(ants, 0, 0, 0, SIM_VERSION_V3))).toEqual({ dx: 0, dy: 0 });
-  });
-
-  it('pure +X / -Y cardinals are unchanged under v3', () => {
-    const ants = emptyAnts();
-    expect(step(pickCardinalStep(ants, 0, 5, 0, SIM_VERSION_V3))).toEqual({ dx: 1, dy: 0 });
-    expect(step(pickCardinalStep(ants, 0, 0, -3, SIM_VERSION_V3))).toEqual({ dx: 0, dy: -1 });
-  });
-
-  it('LEGACY_SIM_VERSION (v2) uses the same legacy greedy path as v3', () => {
-    // v2 was the issue-#15 baseline; v2 → v3 only shifted withdrawFood
-    // ordering (issue #27), never the movement algorithm. Both replay
-    // identically through pickCardinalStep.
-    const a2 = emptyAnts();
-    const a3 = emptyAnts();
-    // Two packed ints — toBe rather than toEqual since they're primitive.
-    expect(pickCardinalStep(a2, 0, 3, 3, LEGACY_SIM_VERSION)).toBe(
-      pickCardinalStep(a3, 0, 3, 3, SIM_VERSION_V3),
-    );
-  });
-});
-
-describe('pickCardinalStep (issue #34) — v4 8-connected diagonal', () => {
-  function emptyAnts(): ReturnType<typeof createAntComponents> {
-    return createAntComponents(8);
-  }
-
-  it('pure cardinals are unchanged in v4 (single-axis targets behave identically)', () => {
-    const ants = emptyAnts();
-    expect(step(pickCardinalStep(ants, 0, 5, 0, SIM_VERSION_V4_DIAGONAL_MOTION))).toEqual({
+    expect(step(pickCardinalStep(ants, 0, 5, 0))).toEqual({
       dx: 1,
       dy: 0,
     });
-    expect(step(pickCardinalStep(ants, 0, 0, -3, SIM_VERSION_V4_DIAGONAL_MOTION))).toEqual({
+    expect(step(pickCardinalStep(ants, 0, 0, -3))).toEqual({
       dx: 0,
       dy: -1,
     });
-    expect(step(pickCardinalStep(ants, 0, 0, 0, SIM_VERSION_V4_DIAGONAL_MOTION))).toEqual({
+    expect(step(pickCardinalStep(ants, 0, 0, 0))).toEqual({
       dx: 0,
       dy: 0,
     });
@@ -349,7 +309,7 @@ describe('pickCardinalStep (issue #34) — v4 8-connected diagonal', () => {
     const dxs: number[] = [];
     const dys: number[] = [];
     for (let i = 0; i < 3; i++) {
-      const stepP = pickCardinalStep(ants, 0, 3 - x, 3 - y, SIM_VERSION_V4_DIAGONAL_MOTION);
+      const stepP = pickCardinalStep(ants, 0, 3 - x, 3 - y);
       dxs.push(unpackStepDx(stepP));
       dys.push(unpackStepDy(stepP));
       x += unpackStepDx(stepP);
@@ -365,14 +325,14 @@ describe('pickCardinalStep (issue #34) — v4 8-connected diagonal', () => {
   });
 
   it('3:1 slope (rawDx=3, rawDy=1) — diagonal until Y is satisfied, then pure +X', () => {
-    // v4 always takes diagonal when both axes have work. Once Y is satisfied
+    // Always diagonal when both axes have work. Once Y is satisfied
     // (after 1 step), the remaining 2 X-steps are pure cardinal.
     const ants = emptyAnts();
     let x = 0;
     let y = 0;
     const trace: Array<[number, number]> = [];
     for (let i = 0; i < 3; i++) {
-      const stepP = pickCardinalStep(ants, 0, 3 - x, 1 - y, SIM_VERSION_V4_DIAGONAL_MOTION);
+      const stepP = pickCardinalStep(ants, 0, 3 - x, 1 - y);
       trace.push([unpackStepDx(stepP), unpackStepDy(stepP)]);
       x += unpackStepDx(stepP);
       y += unpackStepDy(stepP);
@@ -390,7 +350,7 @@ describe('pickCardinalStep (issue #34) — v4 8-connected diagonal', () => {
     let x = 0;
     let y = 0;
     for (let i = 0; i < 3; i++) {
-      const stepP = pickCardinalStep(ants, 0, -3 - x, -3 - y, SIM_VERSION_V4_DIAGONAL_MOTION);
+      const stepP = pickCardinalStep(ants, 0, -3 - x, -3 - y);
       expect(unpackStepDx(stepP)).toBe(-1);
       expect(unpackStepDy(stepP)).toBe(-1);
       x += unpackStepDx(stepP);
@@ -403,7 +363,7 @@ describe('pickCardinalStep (issue #34) — v4 8-connected diagonal', () => {
   it('mixed-quadrant diagonals: (rawDx=2, rawDy=-2) → (1, -1)', () => {
     // sign(rawDx) = +1, sign(rawDy) = -1 → SE-quadrant diagonal.
     const ants = emptyAnts();
-    const stepP = pickCardinalStep(ants, 0, 2, -2, SIM_VERSION_V4_DIAGONAL_MOTION);
+    const stepP = pickCardinalStep(ants, 0, 2, -2);
     expect(step(stepP)).toEqual({ dx: 1, dy: -1 });
   });
 });

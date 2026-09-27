@@ -5,22 +5,19 @@
 // four per-colony flow-fields:
 //   - food         : seeded from Open tiles inside FoodStorage chambers.
 //                    Consumed by Underground carrying foragers routing to deposit.
-//   - nursing      : pre-v10: seeded from Open tiles inside Queen OR Nursery
-//                    chambers. v10+: re-seeded from reclaimable-brood tiles
-//                    outside Nursery and ONLY those (the "pickup" field,
-//                    computeNursingPickupField below — Queen-tile seeding is
-//                    the removed "Seed (1)", see its comment). tick.ts step 9
-//                    is the only caller; it rebuilds when broodFieldDirty and
-//                    overwrites whatever the legacy seeding left here.
+//   - nursing      : seeded from reclaimable-brood tiles outside Nursery and
+//                    ONLY those (the "pickup" field, computeNursingPickupField
+//                    below — Queen-tile seeding is the removed "Seed (1)", see
+//                    its comment). tick.ts step 9 is the only caller; it
+//                    rebuilds when broodFieldDirty.
 //                    Consumed by Nursing ants routing to brood pickup.
 //   - queen        : seeded from Open tiles inside Queen chambers only.
 //                    Consumed by the queen entity when routing from her current
 //                    underground tile to the Queen chamber footprint (PRD §4b —
 //                    queen relocates once a Queen chamber is completed).
 //   - nurseDeposit : seeded from Open tiles inside Nursery chambers only.
-//                    Consumed by v10+ nurses currently carrying a brood
-//                    (subTask=Feeding under simVersion >= 10) routing to
-//                    deposit. Issue #17 Phase 1.
+//                    Consumed by nurses currently carrying a brood
+//                    (subTask=Feeding) routing to deposit. Issue #17 Phase 1.
 //
 // Why a dedicated field per target class rather than one shared field:
 // each consumer targets a different set of chamber types. Sharing a single

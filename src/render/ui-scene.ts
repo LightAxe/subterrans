@@ -1547,12 +1547,7 @@ export class UIScene extends Phaser.Scene {
         this.hud.UNDERGROUND_COLONY_TOGGLE.h,
       );
     }
-    // C1 — colony alarm button.
-    //
-    // V42-gated: tick() drops SetColonyAlarm below V42, so on a continued
-    // V30..V41 save the control would be drawn, clickable and tooltipped while
-    // doing nothing. Below V42 the button is hidden, the hotkey bails, and
-    // tooltipTargetAt is told not to offer a tooltip for the zone.
+    // C1 — colony alarm button (always shown: every loadable save is past V42).
     //
     // The click MASK stays on regardless — a deliberate deviation from the
     // HINTS / colony-toggle precedent in camera-input.ts, which unmask their

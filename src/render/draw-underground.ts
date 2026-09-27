@@ -801,9 +801,7 @@ export function drawUndergroundEntities(
  * Issue #17 Phase 1.6 — visible carry render offset. When a brood entity
  * is being carried by an alive nurse (carriedBy !== -1 and the carrier is
  * alive), nudge the sprite up by ~1/4 tile so it sits "in arms" above the
- * carrier instead of perfectly stacked on the carrier's body. Under v10+
- * only — pre-v10 saves never set carriedBy to a non-(-1) value, so this
- * is a no-op for them by construction.
+ * carrier instead of perfectly stacked on the carrier's body.
  */
 const CARRY_RENDER_DY_PX = -Math.round(TILE_SIZE_PX / 4);
 

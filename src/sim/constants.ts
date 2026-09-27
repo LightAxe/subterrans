@@ -283,7 +283,6 @@ export const PHEROMONE_DECAY_FP = 5;
 /**
  * S0a / issue #119 — V14 food-trail decay rate. 2 / 256 ≈ 0.78% per tick;
  * mathematical half-life ≈ 88 ticks. Trails persist ~2.5× longer than legacy.
- * Used when world.simVersion >= SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX.
  */
 export const PHEROMONE_DECAY_FP_V14 = 2;
 
@@ -300,7 +299,6 @@ export const PHEROMONE_FLOOR = 64;
  * trail would stall at ~127 forever under V14 constants, creating zombie
  * trails. With floor=128, any value that has decayed below 128 snaps to 0
  * immediately on the next decay tick (since `decayed < 128 → snap`).
- * Used when world.simVersion >= SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX.
  */
 export const PHEROMONE_FLOOR_V14 = 128;
 
@@ -450,8 +448,7 @@ export const FOOD_TRAIL_DEPOSIT = 512; // 2 × FP_ONE
 
 /**
  * S0a / issue #119 — V14 food-trail deposit per forager step. 1024 = 4 × FP_ONE;
- * doubles the trail strength per step vs legacy. Used when
- * world.simVersion >= SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX.
+ * doubles the trail strength per step vs legacy.
  */
 export const FOOD_TRAIL_DEPOSIT_V14 = 1024; // 4 × FP_ONE
 
@@ -871,8 +868,7 @@ export const SEARCH_LEASH_MAX_WAVE = SEARCH_LEASH_RADII.length - 1;
  * the deadband — explicit user intent always wins. The hysteresis
  * only suppresses ambient scent/pheromone signals.
  *
- * Gated on `world.simVersion >= SIM_VERSION_V8_LEASH_HYSTERESIS`. Must
- * remain strictly less than `SEARCH_LEASH_RADII[0]` (= 25) — otherwise
+ * (V8.) Must remain strictly less than `SEARCH_LEASH_RADII[0]` (= 25) — otherwise
  * the v8 deadband threshold (`radius - LEASH_HYSTERESIS_TILES`) would
  * be ≤ 0, permanently suppressing the breakout for any wave-0 ant.
  * See `constants.test.ts` for the invariant.
@@ -1206,7 +1202,7 @@ export const SPIDER_SPEED = 256 as const;
 export const SPIDER_DANGER_DEPOSIT = 1280 as const;
 
 // ---------------------------------------------------------------------------
-// V23 — Hunger-gated meandering predator redesign (gated on simVersion >= V23)
+// V23 — Hunger-gated meandering predator redesign
 // ---------------------------------------------------------------------------
 
 /**

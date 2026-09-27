@@ -149,8 +149,8 @@ export function detectAndResolveCombat(world: WorldState, _rng: Rng): void {
   // tile, the resolver folds the unreachable outer margin band into that tile and
   // re-engages a margin-band ant — so this pass must treat that ant as on-tile too,
   // or it would clear the ant's -2 windup sentinel every tick and the resolver
-  // would restart the windup forever (permanent stalemate). margin = 0 pre-V26 and
-  // in passive states, collapsing the fold to exact same-tile matching.
+  // would restart the windup forever (permanent stalemate). margin = 0 in passive
+  // states, collapsing the fold to exact same-tile matching.
   const v26EdgeStale =
     v23Spider &&
     // #247 — V26 spider-edge-margin unconditional (MIN=V30)
@@ -482,7 +482,7 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
   // (Patrolling/Hunting) a multi-tile combat reach into the margin band: a sated
   // spider routinely meanders onto a boundary tile and would otherwise silently
   // bite any ant sharing its row/column up to `margin` tiles away. In passive
-  // states margin = 0, so only exact same-tile matching applies (as pre-V26).
+  // states margin = 0, so only exact same-tile matching applies.
   const v26Edge =
     // #247 — V26 spider-edge-margin unconditional (MIN=V30)
     spider.state === 'Chasing' || spider.state === 'Striking' || spider.state === 'Rampaging';

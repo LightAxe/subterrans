@@ -873,7 +873,7 @@ export function computeFeedAwayTile(world: WorldState, spider: SpiderState): voi
 // instead of clamping to the edge — otherwise an edge kill collapses the
 // endpoint onto (or near) the kill tile, so the spider enters Feeding without
 // actually moving away and the post-kill chain-kill avoidance silently fails.
-// `margin` is the per-edge keep-out band (V26 edge-margin clamp; 0 pre-V26):
+// `margin` is the per-edge keep-out band (the V26 edge-margin clamp):
 // endpoints are confined to [margin, size-1-margin] so the feed target is always
 // reachable under the step-6b clamp (the exact-equality arrival gate otherwise
 // livelocks Feeding). The surface grid (128) is far larger than 2× the retreat

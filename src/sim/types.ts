@@ -613,9 +613,9 @@ export const SIM_VERSION_V39_SPIDER_TIEBREAK = 39 as const;
  *      completes, so a searcher whose trail crossed her tile was bumped back onto the
  *      exempt entrance tile every tick and re-took the same step next tick — a
  *      livelock of 1 600-3 000 ticks per forager.
- *   3. No nurse carve-out below NURSE_MIN_WORKERS living workers (`computeNurseCount`
- *      via `nurseMinWorkersFor`). The ceil(workers/4) cap made the last worker of a
- *      1-worker colony a nurse the moment brood >= NURSE_RATIO, so it nursed larvae
+ *   3. No nurse carve-out below NURSE_MIN_WORKERS living workers (`computeNurseCount`,
+ *      passed NURSE_MIN_WORKERS by its call sites). The ceil(workers/4) cap made the
+ *      last worker of a 1-worker colony a nurse the moment brood >= NURSE_RATIO, so it nursed larvae
  *      the starving queen could not feed instead of foraging.
  *
  * None of the three adds a WorldState/save field, draws from `world.rngState`, or

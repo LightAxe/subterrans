@@ -191,9 +191,9 @@ export function tickNurseActions(world: WorldState, chamberFlowFields?: ChamberF
     // Defensive: if the brood was carried by a now-dead carrier
     // (orphan reclaim path), null out the dead carrier's carryingBroodId
     // slot so the both-ends-of-the-pointer invariant holds. despawnAnt
-    // (ant-death.ts) clears both ends on every kill and, from V41, on
-    // every death, so this only fires for a pre-V41 save or a hand-built
-    // fixture; the brood's carriedBy is overwritten below either way.
+    // (ant-death.ts) clears both ends on every death, so this only fires
+    // for a hand-built fixture; the brood's carriedBy is overwritten below
+    // either way.
     const oldCarrier = ants.carriedBy[broodId]!;
     if (oldCarrier !== -1 && ants.alive[oldCarrier] !== 1) {
       ants.carryingBroodId[oldCarrier] = -1;
@@ -505,9 +505,6 @@ function computeNurseryDepositPosition(
  * preventing teleportation to a distant chamber. Falls back to the all-chambers
  * pool only if the nurse's chamber cannot be identified (pathological).
  *
- * Pre-V21: uses the original all-chambers spread via `computeNurseryDepositPosition`
- * to preserve byte-identical replay of pre-V21 saves.
- *
  * No allocations, no RNG.
  */
 function depositCarriedBrood(
@@ -521,8 +518,6 @@ function depositCarriedBrood(
   const ants = world.ants;
   // S4 V21+: restrict deposit to the nurse's current Nursery chamber so brood
   // never teleports to a distant chamber the nurse hasn't physically reached.
-  // Pre-V21 worlds use the original all-chambers distribution to preserve
-  // byte-identical replay of pre-V21 saves.
   let pos: { x: number; y: number } | null = null;
   const nurseTileX = ants.posX[nurseId]! >> FP_SHIFT;
   const nurseTileY = ants.posY[nurseId]! >> FP_SHIFT;

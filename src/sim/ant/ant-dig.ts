@@ -53,8 +53,7 @@ export function tickSearchLeash(world: WorldState): void {
   // (regardless of wave-radius) avoids the eddy at the entrance that
   // forms when waves of would-be carriers can't unload. Step 10a will
   // re-promote them to Foraging once a deposit target opens (chamber built
-  // or queen consumes pool down). v6+ only — pre-v6 saves replay byte-
-  // identical, only the demote-on-cap behavior is new.
+  // or queen consumes pool down).
   const forageBackpressure: Record<number, boolean> = {};
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
