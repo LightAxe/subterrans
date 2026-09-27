@@ -9,6 +9,7 @@ import {
   createRaidCaptionState,
   markRaidCaptionShown,
   nextRaidCaption,
+  finalRallyInBatch,
   rallyTargetsEnemyEntrance,
   resetRaidCaptionState,
 } from './raid-captions.js';
@@ -16,6 +17,7 @@ import { tick } from '../sim/tick.js';
 import { ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
 import { SIM_VERSION_V51_UNIFIED_HUNGER, type WorldState } from '../sim/types.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
+import type { SimCommand } from '../sim/commands.js';
 import { addFighter, raidWorld, rallyOn } from '../sim/raid-test-utils.js';
 import { setChamberStockForTest } from '../sim/food/food-test-utils.js';
 
@@ -236,5 +238,43 @@ describe('rallyTargetsEnemyEntrance', () => {
     const r = raidWorld();
     r.world.simVersion = SIM_VERSION_V51_UNIFIED_HUNGER;
     expect(rallyTargetsEnemyEntrance(r.world, P, r.enemyDoor.x, r.enemyDoor.y)).toBe(false);
+  });
+});
+
+describe('finalRallyInBatch (#290 PR 6: captions follow the rally left in effect)', () => {
+  const P = PLAYER_COLONY_ID;
+  const E = ENEMY_COLONY_ID;
+  const set = (colonyId: ColonyId, tileX: number): SimCommand => ({
+    type: 'SetRallyPoint',
+    colonyId,
+    tileX,
+    tileY: 64,
+    issuedAtTick: 0,
+  });
+  const clear = (colonyId: ColonyId): SimCommand => ({
+    type: 'ClearRallyPoint',
+    colonyId,
+    issuedAtTick: 0,
+  });
+
+  it('no rally command for the colony gives null', () => {
+    expect(finalRallyInBatch([], P)).toBeNull();
+    expect(finalRallyInBatch([set(E, 5)], P)).toBeNull();
+  });
+
+  it('the last set wins', () => {
+    expect(finalRallyInBatch([set(P, 5), set(P, 9)], P)?.tileX).toBe(9);
+  });
+
+  it('a set followed by a clear leaves no rally, so no caption', () => {
+    expect(finalRallyInBatch([set(P, 5), clear(P)], P)).toBeNull();
+  });
+
+  it('a clear followed by a set leaves the set', () => {
+    expect(finalRallyInBatch([clear(P), set(P, 7)], P)?.tileX).toBe(7);
+  });
+
+  it("another colony's commands don't change the player's final rally", () => {
+    expect(finalRallyInBatch([set(P, 5), clear(E), set(E, 9)], P)?.tileX).toBe(5);
   });
 });

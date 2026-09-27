@@ -31,6 +31,7 @@
 import type { WorldState } from '../sim/types.js';
 import { SIM_VERSION_V52_RAIDING } from '../sim/types.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
+import type { SetRallyPointCommand, SimCommand } from '../sim/commands.js';
 
 export type RaidCaptionKind = 'raided' | 'looting' | 'hauled';
 
@@ -170,4 +171,24 @@ export function rallyTargetsEnemyEntrance(
     }
   }
   return false;
+}
+
+/**
+ * #290 PR 6: the rally a drained command batch leaves in effect for `colonyId`.
+ * Several rally commands can drain in one tick (queued while paused, two quick
+ * clicks); tick() applies them in order, so only the last one counts. Returns
+ * that SetRallyPoint, or null when the batch has no rally command for the
+ * colony or ends with a ClearRallyPoint. Captions are keyed off this, so a set
+ * that is overridden in the same batch never consumes a one-shot caption.
+ */
+export function finalRallyInBatch(
+  cmds: readonly SimCommand[],
+  colonyId: ColonyId,
+): SetRallyPointCommand | null {
+  let last: SetRallyPointCommand | null = null;
+  for (const cmd of cmds) {
+    if (cmd.type === 'SetRallyPoint' && cmd.colonyId === colonyId) last = cmd;
+    else if (cmd.type === 'ClearRallyPoint' && cmd.colonyId === colonyId) last = null;
+  }
+  return last;
 }

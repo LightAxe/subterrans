@@ -190,6 +190,7 @@ import {
   createRaidCaptionState,
   markRaidCaptionShown,
   nextRaidCaption,
+  finalRallyInBatch,
   rallyTargetsEnemyEntrance,
   resetRaidCaptionState,
 } from './raid-captions.js';
@@ -1904,22 +1905,26 @@ export class GameScene extends Phaser.Scene {
             const text = checkAndTrigger('foodMark');
             if (text && uiScene)
               uiScene.showCaption(text, this.layout.w / 2, this.layout.h - 80, 'foodMark');
-          } else if (cmd.type === 'SetRallyPoint') {
-            // #290 PR 6: a rally on an enemy's open entrance sends the fighters in
-            // to raid — say so (its own one-shot key, so it shows even after the
-            // generic rally caption has).
-            const key: CaptionKey = rallyTargetsEnemyEntrance(
-              this.world,
-              PLAYER_COLONY_ID,
-              cmd.tileX,
-              cmd.tileY,
-            )
-              ? 'rallyRaid'
-              : 'rally';
-            const text = checkAndTrigger(key);
-            if (text && uiScene)
-              uiScene.showCaption(text, this.layout.w / 2, this.layout.h - 80, key);
           }
+        }
+        // #290 PR 6: rally captions follow only the rally the batch leaves in
+        // effect (tick() applies the drained rally commands in order), so a set
+        // overridden in the same batch never consumes a one-shot caption. A rally
+        // on an enemy's open entrance sends the fighters in to raid; it has its own
+        // one-shot key, so it shows even after the generic rally caption has.
+        const rally = finalRallyInBatch(cmds, PLAYER_COLONY_ID);
+        if (rally !== null) {
+          const key: CaptionKey = rallyTargetsEnemyEntrance(
+            this.world,
+            PLAYER_COLONY_ID,
+            rally.tileX,
+            rally.tileY,
+          )
+            ? 'rallyRaid'
+            : 'rally';
+          const text = checkAndTrigger(key);
+          if (text && uiScene)
+            uiScene.showCaption(text, this.layout.w / 2, this.layout.h - 80, key);
         }
       },
       onTickOutcome: (outcome) => this.enterGameOver(outcome),
