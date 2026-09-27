@@ -47,6 +47,11 @@ export function contextMenuHeight(items: readonly ContextMenuRow[]): number {
  * the whole menu lies within [0, maxRight) × [0, maxBottom): the raid menu opens
  * on an enemy entrance anywhere on screen, and its bottom rows past the canvas
  * (or under the bottom HUD strip) would be out of reach.
+ *
+ * Precondition: the menu fits (menuH <= maxBottom, CONTEXT_MENU.WIDTH <= maxRight).
+ * The top-left bound is applied last, so a menu larger than the bounds is pinned
+ * at 0 and still overflows at the bottom/right; the raid menu (120 px) is far
+ * inside the fixed 800×592 layout's ~508 px strip above the bottom HUD.
  */
 export function clampContextMenuAnchor(
   x: number,
@@ -72,8 +77,6 @@ export interface ContextMenuRow {
 
 export interface ContextMenuItem extends ContextMenuRow {
   chamberType: ChamberType;
-  label: string;
-  stripeColor: number;
 }
 
 /**

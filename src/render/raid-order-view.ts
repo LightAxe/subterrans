@@ -12,8 +12,8 @@
 
 import { RaidType, isRaidType } from '../sim/enums.js';
 import type { SetRallyPointCommand } from '../sim/commands.js';
-import { rallyEnemyEntrance } from '../sim/raid-order.js';
-import { SIM_VERSION_V60_RAID_ORDERS, type WorldState } from '../sim/types.js';
+import { enemyEntranceAt, rallyEnemyEntrance, worldHasRaidOrders } from '../sim/raid-order.js';
+import type { WorldState } from '../sim/types.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import { CONTEXT_MENU, type ContextMenuRow } from './context-menu-layout.js';
 import type { GfxLike } from './draw-surface.js';
@@ -32,9 +32,9 @@ export interface RaidOrderOption extends ContextMenuRow {
   readonly glyph: readonly string[];
 }
 
-/** The five orders, in RaidType order — the raid menu's rows top to bottom. */
-export const RAID_ORDER_OPTIONS: readonly RaidOrderOption[] = [
-  {
+/** Each order's look, keyed by type (the type system requires one per RaidType). */
+const RAID_ORDER_BY_TYPE = {
+  [RaidType.Loot]: {
     raidType: RaidType.Loot,
     label: 'Loot',
     blurb: 'Fighters steal food while your stores have room.',
@@ -42,7 +42,7 @@ export const RAID_ORDER_OPTIONS: readonly RaidOrderOption[] = [
     badgeColor: 0xe8c060,
     glyph: ['#....', '#....', '#....', '#....', '#####'],
   },
-  {
+  [RaidType.Deny]: {
     raidType: RaidType.Deny,
     label: 'Deny',
     blurb: 'Fighters steal food; what won’t fit is left by your entrance.',
@@ -50,7 +50,7 @@ export const RAID_ORDER_OPTIONS: readonly RaidOrderOption[] = [
     badgeColor: 0xf09040,
     glyph: ['####.', '#...#', '#...#', '#...#', '####.'],
   },
-  {
+  [RaidType.Spoil]: {
     raidType: RaidType.Spoil,
     label: 'Spoil',
     blurb: 'Fighters destroy the enemy’s stored food.',
@@ -58,7 +58,7 @@ export const RAID_ORDER_OPTIONS: readonly RaidOrderOption[] = [
     badgeColor: 0xa0c040,
     glyph: ['.####', '#....', '.###.', '....#', '####.'],
   },
-  {
+  [RaidType.Blockade]: {
     raidType: RaidType.Blockade,
     label: 'Blockade',
     blurb: 'Fighters guard this entrance and attack all who come near.',
@@ -66,7 +66,7 @@ export const RAID_ORDER_OPTIONS: readonly RaidOrderOption[] = [
     badgeColor: 0x70a0f0,
     glyph: ['####.', '#...#', '####.', '#...#', '####.'],
   },
-  {
+  [RaidType.Assault]: {
     raidType: RaidType.Assault,
     label: 'Assault',
     blurb: 'Fighters ignore food and go for the queen.',
@@ -74,11 +74,23 @@ export const RAID_ORDER_OPTIONS: readonly RaidOrderOption[] = [
     badgeColor: 0xf05050,
     glyph: ['.###.', '#...#', '#####', '#...#', '#...#'],
   },
+} as const satisfies { readonly [T in RaidType]: RaidOrderOption & { readonly raidType: T } };
+
+/** The five orders, in RaidType order — the raid menu's rows top to bottom. */
+export const RAID_ORDER_OPTIONS: readonly RaidOrderOption[] = [
+  RAID_ORDER_BY_TYPE[RaidType.Loot],
+  RAID_ORDER_BY_TYPE[RaidType.Deny],
+  RAID_ORDER_BY_TYPE[RaidType.Spoil],
+  RAID_ORDER_BY_TYPE[RaidType.Blockade],
+  RAID_ORDER_BY_TYPE[RaidType.Assault],
 ];
 
 /** The option for `type` (Loot for anything unknown). */
 export function raidOrderOption(type: RaidType): RaidOrderOption {
-  return RAID_ORDER_OPTIONS[type] ?? RAID_ORDER_OPTIONS[RaidType.Loot]!;
+  return (
+    (RAID_ORDER_BY_TYPE as Partial<Record<RaidType, RaidOrderOption>>)[type] ??
+    RAID_ORDER_BY_TYPE[RaidType.Loot]
+  );
 }
 
 /** The caption shown when the player gives an order: "Raiding: Deny. …". */
@@ -87,10 +99,7 @@ export function raidOrderCaption(type: RaidType): string {
   return `Raiding: ${o.label}. ${o.blurb}`;
 }
 
-/** The world has raid orders (V60+): the raid menu, badge and order caption apply. */
-export function worldHasRaidOrders(world: WorldState): boolean {
-  return world.simVersion >= SIM_VERSION_V60_RAID_ORDERS;
-}
+export { worldHasRaidOrders };
 
 /**
  * The raid order `colonyId`'s rally is giving right now, or null: a V60+ world
@@ -135,14 +144,7 @@ export function raidOrderOfRally(
   if (!worldHasRaidOrders(world)) return null;
   const type = cmd.raidType ?? RaidType.Loot;
   if (!isRaidType(type)) return null;
-  for (const key of Object.keys(world.colonies)) {
-    const other = world.colonies[Number(key)];
-    if (other === undefined || other.colonyId === colonyId) continue;
-    for (const ent of other.entrances ?? []) {
-      if (ent.surfaceTileX === cmd.tileX && ent.surfaceTileY === cmd.tileY) return type;
-    }
-  }
-  return null;
+  return enemyEntranceAt(world, colonyId, cmd.tileX, cmd.tileY) === null ? null : type;
 }
 
 /**

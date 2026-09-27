@@ -35,10 +35,11 @@
 
 import type { WorldState } from '../sim/types.js';
 import { SIM_VERSION_V52_RAIDING } from '../sim/types.js';
-import type { ColonyId } from '../sim/colony/colony-store.js';
+import type { ColonyId, ColonyRecord } from '../sim/colony/colony-store.js';
 import type { SetRallyPointCommand, SimCommand } from '../sim/commands.js';
 import { RaidType } from '../sim/enums.js';
 import { activeRaidOrder } from './raid-order-view.js';
+import { rallyEnemyEntrance } from '../sim/raid-order.js';
 
 export type RaidCaptionKind = 'raided' | 'looting' | 'hauled' | 'spoiling';
 
@@ -79,8 +80,10 @@ export interface RaidCaptionState {
   lostFp: number;
   raidedFp: number;
   trips: number;
-  /** #352 — food (fp) the OTHER colonies have lost to raids (a Spoil destroys it). */
-  othersLostFp: number;
+  /** #352 — the colony the watched colony's Spoil order targets (-1: none), and
+   *  the food (fp) it had lost to raids when last seen (a Spoil destroys it). */
+  spoilTargetId: number;
+  spoilTargetLostFp: number;
   /** world.tick at which each caption last showed (-Infinity: never). */
   lastShownTick: Record<RaidCaptionKind, number>;
   /** world.tick of a counter rise not yet shown (-Infinity: none owed). */
@@ -92,7 +95,8 @@ export function createRaidCaptionState(): RaidCaptionState {
     lostFp: 0,
     raidedFp: 0,
     trips: 0,
-    othersLostFp: 0,
+    spoilTargetId: -1,
+    spoilTargetLostFp: 0,
     lastShownTick: {
       raided: -Infinity,
       looting: -Infinity,
@@ -121,7 +125,8 @@ export function resetRaidCaptionState(
   state.lostFp = c?.foodLostToRaidsFp ?? 0;
   state.raidedFp = c?.foodRaidedFp ?? 0;
   state.trips = c?.raidTrips ?? 0;
-  state.othersLostFp = othersLostToRaids(world, colonyId);
+  state.spoilTargetId = -1;
+  state.spoilTargetLostFp = 0;
   for (const kind of RAID_CAPTION_KINDS) {
     state.lastShownTick[kind] = -Infinity;
     state.owedSinceTick[kind] = -Infinity;
@@ -152,15 +157,25 @@ export function nextRaidCaption(
   if (c.foodLostToRaidsFp > state.lostFp) owe(state, world, 'raided');
   if (c.foodRaidedFp > state.raidedFp) owe(state, world, 'looting');
   if (c.raidTrips > state.trips) owe(state, world, 'hauled');
-  // #352: a Spoil moves no food home, so it shows as the other colonies' loss.
-  const othersLost = othersLostToRaids(world, colonyId);
-  if (othersLost > state.othersLostFp && activeRaidOrder(world, colonyId) === RaidType.Spoil) {
-    owe(state, world, 'spoiling');
+  // #352: a Spoil moves no food home, so it shows as its target's loss — only the
+  // colony whose entrance the order is on (a third colony raided by someone else
+  // is not "your fighters destroying"). A new target only sets the baseline.
+  const target = spoilTarget(world, colonyId);
+  if (target === null) {
+    state.spoilTargetId = -1;
+  } else {
+    if (
+      target.colonyId === state.spoilTargetId &&
+      target.foodLostToRaidsFp > state.spoilTargetLostFp
+    ) {
+      owe(state, world, 'spoiling');
+    }
+    state.spoilTargetId = target.colonyId;
+    state.spoilTargetLostFp = target.foodLostToRaidsFp;
   }
   state.lostFp = c.foodLostToRaidsFp;
   state.raidedFp = c.foodRaidedFp;
   state.trips = c.raidTrips;
-  state.othersLostFp = othersLost;
   for (const kind of RAID_CAPTION_KINDS) {
     const since = state.owedSinceTick[kind];
     if (since === -Infinity) continue;
@@ -174,13 +189,19 @@ export function nextRaidCaption(
 }
 
 /** #352 — the food (fp) every colony but `colonyId` has lost to raids. */
-function othersLostToRaids(world: WorldState, colonyId: ColonyId): number {
-  let sum = 0;
+/** The colony `colonyId`'s Spoil order is on (owner of the rallied enemy entrance), or null. */
+function spoilTarget(world: WorldState, colonyId: ColonyId): ColonyRecord | null {
+  if (activeRaidOrder(world, colonyId) !== RaidType.Spoil) return null;
+  const c = world.colonies[colonyId];
+  const ent = c === undefined ? null : rallyEnemyEntrance(world, c);
+  if (ent === null) return null;
   for (const key of Object.keys(world.colonies)) {
     const other = world.colonies[Number(key)];
-    if (other !== undefined && other.colonyId !== colonyId) sum += other.foodLostToRaidsFp;
+    if (other !== undefined && other.colonyId !== colonyId && other.entrances.includes(ent)) {
+      return other;
+    }
   }
-  return sum;
+  return null;
 }
 
 /** A rise of `kind`'s counter: owe the caption unless it is cooling down. */

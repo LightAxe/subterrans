@@ -1038,15 +1038,17 @@ export class GestureArbiter {
   }
 
   /**
-   * tryContextMenuAt — open the underground chamber menu for a screen point +
-   * target tile when eligible. Shared by right-click and the #237 PR4 touch
+   * tryContextMenuAt — open the context menu for a screen point + target tile
+   * when eligible: on the surface the #352 raid menu (an enemy entrance only),
+   * underground the chamber menu. Shared by right-click and the #237 PR4 touch
    * long-press; the CALLER supplies the tile so each picks the right frame:
    * right-click reprojects the live cursor, but the long-press passes the
    * SNAPSHOTTED down-tile (single.tileX/tileY) so it agrees with the tap — a
    * keyboard-pan / wheel-zoom during the hold must not retarget the menu to a
    * tile the finger never pressed (Codex #274). Returns tryOpenChamberMenu's
-   * result (did the menu open?), so the long-press can leave a pending tap intact
-   * when nothing opens (surface / HUD / non-editable tile / no world).
+   * result (did a menu open?), so the long-press can leave a pending tap intact
+   * when nothing opens (a surface tile that is not an enemy entrance / HUD /
+   * non-editable tile / no world).
    */
   private tryContextMenuAt(x: number, y: number, tileX: number, tileY: number): boolean {
     if (!this.deps.canEditWorld()) return false;
@@ -1056,17 +1058,17 @@ export class GestureArbiter {
     if (!world) return false;
     // #352: on the surface, an enemy entrance opens the raid menu.
     if (vs.activeView === 'surface') return tryOpenRaidMenu(world, vs, x, y, tileX, tileY);
-    if (vs.activeView !== 'underground') return false;
     return tryOpenChamberMenu(world, this.deps.getProjectedWorld(), vs, x, y, tileX, tileY);
   }
 
   /**
    * fireLongPress — #237 PR4 timer callback: a touch press held past LONG_PRESS_MS
-   * without dragging. Opens the chamber menu at the snapshotted down-point; only if
-   * it ACTUALLY opens do we abandon the pending tap (via cancelGesture — a full
+   * without dragging. Opens the context menu (tryContextMenuAt: the raid menu on a
+   * surface enemy entrance, the chamber menu underground) at the snapshotted
+   * down-point; only if it ACTUALLY opens do we abandon the pending tap (via cancelGesture — a full
    * reset that keeps the mode==='single' ⇒ single!==null invariant, unlike a bare
-   * clearLeftGesture). If nothing opens (surface / HUD / non-editable), the tap
-   * stays armed so a normal lift still taps.
+   * clearLeftGesture). If nothing opens (a surface tile that is not an enemy
+   * entrance / HUD / non-editable), the tap stays armed so a normal lift still taps.
    */
   private fireLongPress(): void {
     this.longPressCancel = null; // the timer just fired — nothing left to cancel

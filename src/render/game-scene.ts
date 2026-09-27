@@ -689,6 +689,9 @@ export class GameScene extends Phaser.Scene {
       surfaceTileScreenPoint: (tileX: number, tileY: number) => {
         if (this.viewState.activeView !== 'surface') return null;
         const cam = this.viewState.surfaceCamera;
+        // A wheel-zoom lerp in flight would re-anchor the camera next frame and
+        // stale the returned point (as onMinimapNav cancels before a jump).
+        this.cameraController.cancel(cam);
         cam.centerX = tileX * TILE_SIZE_PX + TILE_SIZE_PX / 2;
         cam.centerY = tileY * TILE_SIZE_PX + TILE_SIZE_PX / 2;
         clampCameraView(cam, SURFACE_WORLD_PX_W, SURFACE_WORLD_PX_H);
@@ -1962,7 +1965,15 @@ export class GameScene extends Phaser.Scene {
         // one-shot key, so it shows even after the generic rally caption has.
         const rally = finalRallyInBatch(cmds, PLAYER_COLONY_ID);
         // #352 (V60): a rally on an enemy entrance is a raid order; its caption
-        // names the order ("Raiding: Deny. …") every time one is given.
+        // names the order ("Raiding: Deny. …") every time one is given. It is a
+        // player-initiated echo, so it skips the recurring-caption idle gate (the
+        // confirmation must show while raid news is up). Its volume is bounded:
+        // one per drained batch (finalRallyInBatch — the last rally wins), and a
+        // re-pick of the order already in force sends no command at all
+        // (UIScene.dispatchRaidMenuClick), so each caption is a distinct change the
+        // player made through the two-click menu. The queue never evicts for it: an
+        // overflow drops the newcomer, and a dropped one-shot is un-marked so it
+        // can fire again (caption-queue.ts, UIScene.showCaption).
         const order = rally === null ? null : raidOrderOfRally(this.world, PLAYER_COLONY_ID, rally);
         if (order !== null) {
           if (uiScene)

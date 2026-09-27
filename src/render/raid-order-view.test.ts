@@ -240,6 +240,23 @@ describe('raid news captions under an order', () => {
     w2.colonies[ENEMY_COLONY_ID]!.foodLostToRaidsFp += 1024;
     expect(nextRaidCaption(s2, w2, PLAYER_COLONY_ID)).toBeNull();
   });
+
+  it('"spoiling" counts only the Spoil target’s loss, not a third colony’s', () => {
+    const w = world();
+    const c = w.colonies[PLAYER_COLONY_ID]!;
+    const d = enemyDoor(w);
+    c.rallyPoint = { tileX: d.x, tileY: d.y };
+    c.raidType = RaidType.Spoil;
+    const third = { ...w.colonies[ENEMY_COLONY_ID]!, colonyId: 7, entrances: [] };
+    (w.colonies as Record<number, typeof third>)[7] = third;
+    const s = createRaidCaptionState();
+    resetRaidCaptionState(s, w, PLAYER_COLONY_ID);
+    expect(nextRaidCaption(s, w, PLAYER_COLONY_ID)).toBeNull();
+    third.foodLostToRaidsFp += 1024;
+    expect(nextRaidCaption(s, w, PLAYER_COLONY_ID)).toBeNull();
+    w.colonies[ENEMY_COLONY_ID]!.foodLostToRaidsFp += 1024;
+    expect(nextRaidCaption(s, w, PLAYER_COLONY_ID)).toBe('spoiling');
+  });
 });
 
 describe('input: opening the raid menu and sending the pick', () => {

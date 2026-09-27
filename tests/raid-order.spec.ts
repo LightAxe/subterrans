@@ -148,6 +148,11 @@ test.describe('#352 — raid orders', () => {
     await page.mouse.click(box.x + row0.x + (row0.w >> 1), box.y + row0.y + (row0.h >> 1), {
       button: 'right',
     });
+    // The order stays Blockade: nothing was enqueued (checked before the next pick,
+    // so a Loot replaced within one drain batch could not hide behind it). Held
+    // for a moment so a queued command would have been applied.
+    await page.waitForTimeout(300);
+    expect((await raidOrder(page))?.raidType).toBe(RAID.Blockade);
     // The menu is still up (reopened, or left open); pick Assault. Had the
     // right-click picked Loot, that order would have gone first, and its caption
     // would be among those shown.
