@@ -21,9 +21,6 @@ import { FP_SHIFT } from '../sim/fixed.js';
 import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 import {
   UNDERGROUND_CEILING_ROW_Y,
-  PLAYER_COLONY_ID,
-  PLAYER_START_X,
-  ENEMY_START_X,
   AI_PROBE_INTERVAL_TICKS,
   AI_PROBE_FIGHTER_COUNT,
   AI_PROBE_FALLBACK_RADIUS_TILES,
@@ -38,6 +35,7 @@ import {
   pileSlotAt,
   pileTileX,
   pileTileY,
+  colonyPoolTileX,
 } from '../sim/food/food-api.js';
 import { aiFighterCount, opponentColonyId } from '../sim/ai-state.js';
 
@@ -856,6 +854,19 @@ function aiInvasionTick(world: WorldState, aiColonyId: ColonyId): void {
 }
 
 /**
+ * The AI colony's probe reference column when it has no entrance of its own:
+ * its first entrance, else its entrance pool's column (= its start column, which
+ * the pool never leaves), else its queen's column. Colony-agnostic (CLNY-08).
+ */
+function _aiReferenceTileX(world: WorldState, aiCol: ColonyRecord | undefined): number {
+  if (aiCol === undefined) return 0;
+  if (aiCol.entrances.length > 0) return aiCol.entrances[0]!.surfaceTileX;
+  const poolX = colonyPoolTileX(world, aiCol);
+  if (poolX >= 0) return poolX;
+  return world.ants.posX[aiCol.queenEntityId]! >> FP_SHIFT;
+}
+
+/**
  * Select probe target (Q3 spec). The target colony is the AI's opponent
  * (`opponentColonyId`, ai-state.ts): the player for the enemy AI, the enemy for a
  * player-colony AI (#290 PR 5 — before that the player AI "invaded" its own
@@ -873,13 +884,11 @@ export function aiSelectProbeTarget(
   let bestPile: { tileX: number; tileY: number; id: number; dist: number } | null = null;
   const aiCol = world.colonies[aiColonyId];
   // We need a reference point: the AI's entrance, else its OWN colony's start
-  // column (#347: a player-colony AI used to fall back to the enemy's).
-  const aiEntranceX =
-    aiCol !== undefined && aiCol.entrances.length > 0
-      ? aiCol.entrances[0]!.surfaceTileX
-      : aiColonyId === PLAYER_COLONY_ID
-        ? PLAYER_START_X
-        : ENEMY_START_X;
+  // column (#347: a player-colony AI used to fall back to the enemy's). The start
+  // column is read from the colony's own state — its entrance pool sits there —
+  // never from a colony-ID branch (CLNY-08); a pool-less hand-built colony falls
+  // back to its queen's column.
+  const aiEntranceX = _aiReferenceTileX(world, aiCol);
   const aiEntranceY =
     aiCol !== undefined && aiCol.entrances.length > 0 ? aiCol.entrances[0]!.surfaceTileY : 0; // surface row — all current entrances have surfaceTileY=0
 
