@@ -1319,8 +1319,9 @@ export const SIM_VERSION_V59_INVADER_RETARGET = 59 as const;
  * (no reachable stock by their own start / keep-going rule), not the hunt. While a
  * friend already holds the queen's tile (#364's saturation), any of the four goes
  * for a free enemy worker within RAID_ENGAGE_RADIUS_TILES path tiles (the fighters'
- * sight) instead, and with none in sight queues for the queen (raidQueenTarget). New serialized field `ColonyRecord.raidType`, written
- * only when not Loot, so every pre-V60 save (always Loot) serializes as before;
+ * sight) instead, and with none in sight queues for the queen (raidQueenTarget).
+ * New serialized field `ColonyRecord.raidType`, written only when not Loot, so
+ * every pre-V60 save (always Loot) serializes as before;
  * the SetRallyPoint handler ignores `raidType` below V60. No world.rngState draw;
  * a new pass (step 10c2, a no-op without a blockade) and the Deny drop's entity-id
  * advance happen only for a non-Loot raid type. A V59 save replays byte-identically.

@@ -11,7 +11,8 @@
 // (RAID_CARRY_FP) and HAULS it home — out of the enemy nest, across the surface,
 // down its own shaft — where it deposits it as a forager would, then walks back to
 // its rally and goes in again. A hostile in reach wins over loot (it fights); with
-// the larder empty it hunts the nearest hostile anywhere, the queen included (D10).
+// the larder empty it hunts the nearest hostile anywhere, the queen included (D10;
+// below V60 — from V60 it goes for the queen, see Raid orders below).
 //
 // Extension point (plan §4.5). Everything about WHEN a fighter raids lives in
 // `fighterMayLoot`: "rallied on this nest's entrance, nothing hostile within
@@ -407,8 +408,8 @@ function lootVerdict(world: WorldState, colony: ColonyRecord, id: number): numbe
       // the larder is empty as well: then there is nothing left to take either.
       // Deliberately tied to the enemy's larder, not only its own stores: the AI
       // always raids with Loot, and this build leaves the AI's raiders exactly as
-      // they were while there is food to take (a stocked larder keeps the V53
-      // hunt). Queen-first on full stores alone is a balance change for #366.
+      // they were while there is food to take (a larder holding a full load —
+      // RAID_LOOT_START_STOCK_FP, the start rule — keeps the V53 hunt). Queen-first on full stores alone is a balance change for #366.
       if (
         world.simVersion >= SIM_VERSION_V60_RAID_ORDERS &&
         stockStepDir(world, id, !looting) < -1
@@ -558,8 +559,8 @@ export function updateRaiders(world: WorldState): void {
 }
 
 /**
- * #352 (V60) — the ant raider `id` of `colony` goes for when it goes for the queen,
- * or -1. It does when its colony's raid type is Assault, or `nothingToTake` (a
+ * #352 (V60) — the ant that raider `id` of `colony` targets when it goes for the
+ * queen, or -1. It does when its colony's raid type is Assault, or `nothingToTake` (a
  * Loot, Deny or Spoil raider lootVerdict found nothing left to take) — and it is
  * below ground in a FOREIGN nest whose entrance its colony is rallied on, not in a
  * duel (a fight it is in comes first: with no target, step 16's hunt fights the

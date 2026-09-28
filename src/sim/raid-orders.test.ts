@@ -758,6 +758,25 @@ describe('the queen held by a friend: a free enemy worker in sight first (V60)',
     updateRaiders(w);
     expect(w.ants.targetPosX[a.id]).toBe(w.ants.posX[a.q]);
   });
+
+  it('sight is bounded by path length: a worker round a long detour is not seen', () => {
+    // (110, 3) joined to the raider's tunnel by a detour east: up the column at x
+    // 113 (rows 3–5) and along row 3 — Manhattan 3, path 9 (> the sight radius).
+    const a = held(RaidType.Assault);
+    const w = a.r.world;
+    carve(w.undergroundGrids[E]!, 110, 3, 113, 3);
+    carve(w.undergroundGrids[E]!, 113, 3, 113, 5);
+    addEnemyWorker(w, 110, 3);
+    updateRaiders(w);
+    expect(w.ants.targetPosX[a.id]).toBe(w.ants.posX[a.q]);
+    // The same worker by a short way (a shaft straight up, path 3) is seen.
+    const b = held(RaidType.Assault);
+    const w2 = b.r.world;
+    carve(w2.undergroundGrids[E]!, 110, 3, 110, 5);
+    const near = addEnemyWorker(w2, 110, 3);
+    updateRaiders(w2);
+    expect(w2.ants.targetPosX[b.id]).toBe(w2.ants.posX[near]);
+  });
 });
 
 describe('a looter whose larder runs dry turns to the queen (V60)', () => {
