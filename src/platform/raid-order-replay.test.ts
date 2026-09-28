@@ -16,8 +16,11 @@
 // save/copy lands mid-order.
 //
 // A per-tick harness hook (`before`) may reset state the log cannot express (the
-// Deny scenario keeps the player's stores full). It is a pure function of the
-// world, applied identically in every run, before the tick.
+// Deny scenario keeps the player's stores full; the Spoil and change scenarios
+// keep the enemy fed). It is a pure function of the world, applied identically in
+// every run, before the tick. It re-sets those fields (pool food, chamber stock,
+// meal ticks) after a load or copy too, so runs C and D do not by themselves prove
+// that they round-trip — their own save tests do.
 
 import { describe, it, expect } from 'vitest';
 import { tick } from '../sim/tick.js';
@@ -98,6 +101,18 @@ function feedEnemy(w: WorldState): void {
   for (const l of e.larvae) w.ants.lastMealTick[l] = w.tick;
 }
 
+/** Food (fp) in surface piles within a tile of the player's open entrance. */
+function pilesByOwnDoor(w: WorldState): number {
+  const door = w.colonies[P]!.entrances.find((e) => e.isOpen)!;
+  let fp = 0;
+  forEachPile(w, (pile) => {
+    if (Math.abs(pile.x - door.surfaceTileX) <= 1 && Math.abs(pile.y - door.surfaceTileY) <= 1) {
+      fp += pile.amountFp;
+    }
+  });
+  return fp;
+}
+
 function run(sc: Scenario, split: 'none' | 'save' | 'copy', changeAt = -1): Run {
   const r = raidWorld(sc.larderFp);
   for (const x of [20, 22, 26]) addFighter(r.world, P, x, r.playerDoor.y - 2, null);
@@ -160,7 +175,9 @@ function replayed(sc: Scenario, changeAt = -1): Run {
   const c = run(sc, 'save', changeAt);
   expect(c.midOrderAtSplit).toBe(true);
   expect(c.hashes).toEqual(a.hashes);
-  expect(run(sc, 'copy', changeAt).hashes).toEqual(a.hashes);
+  const d = run(sc, 'copy', changeAt);
+  expect(d.midOrderAtSplit).toBe(true);
+  expect(d.hashes).toEqual(a.hashes);
   return a;
 }
 
@@ -186,24 +203,16 @@ describe('V60 raid orders replay deterministically, across save/load and copy (#
             }
           }
         },
-        midOrder: (w) => w.colonies[P]!.foodRaidedFp > 0,
+        // A load already dropped by the raiders' own entrance before the split.
+        midOrder: (w) => pilesByOwnDoor(w) > 0,
       };
       const a = replayed(sc);
       const p = a.world.colonies[P]!;
       expect(p.raidType).toBe(RaidType.Deny);
       expect(p.foodRaidedFp).toBeGreaterThan(0);
       expect(p.raidTrips).toBeGreaterThan(0);
-      let byDoor = 0;
-      const door = p.entrances.find((e) => e.isOpen)!;
-      forEachPile(a.world, (pile) => {
-        if (
-          Math.abs(pile.x - door.surfaceTileX) <= 1 &&
-          Math.abs(pile.y - door.surfaceTileY) <= 1
-        ) {
-          byDoor += pile.amountFp;
-        }
-      });
-      expect(byDoor).toBeGreaterThan(0);
+      // Dropped by its entrance (no forager takes it in: the fixture has none).
+      expect(pilesByOwnDoor(a.world)).toBeGreaterThan(0);
     },
     SLOW,
   );

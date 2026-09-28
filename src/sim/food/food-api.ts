@@ -779,8 +779,7 @@ export function topUpOrSpawnCorpsePile(
   const newId = allocateEntityId(world);
   if (newId === INVALID_ENTITY_ID) return false; // entity-id exhaustion — silent skip
   // Defensive clamp, symmetric with the top-up branch.
-  spawnPile(world, newId, x, y, fp < PILE_MAX_FP ? fp : PILE_MAX_FP, FOOD_FLAG_CORPSE);
-  return true;
+  return spawnPile(world, newId, x, y, fp < PILE_MAX_FP ? fp : PILE_MAX_FP, FOOD_FLAG_CORPSE) >= 0;
 }
 
 // ---------------------------------------------------------------------------
