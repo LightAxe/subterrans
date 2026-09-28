@@ -46,6 +46,8 @@ import {
   canEnterUndergroundTile,
   isOccupancyExempt,
   packStep,
+  stampFriendTiles,
+  tileSaturated,
 } from './ant-motion.js';
 
 /** invaderHuntStep's result when the tunnels reach no hostile at all (or below V59). */
@@ -94,7 +96,12 @@ export function invaderHuntStep(
     rt.queueY = new Int32Array(cells);
     rt.stamp = 0;
   }
-  if (rt.stamp >= 0x7fffffff) {
+  // Two stamps per call (`stamp` for the passes and the hunt BFS, `reach` for the
+  // walls-only BFS), both reserved up front. The stamp counter is unsaved scratch
+  // (0 after a load or copyWorldState), so nothing may depend on its value: stamps
+  // are only ever compared for equality within a call, and the rollover below
+  // clears every stamped buffer first, so a stale cell can never match.
+  if (rt.stamp > 0x7fffffff - 2) {
     rt.friend.fill(0);
     rt.block.fill(0);
     rt.hostile.fill(0);
@@ -102,7 +109,9 @@ export function invaderHuntStep(
     rt.seen.fill(0);
     rt.stamp = 0;
   }
-  const stamp = (rt.stamp += 1);
+  const stamp = rt.stamp + 1;
+  const reach = rt.stamp + 2;
+  rt.stamp = reach;
   const friend = rt.friend;
   const block = rt.block;
   const hostile = rt.hostile;
@@ -115,24 +124,22 @@ export function invaderHuntStep(
 
   // Pass 1 — the tiles other ants of its colony stand on in this nest (`friend`),
   // those a lower-id one claims in the occupancy pass (`block`), and whether a
-  // lower-id one shares its own tile.
+  // lower-id one shares its own tile (the saturation rule's one pass,
+  // stampFriendTiles).
   const self = ants.colonyId[id]!;
-  let ownTileHeld = false;
-  for (let o = 0; o < ants.alive.length; o++) {
-    if (o === id || ants.alive[o] !== 1 || ants.colonyId[o] !== self) continue;
-    if (ants.zone[o] !== Zone.Underground || ants.currentGridColonyId[o] !== gridColonyId) {
-      continue;
-    }
-    const ox = ants.posX[o]! >> FP_SHIFT;
-    const oy = ants.posY[o]! >> FP_SHIFT;
-    if (ox < 0 || oy < 0 || ox >= width || oy >= height) continue;
-    const cell = oy * width + ox;
-    friend[cell] = stamp;
-    if (o < id) {
-      if (cell === start) ownTileHeld = true;
-      if (!claimsNoTile(world, o)) block[cell] = stamp;
-    }
-  }
+  const ownTileHeld = stampFriendTiles(
+    world,
+    id,
+    gridColonyId,
+    0,
+    0,
+    width,
+    height,
+    friend,
+    stamp,
+    block,
+    claimsNoTile,
+  );
   // Pass 2 — the tiles holding a hostile (`anyHostile`), and of those the ones not
   // saturated for it (`hostile`, free).
   let hostiles = 0;
@@ -150,7 +157,7 @@ export function invaderHuntStep(
     const cell = hy * width + hx;
     anyHostile[cell] = stamp;
     hostiles++;
-    if (cell === start ? ownTileHeld : friend[cell] === stamp) continue;
+    if (tileSaturated(cell === start, ownTileHeld, friend, cell, stamp)) continue;
     hostile[cell] = stamp;
     free++;
   }
@@ -207,15 +214,14 @@ export function invaderHuntStep(
   }
 
   // No free hostile it can reach past its friends. Which hostiles do the tunnels
-  // reach when friends are ignored? (Only asked when a friend was in the way; a
-  // fresh `seen` stamp, `hostile`/`anyHostile` keep this call's.)
+  // reach when friends are ignored? (Only asked when a friend was in the way; the
+  // call's second stamp, `reach`, for `seen`; `hostile`/`anyHostile` keep `stamp`.)
   let freeBeyond = false;
   let anyBeyond = false;
   // (With no free hostile, only anyBeyond matters and only without a queue; with
   // a queue, only freeBeyond.)
   if (free === 0 && queueStep !== NO_FREE_HOSTILE) return queueStep;
-  if (blocked && rt.stamp < 0x7fffffff) {
-    const reach = (rt.stamp += 1);
+  if (blocked) {
     seen[start] = reach;
     queueX[0] = selfX;
     queueY[0] = selfY;

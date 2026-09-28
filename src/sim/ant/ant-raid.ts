@@ -60,7 +60,13 @@ import {
   SIM_VERSION_V59_INVADER_RETARGET,
   type WorldState,
 } from '../types.js';
-import { DIR_DX, DIR_DY, canEnterUndergroundTile } from './ant-motion.js';
+import {
+  DIR_DX,
+  DIR_DY,
+  canEnterUndergroundTile,
+  stampFriendTiles,
+  tileSaturated,
+} from './ant-motion.js';
 
 /** Fighter `id` is hauling loot home (FightingSubState.Hauling; V52 only writes it). */
 export function fighterIsHauling(world: WorldState, id: number): boolean {
@@ -149,8 +155,8 @@ function stockStepDir(world: WorldState, id: number, start: boolean): number {
  * standing at (tx, ty) in nest `gridColonyId`) those on a tile SATURATED for it:
  * tileSaturatedFor's rule (ant-motion.ts) — its own tile when a lower-id friend
  * stands there too, any other tile when any friend does — evaluated from ONE pass
- * over the ants that stamps its friends' tiles in the reach window, so each
- * candidate is an O(1) lookup (not a scan of every entity per candidate). Keeps
+ * over the ants (stampFriendTiles) that stamps its friends' tiles in the reach
+ * window, so each candidate is an O(1) lookup (not a scan of every entity per candidate). Keeps
  * `cand`'s order. Allocation-free (scratch window).
  */
 function dropSaturatedCandidates(
@@ -172,28 +178,14 @@ function dropSaturatedCandidates(
     raid.friendCurrent = 0;
   }
   const stamp = (raid.friendCurrent += 1);
-  const self = ants.colonyId[id]!;
-  let ownHeld = false;
-  for (let o = 0; o < ants.alive.length; o++) {
-    if (o === id || ants.alive[o] !== 1 || ants.colonyId[o] !== self) continue;
-    if (ants.zone[o] !== Zone.Underground || ants.currentGridColonyId[o] !== gridColonyId) {
-      continue;
-    }
-    const wx = (ants.posX[o]! >> FP_SHIFT) - ox;
-    const wy = (ants.posY[o]! >> FP_SHIFT) - oy;
-    if (wx < 0 || wy < 0 || wx >= S || wy >= S) continue;
-    friendArr[wy * S + wx] = stamp;
-    if (o < id && wx === RAID_REACH_WINDOW_RADIUS && wy === RAID_REACH_WINDOW_RADIUS) {
-      ownHeld = true;
-    }
-  }
+  const ownHeld = stampFriendTiles(world, id, gridColonyId, ox, oy, S, S, friendArr, stamp);
   let kept = 0;
   for (let i = 0; i < cand.length; i++) {
     const c = cand[i]!;
     const wx = (ants.posX[c]! >> FP_SHIFT) - ox;
     const wy = (ants.posY[c]! >> FP_SHIFT) - oy;
     const own = wx === RAID_REACH_WINDOW_RADIUS && wy === RAID_REACH_WINDOW_RADIUS;
-    if (own ? ownHeld : friendArr[wy * S + wx] === stamp) continue;
+    if (tileSaturated(own, ownHeld, friendArr, wy * S + wx, stamp)) continue;
     cand[kept++] = c;
   }
   cand.length = kept;

@@ -648,16 +648,82 @@ export function isOccupancyExempt(
 }
 
 /**
- * #364 (V59) — tile (tileX, tileY) of nest `gridColonyId` is SATURATED for fighter
- * `id`: its colony already has its side of the fight there, so `id` could add
- * nothing by going to it. Combat fights one pair per tile per tick, the lowest-id
- * ant of each colony on it (combat.ts resolveCombatOnTile_v16; with two colonies,
- * the only case the game has). So:
+ * #364 (V59) — the SATURATION rule, in one place. A tile of nest `gridColonyId` is
+ * saturated for fighter `id` when its colony already has its side of the fight
+ * there, so `id` could add nothing by going to it. Combat fights one pair per tile
+ * per tick, the lowest-id ant of each colony on it (combat.ts
+ * resolveCombatOnTile_v16; with two colonies, the only case the game has). So:
  *   - the tile `id` stands on is saturated when a LOWER-id ant of its colony stands
  *     there too (that ant, not `id`, is paired);
  *   - any other tile is saturated when ANY other ant of its colony stands on it
  *     (`id` arriving there would at best take over a duel a friend already holds).
- * Only ants below ground in that nest count. Allocation-free; one pass over the ants.
+ * Only ants below ground in that nest count.
+ *
+ * stampFriendTiles makes the one pass over the ants the rule needs: it writes
+ * `stamp` into `friend` at every tile of the window (originX, originY, width ×
+ * height; cell = (y − originY) · width + (x − originX)) where another ant of
+ * `id`'s colony stands, and returns whether a lower-id one shares `id`'s own tile.
+ * With `block` and `claimsNoTile` it also stamps `block` where a LOWER-id friend
+ * claims its tile in the occupancy pass (the invader hunt's "cannot pass"). Then
+ * tileSaturated answers the rule for any window cell in O(1). Allocation-free.
+ */
+export function stampFriendTiles(
+  world: WorldState,
+  id: number,
+  gridColonyId: number,
+  originX: number,
+  originY: number,
+  width: number,
+  height: number,
+  friend: Int32Array,
+  stamp: number,
+  block: Int32Array | null = null,
+  claimsNoTile: ((world: WorldState, id: number) => boolean) | null = null,
+): boolean {
+  const ants = world.ants;
+  const self = ants.colonyId[id]!;
+  const selfX = ants.posX[id]! >> FP_SHIFT;
+  const selfY = ants.posY[id]! >> FP_SHIFT;
+  let ownHeld = false;
+  for (let o = 0; o < ants.alive.length; o++) {
+    if (o === id || ants.alive[o] !== 1 || ants.colonyId[o] !== self) continue;
+    if (ants.zone[o] !== Zone.Underground || ants.currentGridColonyId[o] !== gridColonyId) {
+      continue;
+    }
+    const ox = ants.posX[o]! >> FP_SHIFT;
+    const oy = ants.posY[o]! >> FP_SHIFT;
+    if (o < id && ox === selfX && oy === selfY) ownHeld = true;
+    const wx = ox - originX;
+    const wy = oy - originY;
+    if (wx < 0 || wy < 0 || wx >= width || wy >= height) continue;
+    const cell = wy * width + wx;
+    friend[cell] = stamp;
+    if (block !== null && o < id && (claimsNoTile === null || !claimsNoTile(world, o))) {
+      block[cell] = stamp;
+    }
+  }
+  return ownHeld;
+}
+
+/**
+ * #364 (V59) — the saturation rule for one window cell, after stampFriendTiles:
+ * `own` is whether the cell is `id`'s own tile, `ownHeld` stampFriendTiles'
+ * result.
+ */
+export function tileSaturated(
+  own: boolean,
+  ownHeld: boolean,
+  friend: Int32Array,
+  cell: number,
+  stamp: number,
+): boolean {
+  return own ? ownHeld : friend[cell] === stamp;
+}
+
+/**
+ * #364 (V59) — the saturation rule for one tile (tileX, tileY): stampFriendTiles
+ * over a one-tile window, then tileSaturated. The reference form of the rule, for
+ * tests and one-off queries; the hunt and the raid check stamp a whole window once.
  */
 export function tileSaturatedFor(
   world: WorldState,
@@ -666,16 +732,15 @@ export function tileSaturatedFor(
   tileX: number,
   tileY: number,
 ): boolean {
-  const ants = world.ants;
-  const self = ants.colonyId[id]!;
-  const own = ants.posX[id]! >> FP_SHIFT === tileX && ants.posY[id]! >> FP_SHIFT === tileY;
-  for (let o = 0; o < ants.alive.length; o++) {
-    if (o === id || ants.alive[o] !== 1 || ants.colonyId[o] !== self) continue;
-    if (ants.zone[o] !== Zone.Underground || ants.currentGridColonyId[o] !== gridColonyId) {
-      continue;
-    }
-    if (ants.posX[o]! >> FP_SHIFT !== tileX || ants.posY[o]! >> FP_SHIFT !== tileY) continue;
-    if (!own || o < id) return true;
-  }
-  return false;
+  const probe = getScratch(world).antTargeting.saturationProbe;
+  const ownHeld = stampFriendTiles(world, id, gridColonyId, tileX, tileY, 1, 1, probe, 1);
+  const saturated = tileSaturated(
+    world.ants.posX[id]! >> FP_SHIFT === tileX && world.ants.posY[id]! >> FP_SHIFT === tileY,
+    ownHeld,
+    probe,
+    0,
+    1,
+  );
+  probe[0] = 0; // leave the probe clear: every call stamps 1 on a clean cell
+  return saturated;
 }

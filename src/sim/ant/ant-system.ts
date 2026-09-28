@@ -17,7 +17,6 @@ export {
   canEnterUndergroundTile,
   canEnterSurfaceTile,
   pickSurfaceDetour,
-  tileSaturatedFor,
 } from './ant-motion.js';
 export {
   antPickupFood,

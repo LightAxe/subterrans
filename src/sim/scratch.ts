@@ -104,6 +104,9 @@ export interface ScratchArena {
       number,
       { cells: Int32Array; stamp: number; entranceId: number; invaders: number[] }
     >;
+    /** #364 (V59) — ant-motion.ts tileSaturatedFor's one-cell window, cleared to 0
+     *  after every call (so its fixed stamp 1 never meets a stale value). */
+    saturationProbe: Int32Array;
     /** #364 (V59) — invader-retarget.ts's per-call buffers, sized to the largest
      *  nest grid seen: a cell equal to `stamp` holds a friend (`friend`), is
      *  claimed by a lower-id friend (`block`), holds any hostile (`anyHostile`) or
@@ -230,6 +233,7 @@ export function getScratch(world: WorldState): ScratchArena {
         sentryRawPostsBuilt: new Set(),
         sentryNextRank: new Map(),
         defenderReach: new Map(),
+        saturationProbe: new Int32Array(1),
         retarget: {
           friend: new Int32Array(0),
           block: new Int32Array(0),

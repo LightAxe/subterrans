@@ -25,14 +25,17 @@ import {
   fighterMayLoot,
   invaderHuntStep,
   pickInvaderUndergroundStep,
-  tileSaturatedFor,
   unpackStepDx,
   unpackStepDy,
 } from './ant/ant-system.js';
+// The saturation rule's reference form is a Layer-0 primitive with no production
+// consumer outside the ant modules, so it is not on the barrel's public surface.
+import { tileSaturatedFor } from './ant/ant-motion.js';
 import { AntTask, FightingSubState } from './enums.js';
 import { Zone, ugSet, UndergroundTileState } from './terrain.js';
 import { FP_ONE, FP_SHIFT } from './fixed.js';
 import { getScratch } from './scratch.js';
+import { copyWorldState } from './types.js';
 import { setPoolFoodForTest } from './food/food-test-utils.js';
 import {
   ENEMY_COLONY_ID,
@@ -388,6 +391,30 @@ describe('#364 — the hunt goes for the nearest FREE hostile by path (invaderHu
     expect(stepOf(hunt(world, me))).toEqual([0, 0]);
   });
 
+  it('the same answer whatever the unsaved search-stamp counter holds (rollover included)', () => {
+    const { world, at } = mouthHeld();
+    addDefender(world, at(8, 3)); // B, free, down the branch past the blocker
+    const me = addInvader(world, at(3));
+    const rt = getScratch(world).antTargeting.retarget;
+    expect(stepOf(hunt(world, me))).toEqual([0, 0]); // builds the buffers; holds
+    // The counter only ever moves forward within an arena (a load or copyWorldState
+    // drops the arena, buffers and all): jump it close to the limit once, then let
+    // it climb through the rollover, two stamps a call.
+    // Both parities of the gap to the limit: from max − 6 the third call lands on
+    // (max − 1, max); from max − 5 the third call starts at max − 1 and must roll
+    // over rather than overflow past max.
+    for (const gap of [6, 5]) {
+      rt.stamp = 0x7fffffff - gap;
+      for (let k = 0; k < 6; k++) {
+        // It holds (the walls-only search finds B past the blocker), never walks to
+        // D's queue: that search must run at every counter value.
+        expect(stepOf(hunt(world, me))).toEqual([0, 0]);
+        expect(rt.stamp).toBeLessThanOrEqual(0x7fffffff);
+      }
+      expect(rt.stamp).toBeLessThan(0x7fffffff - 6); // it rolled over
+    }
+  });
+
   it('a free hostile walled off beyond its friends does not hold it: it walks to the queue', () => {
     const { world, grid, at } = mouthHeld();
     addDefender(world, at(8, 3));
@@ -480,6 +507,25 @@ describe("#364 — the raid check reads the saturation rule on the raider's own 
   }
 });
 
+describe('#364 — the raid check does not depend on its unsaved stamp counter', () => {
+  it('a rollover clears the window: a friend long gone does not still saturate a tile', () => {
+    const r = raidWorld();
+    const w = r.world;
+    w.simVersion = V59;
+    rallyOn(r.player, r.enemyDoor);
+    const id = addRaidFighter(w, PLAYER_COLONY_ID, 100, 6, ENEMY_COLONY_ID);
+    const hx = 100 - RAID_START_CLEAR_RADIUS_TILES;
+    addEnemyWorker(w, hx, 6);
+    const friend = addRaidFighter(w, PLAYER_COLONY_ID, hx, 6, ENEMY_COLONY_ID);
+    const raid = getScratch(w).raid;
+    raid.friendCurrent = 0;
+    expect(fighterMayLoot(w, r.player, id)).toBe(true); // stamp 1: the friend holds that duel
+    w.ants.posX[friend] = (60 << FP_SHIFT) + (FP_ONE >> 1); // the friend leaves the window
+    raid.friendCurrent = 0x7fffffff; // the next check rolls over to stamp 1 again
+    expect(fighterMayLoot(w, r.player, id)).toBe(false); // the hostile is free: it stops
+  });
+});
+
 describe('#364 — a raider aimed by step 10e follows that aim, not the hunt', () => {
   it('V59: it closes on the hostile that stopped its looting, not a nearer one the raid check does not count', () => {
     const r = raidWorld();
@@ -525,6 +571,89 @@ describe('#364 — a duel its colony holds no longer stops a raider looting', ()
       expect(fighterMayLoot(r.world, r.player, id)).toBe(false); // a free hostile stops it
       addRaidFighter(r.world, PLAYER_COLONY_ID, hx, 6, ENEMY_COLONY_ID); // a friend holds that duel
       expect(fighterMayLoot(r.world, r.player, id)).toBe(loots);
+    });
+  }
+});
+
+describe('#364 — results never depend on the unsaved search-stamp counters', () => {
+  /** The pile-up nest with a raid larder in play is not needed: the hunt alone
+   *  exercises the hunt stamps; raid stamps are exercised by raidPile below. */
+  function pile() {
+    const { world, sx, at } = nest(V59);
+    addDefender(world, at(4));
+    addDefender(world, at(8, 3));
+    addDefender(world, at(12));
+    for (let y = ROW; y >= ROW - 3; y--) addInvader(world, { x: sx, y });
+    return world;
+  }
+  function raidPile() {
+    const r = raidWorld();
+    r.world.simVersion = V59;
+    rallyOn(r.player, r.enemyDoor);
+    for (let x = 90; x <= 110; x += 2)
+      addRaidFighter(r.world, PLAYER_COLONY_ID, x, 6, ENEMY_COLONY_ID);
+    for (let x = 91; x <= 111; x += 4) addEnemyWorker(r.world, x, 6);
+    return r.world;
+  }
+  /** Everything the ants did, for comparison. */
+  function state(w: WorldState): string {
+    const a = w.ants;
+    const n = w.nextEntityId;
+    return JSON.stringify([
+      w.tick,
+      w.rngState,
+      Array.from(a.alive.subarray(0, n)),
+      Array.from(a.posX.subarray(0, n)),
+      Array.from(a.posY.subarray(0, n)),
+      Array.from(a.hp.subarray(0, n)),
+      Array.from(a.subTask.subarray(0, n)),
+      Array.from(a.foodCarrying.subarray(0, n)),
+    ]);
+  }
+  function run(w: WorldState, ticks: number): void {
+    for (let t = 0; t < ticks; t++) tick(w, []);
+  }
+
+  for (const [label, make] of [
+    ['the invader hunt', pile],
+    ['the raid check', raidPile],
+  ] as const) {
+    it(`${label}: counters started at the limit give the same run`, () => {
+      const plain = make();
+      const nearLimit = make();
+      const s = getScratch(nearLimit);
+      // Buffers must exist before the counter is forced; a first tick builds them.
+      tick(plain, []);
+      tick(nearLimit, []);
+      // Forced once, forward, just short of the limit; the counters then climb
+      // through their rollovers on their own (a counter never moves backwards
+      // within one arena: a load or copyWorldState drops the arena).
+      s.antTargeting.retarget.stamp = 0x7fffffff - 6;
+      s.raid.friendCurrent = 0x7fffffff - 3;
+      for (let k = 0; k < 13; k++) {
+        run(plain, 5);
+        run(nearLimit, 5);
+        expect(state(nearLimit)).toBe(state(plain));
+      }
+      // The counter this world exercises rolled over (and neither passed the limit).
+      const rolled =
+        label === 'the invader hunt' ? s.antTargeting.retarget.stamp : s.raid.friendCurrent;
+      expect(rolled).toBeLessThan(0x7fffffff - 6);
+      expect(s.antTargeting.retarget.stamp).toBeLessThanOrEqual(0x7fffffff);
+      expect(s.raid.friendCurrent).toBeLessThanOrEqual(0x7fffffff);
+      expect(state(nearLimit)).toBe(state(plain));
+    });
+
+    it(`${label}: a fresh copyWorldState (counters back at 0) continues identically`, () => {
+      const plain = make();
+      run(plain, 40);
+      const copy = make();
+      copyWorldState(plain, copy);
+      expect(getScratch(copy).antTargeting.retarget.stamp).toBe(0);
+      expect(getScratch(plain).antTargeting.retarget.stamp).toBeGreaterThan(0);
+      run(plain, 80);
+      run(copy, 80);
+      expect(state(copy)).toBe(state(plain));
     });
   }
 });
