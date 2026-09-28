@@ -53,6 +53,7 @@ import {
   FOOD_CHAMBER_CAPACITY,
   FOOD_PICKUP_AMOUNT,
   FOOD_PILE_INITIAL_PICKUPS_MAX,
+  MAX_ENTITIES,
   PLAYER_COLONY_ID,
   RAID_CARRY_FP,
   RAID_ENGAGE_RADIUS_TILES,
@@ -417,6 +418,51 @@ describe('Deny (V60)', () => {
     updateRaiders(w2);
     expect(w2.ants.foodCarrying[id2]).toBe(RAID_CARRY_FP);
     expect(r2.player.raidTrips).toBe(0);
+  });
+
+  it('at the entity cap it keeps its load (no new pile can be made); a pile to top up still takes it', () => {
+    const r = raidWorld();
+    const w = r.world;
+    order(r, RaidType.Deny);
+    fillPlayerStores(r);
+    const x = r.playerDoor.x - 1;
+    const y = r.playerDoor.y + 1;
+    const id = addHauler(w, P, x, y, null, RAID_CARRY_FP);
+    const piles = pileCount(w);
+    w.nextEntityId = MAX_ENTITIES; // no entity id left for a new pile
+    updateRaiders(w);
+    expect(w.ants.foodCarrying[id]).toBe(RAID_CARRY_FP);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.Hauling);
+    expect(r.player.raidTrips).toBe(0);
+    expect(pileCount(w)).toBe(piles);
+    // At its shaft top likewise: it waits there with the load.
+    const r2 = raidWorld();
+    const w2 = r2.world;
+    order(r2, RaidType.Deny);
+    fillPlayerStores(r2);
+    const id2 = addHauler(w2, P, r2.playerDoor.x, 0, P, RAID_CARRY_FP);
+    w2.nextEntityId = MAX_ENTITIES;
+    tickRaidActions(w2);
+    expect(w2.ants.foodCarrying[id2]).toBe(RAID_CARRY_FP);
+    expect(r2.player.raidTrips).toBe(0);
+    // An existing pile on a candidate tile needs no id: it is topped up.
+    const r3 = raidWorld();
+    const w3 = r3.world;
+    order(r3, RaidType.Deny);
+    fillPlayerStores(r3);
+    addPileForTest(w3, {
+      foodPileId: allocateEntityId(w3),
+      tileX: x,
+      tileY: y,
+      pickupsRemaining: 1,
+      pickupsInitial: 1,
+    });
+    const id3 = addHauler(w3, P, x, y, null, RAID_CARRY_FP);
+    w3.nextEntityId = MAX_ENTITIES;
+    updateRaiders(w3);
+    expect(w3.ants.foodCarrying[id3]).toBe(0);
+    expect(r3.player.raidTrips).toBe(1);
+    expect(pileAmountFp(w3, pileAtTile(w3, x, y))).toBe(FOOD_PICKUP_AMOUNT + RAID_CARRY_FP);
   });
 
   it('a load under one pickup is let go without a pile or a trip', () => {

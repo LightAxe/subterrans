@@ -409,7 +409,8 @@ function lootVerdict(world: WorldState, colony: ColonyRecord, id: number): numbe
       // Deliberately tied to the enemy's larder, not only its own stores: the AI
       // always raids with Loot, and this build leaves the AI's raiders exactly as
       // they were while there is food to take (a larder holding a full load —
-      // RAID_LOOT_START_STOCK_FP, the start rule — keeps the V53 hunt). Queen-first on full stores alone is a balance change for #366.
+      // RAID_LOOT_START_STOCK_FP, the start rule — keeps the V53 hunt).
+      // Queen-first on full stores alone is a balance change for #366.
       if (
         world.simVersion >= SIM_VERSION_V60_RAID_ORDERS &&
         stockStepDir(world, id, !looting) < -1
@@ -636,8 +637,11 @@ function denyHaulerDropsLoad(world: WorldState, colony: ColonyRecord, id: number
  * keep the whole load (`pileDropRoomFp`: never a full pile, over the pile cap or
  * off the surface component). The drop keeps whole pickups (a part-pickup
  * remainder is lost). It counts as a trip (`raidTrips`, as a deposit would) and
- * the hauler goes back to its rally. With no such tile it keeps its load and
- * returns false. A load under one pickup is nothing to drop: it is let go
+ * the hauler goes back to its rally. With no such tile — or when the pile store
+ * cannot take it after all (no entity id left for a new pile) — it keeps its load
+ * and returns false: at its door it walks on down as a Loot hauler does, at its
+ * shaft top it waits there, trying again each tick; no food is lost. A load
+ * under one pickup is nothing to drop: it is let go
  * without a trip. Its colony's foragers bring the pile in once there is room.
  */
 function placeDenyLoad(
@@ -654,23 +658,21 @@ function placeDenyLoad(
     ants.subTask[id] = FightingSubState.MovingToRally;
     return true;
   }
-  let dropX = -1;
-  let dropY = -1;
-  for (let i = -1; i < DIR_DX.length && dropX < 0; i++) {
+  for (let i = -1; i < DIR_DX.length; i++) {
     const nx = i < 0 ? tx : tx + DIR_DX[i]!;
     const ny = i < 0 ? ty : ty + DIR_DY[i]!;
     if (!canEnterSurfaceTile(world, nx, ny)) continue;
     if (isEntranceTileOfAnyColony(world, nx, ny)) continue;
     if (pileDropRoomFp(world, nx, ny) < fp) continue;
-    dropX = nx;
-    dropY = ny;
+    // The load is consumed only once the pile has it (a failed insertion — e.g.
+    // no entity id left for a new pile — keeps it on the hauler).
+    if (!topUpOrSpawnCorpsePile(world, nx, ny, fp)) continue;
+    ants.foodCarrying[id] = 0;
+    ants.subTask[id] = FightingSubState.MovingToRally;
+    colony.raidTrips += 1;
+    return true;
   }
-  if (dropX < 0) return false;
-  topUpOrSpawnCorpsePile(world, dropX, dropY, fp);
-  ants.foodCarrying[id] = 0;
-  ants.subTask[id] = FightingSubState.MovingToRally;
-  colony.raidTrips += 1;
-  return true;
+  return false;
 }
 
 /** Target (tile centre) the open entrance of `colony` nearest to ant `id`
