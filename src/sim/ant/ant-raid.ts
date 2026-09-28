@@ -341,11 +341,12 @@ function hostileInReach(
  *     colony must have somewhere to deposit (not `colonyHasNoDepositTarget`). One
  *     already Looting keeps on until the colony has nowhere at all to put food,
  *     then stops. Either way it hunts instead: a full larder at home gains nothing
- *     from loot;
+ *     from loot (from V60, with the enemy larder empty too, it goes for the queen);
  *   - a FoodStorage chamber of that nest holds food and is reachable from it (the
  *     stock flow field; the entrance pool is never raided, D3);
  *   - no hostile (enemy worker or queen) within RAID_ENGAGE_RADIUS_TILES path
- *     tiles (combat first; with the larder empty it hunts the queen, D10).
+ *     tiles (combat first; with the larder empty it hunts the queen, D10 — from
+ *     V60 it goes for the queen directly, raidQueenTarget).
  * With hysteresis: to START (it is not Looting yet) the chamber must hold
  * RAID_LOOT_START_STOCK_FP and nothing hostile may be within
  * RAID_START_CLEAR_RADIUS_TILES; so the answer depends on its current sub-state.
@@ -359,7 +360,8 @@ export function fighterMayLoot(world: WorldState, colony: ColonyRecord, id: numb
 
 /** lootVerdict: may loot. */
 const LOOT = -1;
-/** lootVerdict: not a raider this tick (any condition but a hostile in reach fails). */
+/** lootVerdict: not a raider this tick (any condition but a hostile in reach fails;
+ *  from V60 an empty larder instead gives NOTHING_TO_TAKE). */
 const NOT_A_RAIDER = -2;
 /**
  * #352 (V60) — lootVerdict: a Loot, Deny or Spoil raider that could loot but for
@@ -370,7 +372,8 @@ const NOT_A_RAIDER = -2;
 const NOTHING_TO_TAKE = -3;
 
 /**
- * fighterMayLoot, with the reason: LOOT, NOT_A_RAIDER, or — when every condition
+ * fighterMayLoot, with the reason: LOOT, NOT_A_RAIDER, NOTHING_TO_TAKE (V60: the
+ * larder is empty for it; step 10e sends it at the queen), or — when every condition
  * holds but a hostile is in reach — that hostile's id (step 10e sends the fighter
  * at it, so it closes on what stopped it instead of turning to another hostile
  * and stepping back out of reach: a loot/hunt flip-flop).
@@ -402,6 +405,10 @@ function lootVerdict(world: WorldState, colony: ColonyRecord, id: number): numbe
     if (colonyHasNoDepositTarget(world, colony) || (!looting && !roomForALoad(world, colony))) {
       // #352 (V60): with its stores full a Loot raider hunts, as before — unless
       // the larder is empty as well: then there is nothing left to take either.
+      // Deliberately tied to the enemy's larder, not only its own stores: the AI
+      // always raids with Loot, and this build leaves the AI's raiders exactly as
+      // they were while there is food to take (a stocked larder keeps the V53
+      // hunt). Queen-first on full stores alone is a balance change for #366.
       if (
         world.simVersion >= SIM_VERSION_V60_RAID_ORDERS &&
         stockStepDir(world, id, !looting) < -1

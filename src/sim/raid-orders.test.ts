@@ -62,6 +62,7 @@ import {
   addEnemyWorker,
   addFighter,
   addHauler,
+  carve,
   centre,
   freeSurfaceTile,
   raidWorld,
@@ -736,13 +737,42 @@ describe('the queen held by a friend: a free enemy worker in sight first (V60)',
     expect(w2.ants.targetPosX[b.id]).toBe(w2.ants.posX[b.q]);
   });
 
-  it('with the queen’s tile free it goes for her, past a free worker in sight', () => {
-    const r = raidWorld(0);
-    const w = r.world;
-    order(r, RaidType.Assault);
-    const id = addFighter(w, P, 110, 6, E);
-    addEnemyWorker(w, 108, 6);
+  it('with the queen’s tile free it goes for her, past a free worker inside its sight', () => {
+    for (const type of [RaidType.Assault, RaidType.Loot, RaidType.Deny, RaidType.Spoil]) {
+      const r = raidWorld(0);
+      const w = r.world;
+      order(r, type);
+      const id = addFighter(w, P, 110, 6, E);
+      addEnemyWorker(w, 110 - RAID_ENGAGE_RADIUS_TILES + 1, 6); // well inside sight
+      updateRaiders(w);
+      expect(w.ants.targetPosX[id]).toBe(w.ants.posX[r.enemy.queenEntityId]);
+    }
+  });
+
+  it('sight is by tunnel path: a worker a wall away (Manhattan in sight) is not seen', () => {
+    const a = held(RaidType.Assault);
+    const w = a.r.world;
+    // A sealed pocket 3 tiles above the raider: Manhattan 3, no path.
+    carve(w.undergroundGrids[E]!, 110, 3, 110, 3);
+    addEnemyWorker(w, 110, 3);
     updateRaiders(w);
+    expect(w.ants.targetPosX[a.id]).toBe(w.ants.posX[a.q]);
+  });
+});
+
+describe('a looter whose larder runs dry turns to the queen (V60)', () => {
+  it('Looting → nothing left: it stops looting and aims at the queen', () => {
+    const r = raidWorld(3000);
+    const w = r.world;
+    order(r, RaidType.Loot);
+    const id = addFighter(w, P, 100, 6, E);
+    addEnemyWorker(w, 60, 6); // far out of reach, so it may loot
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.Looting);
+    expect(w.ants.targetPosX[id]).toBe(-1);
+    setChamberStockForTest(w, r.enemy, r.enemyLarder, 0);
+    updateRaiders(w);
+    expect(w.ants.subTask[id]).toBe(FightingSubState.MovingToRally);
     expect(w.ants.targetPosX[id]).toBe(w.ants.posX[r.enemy.queenEntityId]);
   });
 });
