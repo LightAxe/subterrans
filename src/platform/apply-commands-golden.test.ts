@@ -29,7 +29,7 @@ import { tick } from '../sim/tick.js';
 import { serializeWorldState } from './save.js';
 import { createScenario } from '../sim/scenario.js';
 import { PLAYER_COLONY_ID, ENEMY_COLONY_ID, UNDERGROUND_CEILING_ROW_Y } from '../sim/constants.js';
-import { ChamberType } from '../sim/enums.js';
+import { ChamberType, RaidType } from '../sim/enums.js';
 import type { WorldState } from '../sim/types.js';
 import type { SimCommand } from '../sim/commands.js';
 
@@ -278,6 +278,36 @@ describe('applyCommands golden differential (byte-identity of the extraction)', 
           issuedAtTick: TICK,
         },
         { type: 'ClearRallyPoint', colonyId: PLAYER_COLONY_ID, issuedAtTick: TICK },
+      ]),
+    ).toMatchSnapshot();
+  });
+
+  it('SetRallyPoint with a raid type (#352), a malformed one, then a plain rally', () => {
+    expect(
+      run([
+        {
+          type: 'SetRallyPoint',
+          colonyId: PLAYER_COLONY_ID,
+          tileX: 70,
+          tileY: 60,
+          raidType: RaidType.Spoil,
+          issuedAtTick: TICK,
+        },
+        {
+          type: 'SetRallyPoint',
+          colonyId: PLAYER_COLONY_ID,
+          tileX: 71,
+          tileY: 60,
+          raidType: 9 as RaidType,
+          issuedAtTick: TICK,
+        },
+        {
+          type: 'SetRallyPoint',
+          colonyId: ENEMY_COLONY_ID,
+          tileX: 72,
+          tileY: 60,
+          issuedAtTick: TICK,
+        },
       ]),
     ).toMatchSnapshot();
   });

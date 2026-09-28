@@ -42,6 +42,7 @@ import {
   FOOD_PILE_HARD_CAP,
   FOOD_PILE_INITIAL_PICKUPS_MAX,
   FOOD_PILE_SOFT_CEILING,
+  MAX_ENTITIES,
   SURFACE_GRID_HEIGHT,
   SURFACE_GRID_WIDTH,
 } from '../constants.js';
@@ -713,6 +714,28 @@ export function spawnPile(
 }
 
 /**
+ * #352 — the food a `topUpOrSpawnCorpsePile` at surface tile (x, y) would keep, at
+ * most: the room left in the pile there (PILE_MAX_FP less its initial size), or,
+ * with none, a whole new pile's worth when a pile may be made there (under
+ * FOOD_PILE_HARD_CAP, in the surface component, an entity id free); else 0.
+ * Whole pickups are what a drop keeps (`wholeLoadFp`).
+ */
+export function pileDropRoomFp(world: WorldState, x: number, y: number): number {
+  const slot = pileAtTile(world, x, y);
+  if (slot >= 0) return PILE_MAX_FP - world.food.initialFp[slot]!;
+  if (pileCount(world) >= FOOD_PILE_HARD_CAP) return 0;
+  if (!isSurfaceTileInComponent(world, x, y)) return 0;
+  // A new pile needs an entity id (allocateEntityId fails at MAX_ENTITIES).
+  if (world.nextEntityId >= MAX_ENTITIES) return 0;
+  return PILE_MAX_FP;
+}
+
+/** #352 — the part of `fp` a surface drop keeps: whole pickups (the rest is lost). */
+export function wholeLoadFp(fp: number): number {
+  return wholePickupsFp(fp);
+}
+
+/**
  * A2 (V37) — drop `amountFp` (whole pickups) of corpse food at surface tile
  * (x, y). A new pile advances the entity-id counter.
  *
@@ -722,20 +745,22 @@ export function spawnPile(
  * corpse topping up a natural pile leaves it natural). Otherwise a NEW corpse pile
  * is created, only while below FOOD_PILE_HARD_CAP and only on a walkable tile in
  * the surface component (the save's connectivity check would reject anything
- * else). Entity-id exhaustion is a silent skip. No RNG.
+ * else). Entity-id exhaustion is a silent skip. No RNG. Returns whether it kept
+ * anything (#352: a caller that must not lose the food — the Deny drop — keeps it
+ * on a false; earlier callers ignore the result).
  */
 export function topUpOrSpawnCorpsePile(
   world: WorldState,
   x: number,
   y: number,
   amountFp: number,
-): void {
+): boolean {
   const fp = wholePickupsFp(amountFp);
   // Less than one whole pickup is nothing to drop (#290 PR 5: a hauler's part-eaten
   // or partial load): never top up by 0 or mint a zero-sized pile, which the save
   // rejects (a live pile holds at least one pickup). Every earlier caller passes
   // whole pickups ≥ 1, so this changes nothing for them.
-  if (fp <= 0) return;
+  if (fp <= 0) return false;
   const slot = pileAtTile(world, x, y);
   if (slot >= 0) {
     const store = world.food;
@@ -745,16 +770,16 @@ export function topUpOrSpawnCorpsePile(
     // Clamp remaining to the (possibly clamped) initial so the save invariant holds.
     const grownRemaining = store.amountFp[slot]! + fp;
     store.amountFp[slot] = grownRemaining < initial ? grownRemaining : initial;
-    return;
+    return true;
   }
 
-  if (pileCount(world) >= FOOD_PILE_HARD_CAP) return;
+  if (pileCount(world) >= FOOD_PILE_HARD_CAP) return false;
   // Guard before allocating so an off-component tile doesn't burn an entity id.
-  if (!isSurfaceTileInComponent(world, x, y)) return;
+  if (!isSurfaceTileInComponent(world, x, y)) return false;
   const newId = allocateEntityId(world);
-  if (newId === INVALID_ENTITY_ID) return; // entity-id exhaustion — silent skip
+  if (newId === INVALID_ENTITY_ID) return false; // entity-id exhaustion — silent skip
   // Defensive clamp, symmetric with the top-up branch.
-  spawnPile(world, newId, x, y, fp < PILE_MAX_FP ? fp : PILE_MAX_FP, FOOD_FLAG_CORPSE);
+  return spawnPile(world, newId, x, y, fp < PILE_MAX_FP ? fp : PILE_MAX_FP, FOOD_FLAG_CORPSE) >= 0;
 }
 
 // ---------------------------------------------------------------------------

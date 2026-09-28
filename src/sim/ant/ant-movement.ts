@@ -91,6 +91,12 @@ import {
 } from './idle-reserve.js';
 import { clearRecentTiles, isRecentTile, pushRecentTile } from './ant-store.js';
 import { fighterIsHauling, fighterIsLooting, looterStepDir } from './ant-raid.js';
+import {
+  blockaderBarredFromShaft,
+  blockaderLeavesForeignNest,
+  blockaderPassesThroughFriends,
+  blockaderRoutesToTarget,
+} from './ant-blockade.js';
 
 // #231 — the per-tick surface-movement cache (issue #67, ~16 KB Uint8Array) now
 // lives on the per-world scratch arena (getScratch(world).surfaceMoveCache), reset
@@ -846,12 +852,15 @@ export function tickAntMovement(
       // looter to the hostile hunt, as before V52.
       let raidDir = -2;
       const hauling = isForeignGridUnderground && fighterIsHauling(world, id);
+      // #352 (V60): a fighter of a blockading colony caught in an enemy nest climbs
+      // out as a recalled invader does (the policy lives in ant-blockade).
+      const blockaderOut = isForeignGridUnderground && blockaderLeavesForeignNest(world, id);
       // #346 (V55): a recalled invader (its colony's rally cleared) walks out the
       // same way: by the nest's entrance field, else the reachable-exit BFS below
       // (the policy lives in ant-combat-targeting: invaderExitsByEntranceField).
       if (
         isForeignGridUnderground &&
-        invaderExitsByEntranceField(world, id, hauling) &&
+        (invaderExitsByEntranceField(world, id, hauling) || blockaderOut) &&
         entranceFlowFields !== undefined
       ) {
         const field = entranceFlowFields.fields[gridColonyId];
@@ -891,7 +900,8 @@ export function tickAntMovement(
         const isRecalling =
           colonyRecalledItsFighters(world, ownColonyId) ||
           fighterWalksHomeToEat(world, id) ||
-          hauling;
+          hauling ||
+          blockaderOut;
 
         if (isRecalling) {
           // Recalled invader: navigate toward the nearest foreign entrance exit
@@ -1057,11 +1067,13 @@ export function tickAntMovement(
       // goal field it keeps the straight-line step. (The policy lives in
       // ant-combat-targeting: defenderWalksToEntrance; the step in
       // entrance-routed-step.)
+      // #352 (V60): so does a blockader walking to the entrance it blockades from
+      // beyond its leash, or to its post (ant-blockade: blockaderRoutesToTarget).
       if (
         haveTarget &&
         !fieldStepped &&
         zone === Zone.Surface &&
-        defenderWalksToEntrance(world, id)
+        (defenderWalksToEntrance(world, id) || blockaderRoutesToTarget(world, id))
       ) {
         const step = entranceRoutedStep(
           world,
@@ -1692,7 +1704,9 @@ export function tickAntMovement(
               !isFightingForeigner ||
               fighterBarredFromForeignShaft(world, id) ||
               // V52 (#290 PR 5): a hauler is on its way home, laden.
-              fighterIsHauling(world, id)
+              fighterIsHauling(world, id) ||
+              // #352 (V60): a blockade never goes in (ant-blockade.ts).
+              blockaderBarredFromShaft(world, id)
             ) {
               // Foreign entrance but not a Fighting invader — descent-intent
               // gate rejects (REQ-C3c). Non-Fighting foreign ants stay on
@@ -1813,10 +1827,12 @@ export function tickAntMovement(
           // MIN=V30 — so this is unconditional now.) Must match the underground
           // recall-navigation `isRecalling` predicate in the recalled-invader block
           // earlier in tickAntMovement.
+          // #352 (V60): so must a blockader caught in the enemy nest.
           const isRecallingFromForeign =
             !inOwnGrid &&
             (colonyRecalledItsFighters(world, ants.colonyId[id]!) ||
-              fighterWalksHomeToEat(world, id));
+              fighterWalksHomeToEat(world, id) ||
+              blockaderLeavesForeignNest(world, id));
           // V52 (#290 PR 5): a raider hauling loot out of the enemy nest climbs out.
           const skipAscent =
             task === AntTask.Fighting &&
@@ -1995,7 +2011,9 @@ function claimsNoTile(world: WorldState, id: number): boolean {
   // V52 (#290 PR 5): nor does a raider hauling loot home. Bumped like any ant, one
   // climbing a one-wide enemy shaft behind its own idle invaders was pushed back
   // off their tiles every tick and never got out. (Only V52 writes Hauling.)
-  return fighterIsHauling(world, id);
+  if (fighterIsHauling(world, id)) return true;
+  // #352 (V60): nor does a blockader walking to its post or holding it.
+  return blockaderPassesThroughFriends(world, id);
 }
 
 function resolveSameColonyOccupancy(world: WorldState): void {

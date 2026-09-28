@@ -5,7 +5,7 @@
 
 import type { ColonyId, BehaviorRatio } from './colony/colony-store.js';
 import type { AIState, WorldState } from './types.js';
-import type { ChamberType } from './enums.js';
+import type { ChamberType, RaidType } from './enums.js';
 
 /**
  * #230 — provenance of a queued command, stamped by pushCommand. Phase 7 netcode
@@ -93,6 +93,11 @@ export interface SetRallyPointCommand extends SimCommandBase {
   readonly colonyId: ColonyId;
   readonly tileX: number;
   readonly tileY: number;
+  /** #352 (V60) — the raid type the rally carries (what fighters do when it is on
+   *  an enemy entrance). Absent = Loot, so every older command and every AI rally
+   *  loots; a present value that is not a RaidType drops the command. Ignored
+   *  below V60. */
+  readonly raidType?: RaidType;
 }
 
 /** PRD §4 / SURF-04 — player clears the existing rally point for a colony. */

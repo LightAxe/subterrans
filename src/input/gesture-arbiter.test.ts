@@ -554,14 +554,42 @@ describe('HUD + right-click', () => {
   it('right-click underground on Solid → requests chamber menu', () => {
     const h = makeHarness('underground', 'command');
     const p = tileCenter(5, 8, h.vs);
+    contextMenuState.kind = 'raid'; // a raid menu shown earlier must not leak its kind
     h.arbiter.onPointerDown(ev(RIGHT_BUTTON, p.x, p.y));
     expect(contextMenuState.pendingShow).toBe(true);
+    expect(contextMenuState.kind).toBe('chamber');
     expect([contextMenuState.anchorTileX, contextMenuState.anchorTileY]).toEqual([5, 8]);
   });
 
   it('right-click on the SURFACE is a no-op (no menu)', () => {
     const h = makeHarness('surface', 'command');
     const p = tileCenter(5, 1, h.vs);
+    h.arbiter.onPointerDown(ev(RIGHT_BUTTON, p.x, p.y));
+    expect(contextMenuState.pendingShow).toBe(false);
+  });
+
+  it('#352: right-click on an ENEMY entrance on the surface → requests the raid menu', () => {
+    const h = makeHarness('surface', 'command');
+    const door = h.world.colonies[ENEMY_COLONY_ID]!.entrances[0]!;
+    h.vs.surfaceCamera.centerX = door.surfaceTileX * TILE_SIZE_PX;
+    h.vs.surfaceCamera.centerY = door.surfaceTileY * TILE_SIZE_PX;
+    const p = tileCenter(door.surfaceTileX, door.surfaceTileY, h.vs);
+    h.arbiter.onPointerDown(ev(RIGHT_BUTTON, p.x, p.y));
+    expect(contextMenuState.pendingShow).toBe(true);
+    expect(contextMenuState.kind).toBe('raid');
+    expect([contextMenuState.anchorTileX, contextMenuState.anchorTileY]).toEqual([
+      door.surfaceTileX,
+      door.surfaceTileY,
+    ]);
+    expect(h.world.commandQueue).toHaveLength(0); // the pick, not the click, rallies
+  });
+
+  it('#352: right-click on the player’s OWN entrance opens nothing', () => {
+    const h = makeHarness('surface', 'command');
+    const door = h.world.colonies[PLAYER_COLONY_ID]!.entrances[0]!;
+    h.vs.surfaceCamera.centerX = door.surfaceTileX * TILE_SIZE_PX;
+    h.vs.surfaceCamera.centerY = door.surfaceTileY * TILE_SIZE_PX;
+    const p = tileCenter(door.surfaceTileX, door.surfaceTileY, h.vs);
     h.arbiter.onPointerDown(ev(RIGHT_BUTTON, p.x, p.y));
     expect(contextMenuState.pendingShow).toBe(false);
   });
@@ -1333,6 +1361,20 @@ describe('#237 PR4 — touch long-press', () => {
     expect(h.arbiter.hasPendingGesture()).toBe(true); // tap NOT abandoned
     h.arbiter.onPointerUp(touch(LEFT_BUTTON, p.x, p.y)); // → normal tap
     expect(h.world.commandQueue.some((c) => c.type === 'SetRallyPoint')).toBe(true);
+  });
+
+  it('#352: a long-press on an ENEMY entrance opens the raid menu and abandons the tap', () => {
+    const h = makeHarness('surface', 'command', undefined, true);
+    const door = h.world.colonies[ENEMY_COLONY_ID]!.entrances[0]!;
+    h.vs.surfaceCamera.centerX = door.surfaceTileX * TILE_SIZE_PX;
+    h.vs.surfaceCamera.centerY = door.surfaceTileY * TILE_SIZE_PX;
+    const p = tileCenter(door.surfaceTileX, door.surfaceTileY, h.vs);
+    h.arbiter.onPointerDown(touch(LEFT_BUTTON, p.x, p.y));
+    h.fireTimers();
+    expect(contextMenuState.pendingShow).toBe(true);
+    expect(contextMenuState.kind).toBe('raid');
+    h.arbiter.onPointerUp(touch(LEFT_BUTTON, p.x, p.y));
+    expect(h.world.commandQueue.some((c) => c.type === 'SetRallyPoint')).toBe(false);
   });
 
   it('a drag before the long-press fires cancels it (no menu)', () => {

@@ -117,10 +117,11 @@ test.describe('#290 PR 6 — raid legibility', () => {
     );
     expect(accepted).toBe(true);
 
-    // The rally caption names the raid (not the generic "Fighters will converge here.").
+    // The rally caption names the raid (not the generic "Fighters will converge here."):
+    // from V60 (#352) it names the raid order, Loot for a plain rally.
     await expect
       .poll(() => captions(page), { timeout: 10_000 })
-      .toContainEqual(expect.stringMatching(/raid its larder/));
+      .toContainEqual(expect.stringMatching(/^Raiding: Loot\. /));
     // Food moves: the player's stolen counter rises as a fighter takes a load...
     await expect
       .poll(async () => (await raidStats(page))?.foodRaidedFp ?? 0, { timeout: 15_000 })

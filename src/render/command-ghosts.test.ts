@@ -6,7 +6,7 @@ import { CommandProjection } from './command-projection.js';
 import { createScenario } from '../sim/scenario.js';
 import { copyWorldState } from '../sim/types.js';
 import { PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
-import { ChamberType } from '../sim/enums.js';
+import { ChamberType, RaidType } from '../sim/enums.js';
 import { UndergroundTileState, ugSet } from '../sim/terrain.js';
 import { applyCommands } from '../sim/tick.js';
 import type { SimCommand } from '../sim/commands.js';
@@ -262,5 +262,60 @@ describe('computeGhostDelta', () => {
     } as unknown as NestEntrance);
     const d = computeGhostDelta(w, proj);
     expect(d.pendingEntrances).toEqual([{ tileX: 50, tileY: 60 }]);
+  });
+
+  describe('#352 — a queued raid order', () => {
+    const rally = (w: WorldState, raidType?: RaidType): SimCommand => {
+      const e = w.colonies[ENEMY_COLONY_ID]!.entrances[0]!;
+      return {
+        type: 'SetRallyPoint',
+        colonyId: PLAYER_COLONY_ID,
+        tileX: e.surfaceTileX,
+        tileY: e.surfaceTileY,
+        ...(raidType === undefined ? {} : { raidType }),
+        issuedAtTick: 0,
+      };
+    };
+
+    it('a new rally on an enemy entrance ghosts its order (tap = Loot), not stacked', () => {
+      const w = world();
+      w.commandQueue.push(rally(w));
+      const d = computeGhostDelta(w, project(w));
+      const e = w.colonies[ENEMY_COLONY_ID]!.entrances[0]!;
+      expect(d.pendingRaidOrder).toEqual({
+        tileX: e.surfaceTileX,
+        tileY: e.surfaceTileY,
+        raidType: RaidType.Loot,
+        overCommitted: false,
+      });
+    });
+
+    it('a type change on the committed rally ghosts the new type stacked over the old badge', () => {
+      const w = world();
+      applyCommands(w, [rally(w, RaidType.Deny)]);
+      w.commandQueue.push(rally(w, RaidType.Blockade));
+      const d = computeGhostDelta(w, project(w));
+      expect(d.pendingRaidOrder?.raidType).toBe(RaidType.Blockade);
+      expect(d.pendingRaidOrder?.overCommitted).toBe(true);
+      // The same type again: nothing pending.
+      const w2 = world();
+      applyCommands(w2, [rally(w2, RaidType.Deny)]);
+      w2.commandQueue.push(rally(w2, RaidType.Deny));
+      expect(computeGhostDelta(w2, project(w2)).pendingRaidOrder).toBeNull();
+    });
+
+    it('a rally off any enemy entrance ghosts no order', () => {
+      const w = world();
+      w.commandQueue.push({
+        type: 'SetRallyPoint',
+        colonyId: PLAYER_COLONY_ID,
+        tileX: 30,
+        tileY: 30,
+        issuedAtTick: 0,
+      });
+      const d = computeGhostDelta(w, project(w));
+      expect(d.pendingRally).not.toBeNull();
+      expect(d.pendingRaidOrder).toBeNull();
+    });
   });
 });

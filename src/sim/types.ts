@@ -19,6 +19,7 @@ import type { DepletionRecord } from './food.js';
 import type { FoodStore } from './food/food-store.js';
 import { copyFoodStore, createFoodStore } from './food/food-store.js';
 import type { PendingChamber } from './colony/chamber.js';
+import { RaidType } from './enums.js';
 import { MAX_ENTITIES, SURFACE_GRID_WIDTH, SURFACE_GRID_HEIGHT } from './constants.js';
 // PR 4 — runtime import for the procedural terrain bake. surface-features.ts
 // back-imports WorldState as a TYPE only, so there is no runtime import cycle.
@@ -1294,7 +1295,41 @@ export const SIM_VERSION_V58_STARVING_FIGHTER_EATS = 58 as const;
  * save replays byte-identically. MIN_ACCEPTED is UNCHANGED (V50).
  */
 export const SIM_VERSION_V59_INVADER_RETARGET = 59 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V59_INVADER_RETARGET;
+
+/**
+ * #352 (V60) — raid orders: a rally on an enemy entrance carries a RAID TYPE.
+ *
+ * Up to V59 a rally on an enemy's open entrance always raided one way (V52/V53:
+ * loot while the colony's own stores have room, then go for the queen). From V60
+ * the colony stores a `RaidType` with its rally (`ColonyRecord.raidType`, set by
+ * SetRallyPoint's optional `raidType`; absent = Loot; a cleared rally resets it to
+ * Loot), and its fighters rallied on an enemy entrance act by it:
+ *   - Loot: the V53 raid, unchanged.
+ *   - Deny: loot regardless of room at home; a hauler reaching its own entrance
+ *     drops what its stores cannot take (rounded up to whole pickups) there as a
+ *     surface food pile and carries the rest down to store it
+ *     (`denyHaulerDropsLoad`, ant-raid.ts).
+ *   - Spoil: loot's eligibility, but a spoiler standing on an enemy FoodStorage
+ *     chamber destroys RAID_CARRY_FP there every SPOIL_TICKS_PER_LOAD ticks and
+ *     never goes home.
+ *   - Blockade: fighters never go down; they hold a ring of posts round the enemy
+ *     entrance and chase any enemy ant within BLOCKADE_RADIUS_TILES of it
+ *     (ant-blockade.ts, tick step 10c2).
+ *   - Assault: no looting; an invader goes for the enemy queen.
+ * Loot, Deny and Spoil go for the queen too once there is nothing left to take
+ * (no reachable stock by their own start / keep-going rule), not the hunt. While a
+ * friend already holds the queen's tile (#364's saturation), any of the four goes
+ * for a free enemy worker within RAID_ENGAGE_RADIUS_TILES path tiles (the fighters'
+ * sight) instead, and with none in sight queues for the queen (raidQueenTarget).
+ * New serialized field `ColonyRecord.raidType`, written only when not Loot, so
+ * every pre-V60 save (always Loot) serializes as before;
+ * the SetRallyPoint handler ignores `raidType` below V60. No world.rngState draw;
+ * a new pass (step 10c2, a no-op without a blockade) and the Deny drop's entity-id
+ * advance happen only for a non-Loot raid type. A V59 save replays byte-identically.
+ * MIN_ACCEPTED is UNCHANGED (V50).
+ */
+export const SIM_VERSION_V60_RAID_ORDERS = 60 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V60_RAID_ORDERS;
 
 /**
  * S2 — AI colony state machine states.
@@ -1915,6 +1950,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
       fresh.killCount = 0;
       fresh.priorityFoodPileId = null;
       fresh.alarmActive = false;
+      fresh.raidType = RaidType.Loot;
     }
     const d = dst.colonies[colonyId]!;
 
@@ -1934,6 +1970,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
     d.raidTrips = s.raidTrips;
     d.priorityFoodPileId = s.priorityFoodPileId;
     d.alarmActive = s.alarmActive;
+    d.raidType = s.raidType;
     d.queenLastEggTick = s.queenLastEggTick;
     d.eggIntervalNumerator = s.eggIntervalNumerator;
 

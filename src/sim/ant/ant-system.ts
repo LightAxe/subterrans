@@ -42,3 +42,4 @@ export { tickAntMovement } from './ant-movement.js';
 export { NO_FREE_HOSTILE, invaderHuntStep } from './invader-retarget.js';
 export { tickIdleReserveAndFlee } from './idle-reserve.js';
 export { dropHaulerLoad, fighterMayLoot, updateRaiders, tickRaidActions } from './ant-raid.js';
+export { releaseBlockaderToSpider, updateBlockaders } from './ant-blockade.js';

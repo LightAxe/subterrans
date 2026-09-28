@@ -10,7 +10,7 @@
 // Node --experimental-strip-types compatible: no const enum.
 
 import type { EntityId } from '../types.js';
-import type { ChamberType } from '../enums.js';
+import { RaidType, type ChamberType } from '../enums.js';
 import type { FoodPileId } from '../food.js';
 import type { NestEntrance } from './entrance.js';
 import {
@@ -236,6 +236,12 @@ export interface ColonyRecord {
    *  camped door. Player-set via the SetColonyAlarm command; the AI never sets it. */
   alarmActive: boolean;
 
+  /** #352 (V60) — the raid type of this colony's rally (RaidType): what its
+   *  fighters do when the rally is on an enemy entrance. Set with the rally by the
+   *  SetRallyPoint command (absent = Loot) and reset to Loot when the rally is
+   *  cleared; always Loot before V60. Serialized only when not Loot. */
+  raidType: RaidType;
+
   /** S4 V21+ — world tick at which the queen most recently laid an egg.
    *  Used by tickQueenEggProduction to enforce the selected interval as elapsed
    *  ticks since the last lay, not a global modulo (which misfires when the
@@ -312,6 +318,7 @@ export function createColonyRecord(colonyId: ColonyId, queenEntityId: EntityId):
     raidTrips: 0,
     priorityFoodPileId: null,
     alarmActive: false,
+    raidType: RaidType.Loot,
     queenLastEggTick: -QUEEN_EGG_INTERVAL_BASE_TICKS,
     eggIntervalNumerator: 4, // Normal = identity (set per-colony in createScenario for difficulty tiers)
   } as unknown as ColonyRecord;

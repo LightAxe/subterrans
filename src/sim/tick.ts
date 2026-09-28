@@ -1,6 +1,6 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import { allocateEntityId, INVALID_ENTITY_ID } from './types.js';
+import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V60_RAID_ORDERS } from './types.js';
 import { tickSpider } from './spider.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath, checkTiebreaks } from './game-over.js';
@@ -22,6 +22,8 @@ import {
   FightingSubState,
   PheromoneType,
   ChamberType,
+  RaidType,
+  isRaidType,
 } from './enums.js';
 import {
   PHEROMONE_DECAY_FP_V14,
@@ -76,6 +78,8 @@ import {
   tickIdleReserveAndFlee,
   updateRaiders,
   tickRaidActions,
+  updateBlockaders,
+  releaseBlockaderToSpider,
 } from './ant/ant-system.js';
 import { findEmbeddedByTightening } from './underground-occupancy.js';
 import { tickPheromoneDecay } from './pheromone/pheromone-system.js';
@@ -200,6 +204,7 @@ void (undefined as unknown as PendingChamber);
  *       10a. existing Phase 6 idle-reassignment
  *       10b. tickDigExecution — dig-worker state machine (Marked→BeingDug→Open) (NEW in Phase 7)
  *       10c. updateFightAntTargets — route AntTask.Fighting ants to rallyPoint (NEW in Phase 9)
+ *       10c2. updateBlockaders — Blockade raid order posts + chases (V60, #352)
  * 11.  checkPendingChambers — promote fully-excavated pending chambers (NEW in Phase 7)
  * 12.  checkEntranceCompletion — enable completed entrance shafts (NEW in Phase 7)
  * 13.  routeForagerPriority — route SearchingFood foragers to marked piles (NEW in Phase 7)
@@ -814,6 +819,13 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         // SCEN-06 byte-identity for replays past the bad command.
         if (!isTileCoord(cmd.tileX, SURFACE_GRID_WIDTH)) break;
         if (!isTileCoord(cmd.tileY, SURFACE_GRID_HEIGHT)) break;
+        // #352 (V60): the rally carries its raid type (absent = Loot). A present
+        // value that is not a RaidType is a malformed command: dropped whole, like
+        // a bad coordinate. Below V60 the field is ignored (the colony stays Loot).
+        if (world.simVersion >= SIM_VERSION_V60_RAID_ORDERS) {
+          if (cmd.raidType !== undefined && !isRaidType(cmd.raidType)) break;
+          colony.raidType = cmd.raidType ?? RaidType.Loot;
+        }
         colony.rallyPoint = { tileX: cmd.tileX, tileY: cmd.tileY };
         break;
       }
@@ -821,6 +833,8 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         const colony = world.colonies[cmd.colonyId];
         if (colony === undefined) break;
         colony.rallyPoint = null;
+        // #352 (V60): the raid type goes with the rally.
+        if (world.simVersion >= SIM_VERSION_V60_RAID_ORDERS) colony.raidType = RaidType.Loot;
         break;
       }
       case 'StartAIOperation': {
@@ -1434,6 +1448,12 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // not a per-colony census mutation. Same split as Phase 7 tickDeadDiggerCleanup.
   updateFightAntTargets(world);
 
+  // Step 10c2 (V60, #352): blockades — the surface fighters step 10c left to a
+  // Blockade raid order hold posts round the enemy entrance and chase intruders
+  // (ant-blockade.ts). Before 10d, so a spider priority still overrides them.
+  // Inert below V60 and for a colony not blockading.
+  updateBlockaders(world);
+
   // Step 10d: spider priority fighter routing (S3).
   // When any colony has spiderPriorityColonyId set, override that colony's
   // surface fighters' targets to the spider's current tile. Runs after
@@ -1460,6 +1480,8 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       if (ants.subTask[sid] === FightingSubState.ToPost) {
         ants.subTask[sid] = FightingSubState.MovingToRally;
       }
+      // #352 (V60): nor a blockade post (no-op for an ant step 10c2 did not route).
+      releaseBlockaderToSpider(world, sid);
     }
   }
 

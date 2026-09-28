@@ -10,7 +10,11 @@
 //   - `looting`  the player colony's `foodRaidedFp` rose: one of its fighters
 //                picked up a load in an enemy nest;
 //   - `hauled`   the player colony's `raidTrips` rose: a hauler put its load
-//                into the player's stores.
+//                into the player's stores (or, #352 Deny, left it by its door);
+//   - `spoiling` (#352) the player is giving a Spoil order and its target's (the
+//                colony whose entrance the rally is on) `foodLostToRaidsFp`
+//                rose: its fighters destroyed a load.
+// A Deny raid's news names the order (raidCaptionText).
 //
 // Each is recurring but throttled: after it shows, the same caption stays quiet
 // for RAID_CAPTION_COOLDOWN_TICKS of game time, so a raid loop does not repeat
@@ -22,7 +26,9 @@
 // Also the rally copy: `rallyTargetsEnemyEntrance` tells GameScene a player
 // SetRallyPoint is on an enemy's open entrance (in a world that raids), which
 // then shows the one-shot 'rallyRaid' caption (onboarding-captions.ts: the
-// fighters will raid the larder) instead of the generic 'rally' one.
+// fighters will raid the larder) instead of the generic 'rally' one. From V60
+// (#352) a rally on an enemy entrance is a raid order instead, and GameScene
+// shows its caption, naming the order, every time (raid-order-view.ts).
 //
 // Pure + Phaser-free: reads WorldState, mutates only its own RaidCaptionState.
 // GameScene owns one per session, re-baselines it on boot/load (so a loaded
@@ -30,16 +36,33 @@
 
 import type { WorldState } from '../sim/types.js';
 import { SIM_VERSION_V52_RAIDING } from '../sim/types.js';
-import type { ColonyId } from '../sim/colony/colony-store.js';
+import type { ColonyId, ColonyRecord } from '../sim/colony/colony-store.js';
 import type { SetRallyPointCommand, SimCommand } from '../sim/commands.js';
+import { RaidType } from '../sim/enums.js';
+import { activeRaidOrder } from './raid-order-view.js';
+import { rallyEnemyEntrance } from '../sim/raid-order.js';
 
-export type RaidCaptionKind = 'raided' | 'looting' | 'hauled';
+export type RaidCaptionKind = 'raided' | 'looting' | 'hauled' | 'spoiling';
 
 export const RAID_CAPTION_TEXTS: Record<RaidCaptionKind, string> = {
   raided: 'Raiders are stealing from your larder!',
   looting: 'Your fighters are raiding the enemy larder.',
   hauled: 'Your raiders hauled stolen food home.',
+  spoiling: 'Raiding: Spoil. Your fighters are destroying the enemy’s food.',
 };
+
+/**
+ * #352 — the text for `kind` under the raid order the colony is giving (null: no
+ * raid order, or a pre-V60 world). A Deny raid's news names it; Loot keeps the
+ * plain #290 wording, and 'spoiling' only ever fires under Spoil.
+ */
+export function raidCaptionText(kind: RaidCaptionKind, order: RaidType | null): string {
+  if (order === RaidType.Deny) {
+    if (kind === 'looting') return 'Raiding: Deny. Your fighters are taking the enemy’s food.';
+    if (kind === 'hauled') return 'Raiding: Deny. Your raiders brought stolen food home.';
+  }
+  return RAID_CAPTION_TEXTS[kind];
+}
 
 /** 60 s of game time (20 Hz) between two showings of the same raid caption. */
 export const RAID_CAPTION_COOLDOWN_TICKS = 1200;
@@ -51,13 +74,17 @@ export const RAID_CAPTION_COOLDOWN_TICKS = 1200;
 export const RAID_CAPTION_OWED_TICKS = 200;
 
 /** Checked in this order: being raided outranks your own raid news. */
-const RAID_CAPTION_KINDS: readonly RaidCaptionKind[] = ['raided', 'looting', 'hauled'];
+const RAID_CAPTION_KINDS: readonly RaidCaptionKind[] = ['raided', 'looting', 'hauled', 'spoiling'];
 
 export interface RaidCaptionState {
   /** Last-seen counter values for the watched colony. */
   lostFp: number;
   raidedFp: number;
   trips: number;
+  /** #352 — the colony the watched colony's Spoil order targets (-1: none), and
+   *  the food (fp) it had lost to raids when last seen (a Spoil destroys it). */
+  spoilTargetId: number;
+  spoilTargetLostFp: number;
   /** world.tick at which each caption last showed (-Infinity: never). */
   lastShownTick: Record<RaidCaptionKind, number>;
   /** world.tick of a counter rise not yet shown (-Infinity: none owed). */
@@ -69,8 +96,20 @@ export function createRaidCaptionState(): RaidCaptionState {
     lostFp: 0,
     raidedFp: 0,
     trips: 0,
-    lastShownTick: { raided: -Infinity, looting: -Infinity, hauled: -Infinity },
-    owedSinceTick: { raided: -Infinity, looting: -Infinity, hauled: -Infinity },
+    spoilTargetId: -1,
+    spoilTargetLostFp: 0,
+    lastShownTick: {
+      raided: -Infinity,
+      looting: -Infinity,
+      hauled: -Infinity,
+      spoiling: -Infinity,
+    },
+    owedSinceTick: {
+      raided: -Infinity,
+      looting: -Infinity,
+      hauled: -Infinity,
+      spoiling: -Infinity,
+    },
   };
 }
 
@@ -87,6 +126,8 @@ export function resetRaidCaptionState(
   state.lostFp = c?.foodLostToRaidsFp ?? 0;
   state.raidedFp = c?.foodRaidedFp ?? 0;
   state.trips = c?.raidTrips ?? 0;
+  state.spoilTargetId = -1;
+  state.spoilTargetLostFp = 0;
   for (const kind of RAID_CAPTION_KINDS) {
     state.lastShownTick[kind] = -Infinity;
     state.owedSinceTick[kind] = -Infinity;
@@ -117,6 +158,28 @@ export function nextRaidCaption(
   if (c.foodLostToRaidsFp > state.lostFp) owe(state, world, 'raided');
   if (c.foodRaidedFp > state.raidedFp) owe(state, world, 'looting');
   if (c.raidTrips > state.trips) owe(state, world, 'hauled');
+  // #352: a Spoil moves no food home, so it shows as its target's loss — only the
+  // colony whose entrance the order is on (a third colony raided by someone else
+  // is not "your fighters destroying"). A new target only sets the baseline.
+  const target = spoilTarget(world, colonyId);
+  // Spoil news owed against a target the order is no longer on (the order ended
+  // or moved to another colony) is dropped, or it could show later as "Raiding:
+  // Spoil" under another order; a new target keeps its own loss baseline below.
+  if (target === null || target.colonyId !== state.spoilTargetId) {
+    state.owedSinceTick.spoiling = -Infinity;
+  }
+  if (target === null) {
+    state.spoilTargetId = -1;
+  } else {
+    if (
+      target.colonyId === state.spoilTargetId &&
+      target.foodLostToRaidsFp > state.spoilTargetLostFp
+    ) {
+      owe(state, world, 'spoiling');
+    }
+    state.spoilTargetId = target.colonyId;
+    state.spoilTargetLostFp = target.foodLostToRaidsFp;
+  }
   state.lostFp = c.foodLostToRaidsFp;
   state.raidedFp = c.foodRaidedFp;
   state.trips = c.raidTrips;
@@ -128,6 +191,25 @@ export function nextRaidCaption(
       continue;
     }
     return kind;
+  }
+  return null;
+}
+
+/** The colony `colonyId`'s Spoil order is on (owner of the rallied enemy entrance), or null. */
+function spoilTarget(world: WorldState, colonyId: ColonyId): ColonyRecord | null {
+  if (activeRaidOrder(world, colonyId) !== RaidType.Spoil) return null;
+  const c = world.colonies[colonyId];
+  const ent = c === undefined ? null : rallyEnemyEntrance(world, c);
+  if (ent === null) return null;
+  for (const key of Object.keys(world.colonies)) {
+    const other = world.colonies[Number(key)];
+    if (
+      other !== undefined &&
+      other.colonyId !== colonyId &&
+      other.entrances?.includes(ent) === true
+    ) {
+      return other;
+    }
   }
   return null;
 }

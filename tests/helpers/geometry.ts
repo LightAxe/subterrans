@@ -21,6 +21,7 @@ import {
 import { buildHudLayout } from '../../src/render/hud-layout.js';
 import { TOOL_ORDER, toolButtonRect } from '../../src/render/hud-controls.js';
 import { newGameScreenLayout, type Difficulty } from '../../src/render/boot-overlay-layout.js';
+import { CONTEXT_MENU } from '../../src/render/context-menu-layout.js';
 
 export interface Rect {
   x: number;
@@ -95,3 +96,17 @@ export const DIFFICULTY_ROW_RECTS: Readonly<Record<Difficulty, Rect>> = newGame.
 /** The "Start game" button. */
 export const NEW_GAME_START_RECT: Rect = newGame.startButton;
 export type { Difficulty };
+
+/**
+ * #352 — the canvas rect of row `row` of a context menu (the raid menu's orders)
+ * whose top-left is at canvas point (anchorX, anchorY): the menu's geometry comes
+ * from context-menu-layout.ts (pure; its sim imports are pure too).
+ */
+export function contextMenuRowRect(anchorX: number, anchorY: number, row: number): Rect {
+  return {
+    x: anchorX,
+    y: anchorY + row * CONTEXT_MENU.ITEM_HEIGHT,
+    w: CONTEXT_MENU.WIDTH,
+    h: CONTEXT_MENU.ITEM_HEIGHT,
+  };
+}

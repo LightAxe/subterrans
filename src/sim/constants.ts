@@ -1020,6 +1020,35 @@ export const RAID_LOOT_START_STOCK_FP = RAID_CARRY_FP;
  */
 export const RAID_START_CLEAR_RADIUS_TILES = RAID_ENGAGE_RADIUS_TILES + 2;
 
+/**
+ * #352 (V60) — Spoil: a spoiler standing on an enemy FoodStorage chamber destroys
+ * one load (RAID_CARRY_FP) there every this many ticks (1 s). The sim has no
+ * pickup time to borrow (a looter takes its load the tick it arrives), so this is
+ * the "load-pickup time" of the raid order.
+ */
+export const SPOIL_TICKS_PER_LOAD = 20;
+
+/**
+ * #352 (V60) — Blockade: the blockaders' posts ring the enemy entrance at this
+ * Manhattan radius (a second ring one tile further out takes any more). Inside
+ * a fighter's sight (FIGHT_AGGRO_RADIUS) of the entrance tile, like a sentry ring.
+ */
+export const BLOCKADE_POST_RADIUS_TILES = FIGHT_AGGRO_RADIUS - 1;
+
+/**
+ * #352 (V60) — Blockade: every enemy ant within this many tiles (Manhattan) of the
+ * blockaded entrance is fair game, fighters included; one that leaves this radius
+ * is let go and the blockader walks back to its post.
+ */
+export const BLOCKADE_RADIUS_TILES = FIGHT_AGGRO_RADIUS + 2;
+
+/**
+ * #352 (V60) — Blockade leash: a blockader farther than this from the entrance
+ * (walking up to the blockade, or back from a meal) chases nothing and makes for
+ * the entrance (routed round obstacles), taking its post once inside.
+ */
+export const BLOCKADE_LEASH_TILES = BLOCKADE_RADIUS_TILES + 2;
+
 /** Damage dealt per strike by a non-fighter ant (worker / forager / nurse) defending itself.
  *  25% of COMBAT_DAMAGE_BASE — non-fighters can fight back but weakly. */
 export const COMBAT_DAMAGE_WORKER = 1 as const;

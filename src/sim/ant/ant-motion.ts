@@ -722,8 +722,11 @@ export function tileSaturated(
 
 /**
  * #364 (V59) — the saturation rule for one tile (tileX, tileY): stampFriendTiles
- * over a one-tile window, then tileSaturated. The reference form of the rule, for
- * tests and one-off queries; the hunt and the raid check stamp a whole window once.
+ * over a one-tile window, then tileSaturated. The one-tile form of the rule: the
+ * hunt and the raid reach check stamp a whole window once, but #352 (V60)
+ * raidQueenTarget (ant-raid.ts) calls this every tick for each raider going for
+ * the queen (her tile may lie outside its reach window), and tests pin the rule
+ * with it. Uses its own one-cell scratch probe, cleared after each call.
  */
 export function tileSaturatedFor(
   world: WorldState,

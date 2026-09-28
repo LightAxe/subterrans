@@ -7,6 +7,9 @@
 // registers its own Phaser pointer listeners — it exports the pure tap logic and
 // the pure helpers the arbiter and renderer depend on.
 //
+// #352: right-click / long-press on an enemy entrance opens the raid menu
+// (tryOpenRaidMenu), whose rows set the rally there with a raid order.
+//
 // Tap handlers by tool (surface):
 //   - Command tap → priority: spider (sprite bounds) → food pile →
 //     clear-rally (iff down-tile == current rally) → foreign/enemy entrance rally
@@ -47,6 +50,9 @@ import { TILE_SIZE_PX } from '../render/sprites.js';
 import { SPIDER_SPRITE_WIDTH, SPIDER_SPRITE_HEIGHT } from '../render/ant-sprite-layer.js';
 import type { CommandFeedforward } from '../render/command-feedforward.js';
 import { enqueueCommand } from './command-queue.js';
+import type { RaidType } from '../sim/enums.js';
+import { requestShowContextMenu } from '../render/context-menu-state.js';
+import { enemyEntranceAt, worldHasRaidOrders } from '../sim/raid-order.js';
 
 // ---------------------------------------------------------------------------
 // isEmptySurfaceTile — checks whether a tile is empty (not entrance, not food pile)
@@ -144,16 +150,8 @@ export function isForeignColonyEntrance(
 ): boolean {
   if (tileX < 0 || tileY < 0) return false;
   if (tileX >= world.surface.width || tileY >= world.surface.height) return false;
-  for (const key of Object.keys(world.colonies)) {
-    const cid = Number(key);
-    if (cid === ownColonyId) continue;
-    const colony = world.colonies[cid];
-    if (colony === undefined) continue;
-    for (const entrance of colony.entrances) {
-      if (entrance.surfaceTileX === tileX && entrance.surfaceTileY === tileY) return true;
-    }
-  }
-  return false;
+  // #352: the sim's scan (raid-order.ts), shared with the rally lookup and captions.
+  return enemyEntranceAt(world, ownColonyId, tileX, tileY) !== null;
 }
 
 // ---------------------------------------------------------------------------
@@ -314,6 +312,7 @@ export function handleSetRallyPoint(
   tileY: number,
   playerColonyId: ColonyId,
   isPaused: boolean,
+  raidType?: RaidType,
 ): boolean {
   const cmd: SetRallyPointCommand = {
     type: 'SetRallyPoint',
@@ -321,8 +320,38 @@ export function handleSetRallyPoint(
     tileX,
     tileY,
     issuedAtTick: world.tick,
+    // #352 — a raid order chosen from the raid menu; a plain tap carries none (Loot).
+    ...(raidType !== undefined ? { raidType } : {}),
   };
   return !enqueueCommand(world, cmd, isPaused);
+}
+
+// ---------------------------------------------------------------------------
+// tryOpenRaidMenu — #352: right-click / long-press on an enemy entrance
+// ---------------------------------------------------------------------------
+
+/**
+ * Open the raid menu (the five raid orders) anchored at (screenX, screenY) for the
+ * surface tile (tileX, tileY), iff the surface view is up, the world has raid
+ * orders (V60+) and the tile is another colony's entrance (open or closed, as a tap
+ * rally accepts). Returns true iff the menu was requested. No command is emitted
+ * here: UIScene enqueues the SetRallyPoint (with the chosen raid type) when the
+ * player picks a row.
+ */
+export function tryOpenRaidMenu(
+  world: WorldState,
+  viewState: ViewState,
+  screenX: number,
+  screenY: number,
+  tileX: number,
+  tileY: number,
+  playerColonyId: ColonyId = PLAYER_COLONY_ID,
+): boolean {
+  if (viewState.activeView !== 'surface') return false;
+  if (!worldHasRaidOrders(world)) return false;
+  if (!isForeignColonyEntrance(world, tileX, tileY, playerColonyId)) return false;
+  requestShowContextMenu(screenX, screenY, tileX, tileY, 'raid');
+  return true;
 }
 
 // ---------------------------------------------------------------------------

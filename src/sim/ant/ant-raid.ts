@@ -11,7 +11,8 @@
 // (RAID_CARRY_FP) and HAULS it home — out of the enemy nest, across the surface,
 // down its own shaft — where it deposits it as a forager would, then walks back to
 // its rally and goes in again. A hostile in reach wins over loot (it fights); with
-// the larder empty it hunts the nearest hostile anywhere, the queen included (D10).
+// the larder empty it hunts the nearest hostile anywhere, the queen included (D10;
+// below V60 — from V60 it goes for the queen, see Raid orders below).
 //
 // Extension point (plan §4.5). Everything about WHEN a fighter raids lives in
 // `fighterMayLoot`: "rallied on this nest's entrance, nothing hostile within
@@ -20,6 +21,17 @@
 // predicate — say, to loot even with a hostile in reach. The sub-states
 // (FightingSubState.Looting / Hauling), the routing, the loot and deposit verbs and
 // the counters stay as they are.
+//
+// Raid orders (#352, V60). The colony's raid type (`colonyRaidType`, raid-order.ts)
+// branches here: lootVerdict lets Loot, Deny and Spoil loot (only Loot minds the
+// room at home, the V53 gates) and never a Blockade or an Assault; a Deny hauler
+// with nowhere to store its load drops it beside its own entrance
+// (denyHaulerDropsLoad, step 10e); a Spoil looter destroys a load in place every
+// SPOIL_TICKS_PER_LOAD ticks instead of taking it (step 16e); an Assault invader,
+// and a Loot, Deny or Spoil one with nothing left to take (lootVerdict's
+// NOTHING_TO_TAKE), is pointed at the enemy queen — or at a free enemy worker in
+// sight while a friend holds her tile (raidQueenTarget, step 10e). The Blockade itself is
+// ant-blockade.ts. Below V60 every colony is Loot.
 //
 // Steps. 10e `updateRaiders` (after the fighter routing of 10c/10d) decides who
 // loots this tick and points surface haulers at home; 16 (tickAntMovement) steps
@@ -34,12 +46,14 @@
 import type { ColonyRecord } from '../colony/colony-store.js';
 import { computeStockFlowField } from '../chamber-flow.js';
 import {
+  FOOD_PICKUP_AMOUNT,
   RAID_CARRY_FP,
   RAID_ENGAGE_RADIUS_TILES,
   RAID_LOOT_START_STOCK_FP,
   RAID_START_CLEAR_RADIUS_TILES,
+  SPOIL_TICKS_PER_LOAD,
 } from '../constants.js';
-import { AntTask, ChamberType, FightingSubState } from '../enums.js';
+import { AntTask, ChamberType, FightingSubState, RaidType } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
 import {
   chamberStock,
@@ -48,24 +62,31 @@ import {
   depositCarriedFood,
   depositIntoPool,
   isFoodChamberDepositable,
+  PICKUP_SHIFT,
+  pileDropRoomFp,
   takeFromStock,
   topUpOrSpawnCorpsePile,
+  wholeLoadFp,
 } from '../food/food-api.js';
 import { fighterIsHungry } from '../hunger.js';
+import { colonyRaidType, isEntranceTileOfAnyColony } from '../raid-order.js';
 import { getScratch, RAID_REACH_WINDOW_RADIUS, RAID_REACH_WINDOW_SIDE } from '../scratch.js';
 import { Zone } from '../terrain.js';
 import {
   SIM_VERSION_V52_RAIDING,
   SIM_VERSION_V53_NO_LOOT_WHEN_FULL,
   SIM_VERSION_V59_INVADER_RETARGET,
+  SIM_VERSION_V60_RAID_ORDERS,
   type WorldState,
 } from '../types.js';
 import {
   DIR_DX,
   DIR_DY,
+  canEnterSurfaceTile,
   canEnterUndergroundTile,
   stampFriendTiles,
   tileSaturated,
+  tileSaturatedFor,
 } from './ant-motion.js';
 
 /** Fighter `id` is hauling loot home (FightingSubState.Hauling; V52 only writes it). */
@@ -199,12 +220,20 @@ function dropSaturatedCandidates(
  * the candidates (path distance is never shorter), so the BFS runs only with a
  * candidate near and the final pick reads only them. Returns that hostile (the nearest by path; the first found on a tie), or
  * -1 if none is in reach. Allocation-free (scratch window).
+ * `workersOnly` (#352, V60 — the raid queen target's fallback): the queen and
+ * enemy fighters do not count, only the other adults (workers and nurses).
  * From V59 (#364) a hostile on a tile SATURATED for the raider does not count
  * (tileSaturatedFor's rule, applied by dropSaturatedCandidates: its colony already
  * holds the duel there). It neither stops the raider looting nor draws it in to
  * queue behind that duel.
  */
-function hostileInReach(world: WorldState, id: number, gridColonyId: number, R: number): number {
+function hostileInReach(
+  world: WorldState,
+  id: number,
+  gridColonyId: number,
+  R: number,
+  workersOnly = false,
+): number {
   const ants = world.ants;
   const self = ants.colonyId[id]!;
   const tx = ants.posX[id]! >> FP_SHIFT;
@@ -220,9 +249,10 @@ function hostileInReach(world: WorldState, id: number, gridColonyId: number, R: 
     if (!Object.hasOwn(world.colonies, key)) continue;
     const c = world.colonies[key as unknown as keyof typeof world.colonies]!;
     if (c.colonyId === self) continue;
-    for (let w = -1; w < c.workers.length; w++) {
+    for (let w = workersOnly ? 0 : -1; w < c.workers.length; w++) {
       const o = w < 0 ? c.queenEntityId : c.workers[w]!;
       if (o < 0 || ants.alive[o] !== 1) continue;
+      if (workersOnly && ants.task[o] === AntTask.Fighting) continue;
       if (ants.zone[o] !== Zone.Underground || ants.currentGridColonyId[o] !== gridColonyId)
         continue;
       const dx = (ants.posX[o]! >> FP_SHIFT) - tx;
@@ -314,14 +344,18 @@ function hostileInReach(world: WorldState, id: number, gridColonyId: number, R: 
  *     colony must have somewhere to deposit (not `colonyHasNoDepositTarget`). One
  *     already Looting keeps on until the colony has nowhere at all to put food,
  *     then stops. Either way it hunts instead: a full larder at home gains nothing
- *     from loot;
+ *     from loot (from V60, with the enemy larder empty too, it goes for the queen);
  *   - a FoodStorage chamber of that nest holds food and is reachable from it (the
  *     stock flow field; the entrance pool is never raided, D3);
  *   - no hostile (enemy worker or queen) within RAID_ENGAGE_RADIUS_TILES path
- *     tiles (combat first; with the larder empty it hunts the queen, D10).
+ *     tiles (combat first; with the larder empty it hunts the queen, D10 — from
+ *     V60 it goes for the queen directly, raidQueenTarget).
  * With hysteresis: to START (it is not Looting yet) the chamber must hold
  * RAID_LOOT_START_STOCK_FP and nothing hostile may be within
  * RAID_START_CLEAR_RADIUS_TILES; so the answer depends on its current sub-state.
+ * #352 (V60) — by raid type: Loot as above; Deny and Spoil skip the V53 room
+ * gates (Deny keeps what will not fit by its door, Spoil takes nothing home);
+ * a Blockade or an Assault never loots.
  */
 export function fighterMayLoot(world: WorldState, colony: ColonyRecord, id: number): boolean {
   return lootVerdict(world, colony, id) === LOOT;
@@ -329,17 +363,30 @@ export function fighterMayLoot(world: WorldState, colony: ColonyRecord, id: numb
 
 /** lootVerdict: may loot. */
 const LOOT = -1;
-/** lootVerdict: not a raider this tick (any condition but a hostile in reach fails). */
+/** lootVerdict: not a raider this tick (any condition but a hostile in reach fails;
+ *  from V60 an empty larder instead gives NOTHING_TO_TAKE). */
 const NOT_A_RAIDER = -2;
+/**
+ * #352 (V60) — lootVerdict: a Loot, Deny or Spoil raider that could loot but for
+ * the larder — no FoodStorage stock it can reach (by its own start / keep-going
+ * rule, stockStepDir) — so there is nothing left to take: it goes for the queen
+ * (raidQueenTarget). Never returned below V60 (NOT_A_RAIDER there, as before).
+ */
+const NOTHING_TO_TAKE = -3;
 
 /**
- * fighterMayLoot, with the reason: LOOT, NOT_A_RAIDER, or — when every condition
+ * fighterMayLoot, with the reason: LOOT, NOT_A_RAIDER, NOTHING_TO_TAKE (V60: the
+ * larder is empty for it; step 10e sends it at the queen), or — when every condition
  * holds but a hostile is in reach — that hostile's id (step 10e sends the fighter
  * at it, so it closes on what stopped it instead of turning to another hostile
  * and stepping back out of reach: a loot/hunt flip-flop).
  */
 function lootVerdict(world: WorldState, colony: ColonyRecord, id: number): number {
   if (world.simVersion < SIM_VERSION_V52_RAIDING) return NOT_A_RAIDER;
+  // #352 (V60): a Blockade never goes in, and an Assault ignores food (step 10e
+  // sends it at the queen instead); neither loots. Loot, Deny and Spoil do.
+  const raidType = colonyRaidType(world, colony);
+  if (raidType === RaidType.Blockade || raidType === RaidType.Assault) return NOT_A_RAIDER;
   const ants = world.ants;
   if (ants.task[id] !== AntTask.Fighting || ants.zone[id] !== Zone.Underground) {
     return NOT_A_RAIDER;
@@ -351,12 +398,27 @@ function lootVerdict(world: WorldState, colony: ColonyRecord, id: number): numbe
   if (ants.foodCarrying[id] !== 0 || ants.combatOpponentId[id] !== -1) return NOT_A_RAIDER;
   if (fighterIsHungry(world, id)) return NOT_A_RAIDER;
   const looting = ants.subTask[id] === FightingSubState.Looting;
-  if (world.simVersion >= SIM_VERSION_V53_NO_LOOT_WHEN_FULL) {
+  // #352 (V60): only Loot minds the room at home. Deny steals regardless (what
+  // will not fit is dropped by its own entrance) and Spoil brings nothing home.
+  if (world.simVersion >= SIM_VERSION_V53_NO_LOOT_WHEN_FULL && raidType === RaidType.Loot) {
     // Stop: nowhere at all to put food. Start also needs room for a whole load.
     // Both gates must hold to start: with 3+ FoodStorage chambers each can sit
     // under its 512 fp deposit hysteresis while the total free space still holds
     // a load, and a start the stop gate refuses next tick would flip every tick.
     if (colonyHasNoDepositTarget(world, colony) || (!looting && !roomForALoad(world, colony))) {
+      // #352 (V60): with its stores full a Loot raider hunts, as before — unless
+      // the larder is empty as well: then there is nothing left to take either.
+      // Deliberately tied to the enemy's larder, not only its own stores: the AI
+      // always raids with Loot, and this build leaves the AI's raiders exactly as
+      // they were while there is food to take (a larder holding a full load —
+      // RAID_LOOT_START_STOCK_FP, the start rule — keeps the V53 hunt).
+      // Queen-first on full stores alone is a balance change for #366.
+      if (
+        world.simVersion >= SIM_VERSION_V60_RAID_ORDERS &&
+        stockStepDir(world, id, !looting) < -1
+      ) {
+        return NOTHING_TO_TAKE;
+      }
       return NOT_A_RAIDER;
     }
   }
@@ -364,7 +426,10 @@ function lootVerdict(world: WorldState, colony: ColonyRecord, id: number): numbe
   // holding a full load and with nothing hostile within the wider start radius;
   // one looting keeps on while any food is reachable and nothing is in reach.
   const dir = stockStepDir(world, id, !looting);
-  if (dir < -1) return NOT_A_RAIDER;
+  if (dir < -1) {
+    // #352 (V60): nothing left to take — it goes for the queen (raidQueenTarget).
+    return world.simVersion >= SIM_VERSION_V60_RAID_ORDERS ? NOTHING_TO_TAKE : NOT_A_RAIDER;
+  }
   const radius = looting ? RAID_ENGAGE_RADIUS_TILES : RAID_START_CLEAR_RADIUS_TILES;
   const blocker = hostileInReach(world, id, gridColonyId, radius);
   return blocker >= 0 ? blocker : LOOT;
@@ -453,7 +518,12 @@ export function updateRaiders(world: WorldState): void {
       }
       ants.targetPosX[id] = -1;
       ants.targetPosY[id] = -1;
-      if (ants.zone[id] === Zone.Surface) pointAtNearestOpenEntrance(world, colony, id);
+      if (ants.zone[id] === Zone.Surface) {
+        // #352 (V60): a Deny hauler at its door with nowhere to store the load
+        // leaves it there as a food pile and goes back (denyHaulerDropsLoad).
+        if (denyHaulerDropsLoad(world, colony, id)) continue;
+        pointAtNearestOpenEntrance(world, colony, id);
+      }
       continue;
     }
     const verdict = lootVerdict(world, colony, id);
@@ -474,11 +544,201 @@ export function updateRaiders(world: WorldState): void {
       // follows this target; without one it takes the nearest hostile in the nest).
       ants.targetPosX[id] = ants.posX[verdict]!;
       ants.targetPosY[id] = ants.posY[verdict]!;
+      continue;
+    }
+    // #352 (V60): an Assault — and a Loot, Deny or Spoil raider with nothing left
+    // to take — goes for the enemy queen, or a free enemy worker in sight while a
+    // friend holds her tile (raidQueenTarget; step 16 steps it there by the
+    // wall-aware invader step, as it does a hunted hostile).
+    const target = raidQueenTarget(world, colony, id, verdict === NOTHING_TO_TAKE);
+    if (target >= 0) {
+      ants.targetPosX[id] = ants.posX[target]!;
+      ants.targetPosY[id] = ants.posY[target]!;
     }
   }
   // Outside this pass (a between-ticks fighterMayLoot query) the committed food is
   // rebuilt on every call, so it can never be read stale.
   raid.committedTick = -1;
+}
+
+/**
+ * #352 (V60) — the ant that raider `id` of `colony` targets when it goes for the
+ * queen, or -1. It does when its colony's raid type is Assault, or `nothingToTake` (a
+ * Loot, Deny or Spoil raider lootVerdict found nothing left to take) — and it is
+ * below ground in a FOREIGN nest whose entrance its colony is rallied on, not in a
+ * duel (a fight it is in comes first: with no target, step 16's hunt fights the
+ * foe it is paired with), and that nest's queen is alive and below ground in it.
+ * A hungry one step 10c sent home to eat walks out before step 16 reads a target.
+ *
+ * The target is the queen — unless her tile is SATURATED for it (#364's
+ * tileSaturatedFor: a friend already holds the duel there), when it is the
+ * nearest free enemy worker (not a fighter, not the queen, on a tile no friend
+ * holds) within RAID_ENGAGE_RADIUS_TILES path tiles — the fighters' sight radius,
+ * hostileInReach's `workersOnly` — if there is one. With none in sight it queues
+ * for the queen.
+ */
+function raidQueenTarget(
+  world: WorldState,
+  colony: ColonyRecord,
+  id: number,
+  nothingToTake: boolean,
+): number {
+  if (!nothingToTake && colonyRaidType(world, colony) !== RaidType.Assault) return -1;
+  const ants = world.ants;
+  if (ants.zone[id] !== Zone.Underground || ants.combatOpponentId[id] !== -1) return -1;
+  const gridColonyId = ants.currentGridColonyId[id]!;
+  if (gridColonyId === ants.colonyId[id]) return -1;
+  const gridColony = world.colonies[gridColonyId];
+  if (gridColony === undefined || !rallyOnEntranceOf(colony, gridColony)) return -1;
+  const q = gridColony.queenEntityId;
+  if (q < 0 || ants.alive[q] !== 1 || ants.zone[q] !== Zone.Underground) return -1;
+  if (ants.currentGridColonyId[q] !== gridColonyId) return -1;
+  const qx = ants.posX[q]! >> FP_SHIFT;
+  const qy = ants.posY[q]! >> FP_SHIFT;
+  if (!tileSaturatedFor(world, id, gridColonyId, qx, qy)) return q;
+  const worker = hostileInReach(world, id, gridColonyId, RAID_ENGAGE_RADIUS_TILES, true);
+  return worker >= 0 ? worker : q;
+}
+
+/**
+ * #352 (V60) — Deny: surface hauler `id` of `colony` drops beside its own
+ * entrance what the colony cannot store. It does when its colony's raid type is
+ * Deny, it stands within one tile (Chebyshev) of one of its colony's open
+ * entrances (it walks home by the surface entrance flow field, so it crosses that
+ * ring before it can step onto the shaft and go down), and the room its stores
+ * can take (`colonyDepositableRoom`) is less than its load: the whole load with no
+ * room, else only the excess, carrying the rest down to deposit
+ * (denyDropUnstorable). Returns true when it dropped the whole load.
+ */
+function denyHaulerDropsLoad(world: WorldState, colony: ColonyRecord, id: number): boolean {
+  if (colonyRaidType(world, colony) !== RaidType.Deny) return false;
+  const ants = world.ants;
+  const load = ants.foodCarrying[id]!;
+  if (load <= 0) return false;
+  const ents = colony.entrances;
+  if (ents == null) return false;
+  const tx = ants.posX[id]! >> FP_SHIFT;
+  const ty = ants.posY[id]! >> FP_SHIFT;
+  let atDoor = false;
+  for (let e = 0; e < ents.length && !atDoor; e++) {
+    const ent = ents[e]!;
+    if (!ent.isOpen) continue;
+    const ex = ent.surfaceTileX - tx;
+    const ey = ent.surfaceTileY - ty;
+    atDoor = ex >= -1 && ex <= 1 && ey >= -1 && ey <= 1;
+  }
+  if (!atDoor) return false;
+  return denyDropUnstorable(world, colony, id, tx, ty);
+}
+
+/** `fp` rounded UP to whole pickups (piles hold whole pickups). */
+function ceilPickupsFp(fp: number): number {
+  return ((fp + FOOD_PICKUP_AMOUNT - 1) >> PICKUP_SHIFT) << PICKUP_SHIFT;
+}
+
+/**
+ * #352 (V60) — Deny: hauler `id` of `colony`, at surface tile (tx, ty) or at its
+ * shaft top below it, drops the part of its load its stores cannot take, and keeps
+ * the rest to deposit. With room (`colonyDepositableRoom`) for the whole load it
+ * drops nothing. Otherwise the part it drops is the excess (load − room) rounded UP
+ * to whole pickups — piles hold whole pickups, so rounding up (rather than down)
+ * loses nothing: the hauler keeps what the stores can take (up to one pickup less
+ * than the room). When that is the whole load (the load's part-pickup remainder
+ * is more than the room), it piles the whole pickups and keeps what the stores can
+ * take of the remainder, letting only the rest go; with no room at all it is the
+ * whole-load drop (placeDenyLoad, which lets a load under one pickup go — the
+ * whole-pickup rule).
+ * A partial drop leaves it Hauling with the rest, no trip counted yet (the deposit
+ * counts it). Returns true when the hauler is left empty-handed.
+ *
+ * No bouncing: a load only ever shrinks, a drop happens only while the room is
+ * short of the load, and a hauler in its own nest never climbs out — if the room
+ * shrinks again before it deposits, it drops the new excess at its shaft top.
+ */
+function denyDropUnstorable(
+  world: WorldState,
+  colony: ColonyRecord,
+  id: number,
+  tx: number,
+  ty: number,
+): boolean {
+  const ants = world.ants;
+  const load = ants.foodCarrying[id]!;
+  const room = colonyDepositableRoom(world, colony);
+  if (room >= load) return false;
+  const drop = ceilPickupsFp(load - room);
+  if (drop < load) {
+    if (placePile(world, tx, ty, drop)) ants.foodCarrying[id] = load - drop;
+    return false;
+  }
+  // The excess rounds up to the whole load: the load's part-pickup remainder (a
+  // load eaten into by the hauler's meals) is more than the room. Pile the whole
+  // pickups, keep what the stores can take of the remainder, and let the rest
+  // go — neither a pile nor the stores can hold it. With no room (or no
+  // remainder) this is the plain whole-load drop.
+  const whole = wholeLoadFp(load);
+  const keep = Math.min(load - whole, room);
+  if (keep <= 0) return placeDenyLoad(world, colony, id, tx, ty);
+  if (whole > 0 && !placePile(world, tx, ty, whole)) return false;
+  ants.foodCarrying[id] = keep;
+  return false;
+}
+
+/**
+ * #352 (V60) — Deny: hauler `id` of `colony` leaves its load as a surface food
+ * pile at surface tile (tx, ty) — unless an entrance (of any colony) lies there,
+ * where no pile may — or else on the first of its N/E/S/W neighbours that is
+ * walkable and not an entrance; the first of those whose pile (or new pile) can
+ * keep the whole load (`pileDropRoomFp`: never a full pile, over the pile cap or
+ * off the surface component). The drop keeps whole pickups (a part-pickup
+ * remainder is lost). It counts as a trip (`raidTrips`, as a deposit would) and
+ * the hauler goes back to its rally. With no such tile — or when the pile store
+ * cannot take it after all (no entity id left for a new pile) — it keeps its load
+ * and returns false: at its door it walks on down as a Loot hauler does, at its
+ * shaft top it waits there, trying again each tick; no food is lost. A load
+ * under one pickup is nothing to drop: it is let go
+ * without a trip. Its colony's foragers bring the pile in once there is room.
+ */
+function placeDenyLoad(
+  world: WorldState,
+  colony: ColonyRecord,
+  id: number,
+  tx: number,
+  ty: number,
+): boolean {
+  const ants = world.ants;
+  const fp = wholeLoadFp(ants.foodCarrying[id]!);
+  if (fp <= 0) {
+    ants.foodCarrying[id] = 0;
+    ants.subTask[id] = FightingSubState.MovingToRally;
+    return true;
+  }
+  // The load is consumed only once the pile has it (a failed insertion — e.g.
+  // no entity id left for a new pile — keeps it on the hauler).
+  if (!placePile(world, tx, ty, fp)) return false;
+  ants.foodCarrying[id] = 0;
+  ants.subTask[id] = FightingSubState.MovingToRally;
+  colony.raidTrips += 1;
+  return true;
+}
+
+/**
+ * #352 (V60) — put `fp` (whole pickups) as a surface food pile at (tx, ty), or on
+ * the first of its N/E/S/W neighbours, skipping any tile that is not walkable, is
+ * an entrance (of any colony: no pile may lie on a shaft) or whose pile (or new
+ * pile) cannot keep all of it (`pileDropRoomFp`). Returns whether it was placed;
+ * nothing changes when it was not.
+ */
+function placePile(world: WorldState, tx: number, ty: number, fp: number): boolean {
+  for (let i = -1; i < DIR_DX.length; i++) {
+    const nx = i < 0 ? tx : tx + DIR_DX[i]!;
+    const ny = i < 0 ? ty : ty + DIR_DY[i]!;
+    if (!canEnterSurfaceTile(world, nx, ny)) continue;
+    if (isEntranceTileOfAnyColony(world, nx, ny)) continue;
+    if (pileDropRoomFp(world, nx, ny) < fp) continue;
+    if (topUpOrSpawnCorpsePile(world, nx, ny, fp)) return true;
+  }
+  return false;
 }
 
 /** Target (tile centre) the open entrance of `colony` nearest to ant `id`
@@ -550,10 +810,18 @@ export function tickRaidActions(world: WorldState): void {
       if (gridColonyId === ants.colonyId[id] || ants.foodCarrying[id] !== 0) continue;
       const victim = world.colonies[gridColonyId];
       if (victim === undefined) continue;
+      // #352 (V60): a spoiler destroys a load where it stands every
+      // SPOIL_TICKS_PER_LOAD ticks (its id staggers the beat) and stays Looting.
+      const spoil = colonyRaidType(world, colony) === RaidType.Spoil;
+      if (spoil && (world.tick + id) % SPOIL_TICKS_PER_LOAD !== 0) continue;
       for (let c = 0; c < victim.chambers.length; c++) {
         const ch = victim.chambers[c]!;
         if (ch.chamberType !== ChamberType.FoodStorage || chamberStock(world, ch) <= 0) continue;
         if (!inFootprint(ch, tx, ty)) continue;
+        if (spoil) {
+          victim.foodLostToRaidsFp += takeFromStock(world, victim, ch, RAID_CARRY_FP);
+          break;
+        }
         const taken = takeFromStock(world, victim, ch, RAID_CARRY_FP);
         if (taken > 0) {
           ants.foodCarrying[id] = taken;
@@ -589,6 +857,20 @@ export function tickRaidActions(world: WorldState): void {
     if (left === 0) {
       ants.subTask[id] = FightingSubState.MovingToRally;
       colony.raidTrips += 1;
+    } else if (ty === 0 && ents != null && colonyRaidType(world, colony) === RaidType.Deny) {
+      // #352 (V60): a Deny hauler that went down with room at the door and found
+      // less (another hauler or a forager filled it first, or it came down under
+      // Loot) does not wait for room: at the top of its shaft it leaves what its
+      // stores cannot take outside, beside the open entrance above it
+      // (denyDropUnstorable) — all of it, and goes back, or the excess, and walks
+      // on to a chamber with the rest. With room enough in a chamber (only the pool
+      // is full) it drops nothing and walks on, as any hauler does.
+      for (let e = 0; e < ents.length; e++) {
+        const ent = ents[e]!;
+        if (!ent.isOpen || ent.surfaceTileX !== tx) continue;
+        denyDropUnstorable(world, colony, id, ent.surfaceTileX, ent.surfaceTileY);
+        break;
+      }
     }
   }
 }
