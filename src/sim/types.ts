@@ -1353,7 +1353,34 @@ export const SIM_VERSION_V60_RAID_ORDERS = 60 as const;
  * byte-identically. MIN_ACCEPTED is UNCHANGED (V50).
  */
 export const SIM_VERSION_V61_AI_EARLY_STORAGE = 61 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V61_AI_EARLY_STORAGE;
+
+/**
+ * #371 (V62) — the rule-based AI defends its own nest, and tunnel defenders spread
+ * over the invaders.
+ *
+ * Up to V61 the controller never rallied on its own entrance, so its fighters
+ * stayed sentries on the surface while raiders walked past them, down the shaft
+ * and to the queen (a 6-fighter Assault won at ~5:00 on Normal and Hard). From V62:
+ *   - AI policy (`aiNestDefence`, src/render/ai-controller.ts, on the existing
+ *     SetRallyPoint / ClearRallyPoint / SetBehaviorRatio commands): with an enemy
+ *     fighter in its nest, or AI_DEFENCE_ALERT_RAIDERS of them on the surface
+ *     within AI_DEFENCE_ALERT_RADIUS_TILES of one of its open entrances, an AI
+ *     colony rallies on that entrance (its fighters become tunnel defenders, V44),
+ *     drafts fighters (AI_DEFENCE_RATIO), starts no probe and commits no invasion
+ *     cohort, and clears the rally once no enemy fighter is in the nest or within
+ *     AI_DEFENCE_CLEAR_RADIUS_TILES. A probe in flight is called home; a committed
+ *     invasion is not.
+ *   - Sim (both colonies alike, CLNY-08): a tunnel defender after an invader moves
+ *     by the #364 saturation-aware hunt (`invaderHuntStep`, the nearest invader by
+ *     path whose tile no friend already holds the duel on) instead of straight at
+ *     the nearest invader, so a pack of defenders spreads over the raiders instead
+ *     of stacking on one tile, where combat pairs only one of them.
+ * No new serialized field, command, world.rngState draw, entity-ID advance or
+ * tick-order change (the hunt's buffers are derived, unserialized scratch). A V61
+ * save replays byte-identically. MIN_ACCEPTED is UNCHANGED (V50).
+ */
+export const SIM_VERSION_V62_AI_NEST_DEFENCE = 62 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V62_AI_NEST_DEFENCE;
 
 /**
  * S2 — AI colony state machine states.

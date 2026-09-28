@@ -591,6 +591,22 @@ export function sentryWalksHome(world: WorldState, id: number): boolean {
 }
 
 /**
+ * #371 (V62) — tunnel defender `id` is after an invader this tick: step 10c gave
+ * it a target (routeTunnelDefender) and it is not walking to its tunnel post
+ * (`moving` 1). Read by step 16, which from V62 moves such a defender by the
+ * saturation-aware hunt (invader-retarget.ts) instead of straight at the nearest
+ * invader, so a pack of defenders spreads over the invaders rather than stacking
+ * on one (combat fights one pair per tile per tick). Same-tick scratch, rebuilt by
+ * every 10c pass.
+ */
+export function defenderChasesInvader(world: WorldState, id: number): boolean {
+  if (world.ants.targetPosX[id] === -1) return false;
+  if (!fighterDefendsTunnels(world, id)) return false;
+  const moving = getScratch(world).antTargeting.sentryMoving;
+  return !(id < moving.length && moving[id] === 1);
+}
+
+/**
  * V44 (#325) — the step tunnel defender `id` takes this tick toward its target
  * (an invader or its post, in its own grid's coordinates; written by step 10c),
  * through passable tunnel by BFS. (0, 0) if it has no target or none is reachable.
