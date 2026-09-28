@@ -5,7 +5,10 @@
 // (GameScene's onBeforeTick calls runAIController only for non-player colonyIds).
 
 import type { WorldState } from '../sim/types.js';
-import { SIM_VERSION_V53_NO_LOOT_WHEN_FULL } from '../sim/types.js';
+import {
+  SIM_VERSION_V53_NO_LOOT_WHEN_FULL,
+  SIM_VERSION_V61_AI_EARLY_STORAGE,
+} from '../sim/types.js';
 import type { ColonyId, ColonyRecord } from '../sim/colony/colony-store.js';
 import type {
   CancelDigMarkCommand,
@@ -588,8 +591,17 @@ export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): voi
   // this widened-window race already existed; widening hasChamberOrPending
   // here closes it. This rule places only the FIRST FoodStorage; more come
   // from the #290 D14 rule after the Nursery block below.
+  //
+  // #370 (V61) — the first FoodStorage no longer waits for the Queen. While it
+  // did, a chamberless colony's pool filled (~tick 750), every forager parked
+  // holding food (no V27 backpressure without a FoodStorage, so none went Idle),
+  // auto-dig had no Idle worker, and the bootstrap shaft to the Queen depth crawled
+  // until ~tick 4 500. The #33 reason for the order is gone: the bootstrap above
+  // runs until a Queen chamber is COMPLETED, so a shallow FoodStorage cannot end it.
+  // Pre-V61 worlds keep the Queen-first order (their recorded command stream).
   if (
-    hasChamberOrPending(world, colony, ChamberType.Queen) &&
+    (world.simVersion >= SIM_VERSION_V61_AI_EARLY_STORAGE ||
+      hasChamberOrPending(world, colony, ChamberType.Queen)) &&
     colonyFoodTotal(world, colony) >= AI_FOOD_STORAGE_THRESHOLD &&
     !hasChamberOrPending(world, colony, ChamberType.FoodStorage)
   ) {
@@ -1023,7 +1035,7 @@ function _emitSetRallyPoint(
 /**
  * True when the colony has a chamber of `chamberType`, or a PendingChamber
  * of that type. Used to gate AI placement decisions that need to wait for
- * a specific chamber to be in flight (e.g. issue #33 — FoodStorage waits
+ * a specific chamber to be in flight (e.g. issue #33 — before V61 FoodStorage waits
  * for Queen so the bootstrap dig can finish reaching the deeper Queen
  * preferredDepth before a shallow FS lands and stalls the dig).
  */

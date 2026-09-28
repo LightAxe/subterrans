@@ -1304,6 +1304,6 @@ describe('Blockade (V60)', () => {
     w2.world.ants.targetPosX[b!] = 12345;
     updateBlockaders(w2.world);
     expect(w2.world.ants.targetPosX[b!]).toBe(12345);
-    expect(w2.world.simVersion).toBe(SIM_VERSION_V60_RAID_ORDERS);
+    expect(w2.world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V60_RAID_ORDERS);
   });
 });

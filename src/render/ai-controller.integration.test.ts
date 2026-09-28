@@ -28,6 +28,7 @@ import { UndergroundTileState, ugGet } from '../sim/terrain.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
 import type { WorldState } from '../sim/types.js';
+import { SIM_VERSION_V60_RAID_ORDERS, SIM_VERSION_V61_AI_EARLY_STORAGE } from '../sim/types.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
 import { colonyFoodTotal } from '../sim/food/food-api.js';
 
@@ -347,5 +348,64 @@ describe('AI-only scenario 18000 ticks (issue #33)', () => {
       }));
     }
     expect(run()).toEqual(run());
+  }, 60_000);
+});
+
+// -----------------------------------------------------------------------------
+// #370 (V61) — the opening no longer stalls on a full entrance pool.
+// Seed 404 Normal, rule-based enemy vs a passive player: up to V60 the enemy's
+// pool filled ~tick 750, its foragers parked holding food (no FoodStorage → no
+// V27 backpressure → nobody went Idle for auto-dig), and its Queen chamber landed
+// only ~tick 4 500. From V61 the first FoodStorage goes in at once.
+// -----------------------------------------------------------------------------
+
+interface OpeningTrace {
+  /** First tick each chamber type was COMPLETED (null = not by the end). */
+  queenAt: number | null;
+  storageAt: number | null;
+  /** Sum over ticks of enemy workers parked holding food (the #27 carrier wait). */
+  parkedCarrierTicks: number;
+}
+
+function traceOpening(simVersion: number, ticks: number): OpeningTrace {
+  const world = createScenario(404, 'Normal');
+  world.simVersion = simVersion;
+  const colony = world.colonies[ENEMY_COLONY_ID]!;
+  const out: OpeningTrace = { queenAt: null, storageAt: null, parkedCarrierTicks: 0 };
+  for (let t = 0; t < ticks; t++) {
+    runAIController(world, ENEMY_COLONY_ID);
+    tick(world, world.commandQueue.splice(0));
+    for (const id of colony.workers) {
+      if (world.ants.alive[id] === 1 && world.ants.waitingDeposit[id] === 1) {
+        out.parkedCarrierTicks += 1;
+      }
+    }
+    for (const ch of colony.chambers) {
+      if (ch.chamberType === ChamberType.Queen && out.queenAt === null) out.queenAt = world.tick;
+      if (ch.chamberType === ChamberType.FoodStorage && out.storageAt === null) {
+        out.storageAt = world.tick;
+      }
+    }
+  }
+  return out;
+}
+
+describe('#370 — AI opening with a full entrance pool (seed 404 Normal)', () => {
+  const TICKS = 3000;
+
+  it('V61: storage first, no parked carriers, Queen chamber done well inside 3000 ticks', () => {
+    const v61 = traceOpening(SIM_VERSION_V61_AI_EARLY_STORAGE, TICKS);
+    expect(v61.storageAt, JSON.stringify(v61)).not.toBeNull();
+    expect(v61.storageAt!, JSON.stringify(v61)).toBeLessThan(500);
+    expect(v61.queenAt, JSON.stringify(v61)).not.toBeNull();
+    expect(v61.queenAt!, JSON.stringify(v61)).toBeLessThan(2500);
+    expect(v61.parkedCarrierTicks, JSON.stringify(v61)).toBeLessThan(100);
+  }, 60_000);
+
+  it('V60 (pinned): the pre-fix stall — carriers park for thousands of ticks, no Queen chamber by 3000', () => {
+    const v60 = traceOpening(SIM_VERSION_V60_RAID_ORDERS, TICKS);
+    expect(v60.queenAt, JSON.stringify(v60)).toBeNull();
+    expect(v60.storageAt, JSON.stringify(v60)).toBeNull();
+    expect(v60.parkedCarrierTicks, JSON.stringify(v60)).toBeGreaterThan(2000);
   }, 60_000);
 });

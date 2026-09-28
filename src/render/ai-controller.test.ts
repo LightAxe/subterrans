@@ -32,7 +32,13 @@ import {
   aiSelectProbeTarget,
 } from './ai-controller.js';
 
-import { createWorldState, allocateEntityId, SIM_VERSION_V52_RAIDING } from '../sim/types.js';
+import {
+  createWorldState,
+  allocateEntityId,
+  SIM_VERSION_V52_RAIDING,
+  SIM_VERSION_V60_RAID_ORDERS,
+  SIM_VERSION_V61_AI_EARLY_STORAGE,
+} from '../sim/types.js';
 import { initAnt } from '../sim/ant/ant-store.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
@@ -968,8 +974,10 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       expect(nurseryCmd!.anchorTileY).toBe(7);
     });
 
-    it('Queen-first ordering: FoodStorage does NOT place before Queen exists, even with food >= threshold', () => {
+    it('Queen-first ordering (pre-V61): FoodStorage does NOT place before Queen exists, even with food >= threshold', () => {
       const world = makeWorld(0);
+      // #370 — the Queen-first order is kept for pre-V61 worlds only.
+      world.simVersion = SIM_VERSION_V60_RAID_ORDERS;
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       setQueenPos(world, 0, 10, 10);
@@ -986,6 +994,58 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
           (c as { chamberType: number }).chamberType === ChamberType.FoodStorage,
       );
       expect(fsCmd).toBeUndefined();
+    });
+
+    it('#370 (V61): the first FoodStorage places with no Queen chamber, completed or pending', () => {
+      const world = makeWorld(0);
+      expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V61_AI_EARLY_STORAGE);
+      const colony = addColony(world, 2 as ColonyId, 0);
+      addUndergroundGrid(world, 2 as ColonyId);
+      setQueenPos(world, 0, 10, 10);
+      setPoolFoodForTest(world, colony, AI_FOOD_STORAGE_THRESHOLD);
+      const grid = world.undergroundGrids[2 as ColonyId]!;
+      // Only a shallow Open tile: the Queen's depth gate refuses it, the
+      // FoodStorage (no depth gate) takes it.
+      ugSet(grid, 10, 5, UndergroundTileState.Open);
+      aiChamberPlacement(world, colony);
+      const placed = world.commandQueue
+        .filter((c) => c.type === 'PlaceChamber')
+        .map((c) => c as { chamberType: number; anchorTileX: number; anchorTileY: number });
+      expect(placed).toEqual([
+        expect.objectContaining({
+          chamberType: ChamberType.FoodStorage,
+          anchorTileX: 10,
+          anchorTileY: 5,
+        }),
+      ]);
+    });
+
+    it('#370 (V61): the early FoodStorage still waits for the food threshold and for no FoodStorage in flight', () => {
+      const below = makeWorld(0);
+      const c1 = addColony(below, 2 as ColonyId, 0);
+      addUndergroundGrid(below, 2 as ColonyId);
+      setQueenPos(below, 0, 10, 10);
+      setPoolFoodForTest(below, c1, AI_FOOD_STORAGE_THRESHOLD - 1);
+      ugSet(below.undergroundGrids[2 as ColonyId]!, 10, 5, UndergroundTileState.Open);
+      aiChamberPlacement(below, c1);
+      expect(below.commandQueue.filter((c) => c.type === 'PlaceChamber')).toHaveLength(0);
+
+      const pending = makeWorld(0);
+      const c2 = addColony(pending, 2 as ColonyId, 0);
+      addUndergroundGrid(pending, 2 as ColonyId);
+      setQueenPos(pending, 0, 10, 10);
+      setPoolFoodForTest(pending, c2, AI_FOOD_STORAGE_THRESHOLD);
+      ugSet(pending.undergroundGrids[2 as ColonyId]!, 10, 5, UndergroundTileState.Open);
+      pending.pendingChambers['2:30:1'] = {
+        colonyId: 2 as ColonyId,
+        chamberType: ChamberType.FoodStorage,
+        anchorTileX: 30,
+        anchorTileY: 1,
+        width: 4,
+        height: 3,
+      };
+      aiChamberPlacement(pending, c2);
+      expect(pending.commandQueue.filter((c) => c.type === 'PlaceChamber')).toHaveLength(0);
     });
 
     it('bootstrap dig continues while Queen is pending (codex P1 — deadlock guard)', () => {
