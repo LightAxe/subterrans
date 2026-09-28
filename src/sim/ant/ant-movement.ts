@@ -7,8 +7,7 @@
 // production caller. Owns SURFACE_MOVE_CACHE (reset each tick); its same-colony
 // occupancy Map now lives on the per-world scratch arena (#231).
 import type { ChamberFlowFields } from '../chamber-flow.js';
-import { isFoodChamberDepositable, pileAtTile } from '../food/food-api.js';
-import { isInChamberFootprint } from '../colony/colony-store.js';
+import { isFoodChamberDepositable } from '../food/food-api.js';
 import {
   DANGER_ROUTE_AVOID_THRESHOLD,
   SEARCH_LEASH_MAX_WAVE,
@@ -72,6 +71,7 @@ import {
   diagonalizeFlowStep,
   getTaskDirection,
   isDescentBlocked,
+  isOccupancyExempt,
   pickCardinalStep,
   pickSurfaceDetour,
   packStep,
@@ -82,6 +82,7 @@ import { collectAliveQueenIds, moveQueens } from './ant-queens.js';
 import { nurseRoutesHomeByEntranceField } from './ant-nursing.js';
 import { surfaceDiggerEntranceDistance, surfaceDiggerRoutesToEntrance } from './ant-dig.js';
 import { OFF_GOAL_FIELD, entranceRoutedStep } from './entrance-routed-step.js';
+import { NO_FREE_HOSTILE, invaderHuntStep } from './invader-retarget.js';
 import {
   holdAlarmedCivilianAtShaft,
   idleMusterPassesThroughFriends,
@@ -946,52 +947,66 @@ export function tickAntMovement(
           }
           // else: no enemy entrance → hold (dx=dy=0 fallback)
         } else {
-          // V52 (#290 PR 5): step 10e aimed a raider stopped by a hostile in reach
-          // at THAT hostile (target set only by 10e; step 10c clears an invader's
-          // target every tick; the read is also gated on V52, so a V51 world never
-          // depends on that tick order). Scalars, not an
-          // object literal: this runs per fighter per tick (hot-loop rule).
-          let haveHostile = false;
-          let hostileX = 0;
-          let hostileY = 0;
-          if (world.simVersion >= SIM_VERSION_V52_RAIDING && ants.targetPosX[id] !== -1) {
-            haveHostile = true;
-            hostileX = ants.targetPosX[id]!;
-            hostileY = ants.targetPosY[id]!;
-          } else {
-            const nearest = pickNearestHostileUnderground(ants, id, gridColonyId);
-            if (nearest !== null) {
-              haveHostile = true;
-              hostileX = nearest.targetX;
-              hostileY = nearest.targetY;
-            }
-          }
-          if (haveHostile) {
-            const invUnderground = world.undergroundGrids[gridColonyId];
-            if (invUnderground) {
-              // Wall-aware greedy step — avoids freezing against solid
-              // walls that blocked the direct cardinal path. See
-              // pickInvaderUndergroundStep. Routes through rawDx/rawDy so the
-              // shared pickCardinalStep block does the FP→step conversion.
-              const tileX = posX >> FP_SHIFT;
-              const tileY = posY >> FP_SHIFT;
-              const tTileX = hostileX >> FP_SHIFT;
-              const tTileY = hostileY >> FP_SHIFT;
-              const step = pickInvaderUndergroundStep(
-                invUnderground,
-                tileX,
-                tileY,
-                tTileX,
-                tTileY,
-                getScratch(world),
-              );
-              rawDx = unpackStepDx(step) * FP_ONE;
-              rawDy = unpackStepDy(step) * FP_ONE;
-            } else {
-              rawDx = hostileX - posX;
-              rawDy = hostileY - posY;
-            }
+          // #364 (V59): with no step-10e aim, hunt the nearest hostile BY PATH whose
+          // tile is not saturated (its colony does not already hold the duel
+          // there); the policy lives in invader-retarget.ts. None reachable (or
+          // below V59): hunt as before.
+          const aimed = world.simVersion >= SIM_VERSION_V52_RAIDING && ants.targetPosX[id] !== -1;
+          const huntStep = aimed
+            ? NO_FREE_HOSTILE
+            : invaderHuntStep(world, id, gridColonyId, claimsNoTile);
+          if (huntStep !== NO_FREE_HOSTILE) {
+            rawDx = unpackStepDx(huntStep) * FP_ONE;
+            rawDy = unpackStepDy(huntStep) * FP_ONE;
             haveTarget = true;
+          } else {
+            // V52 (#290 PR 5): step 10e aimed a raider stopped by a hostile in reach
+            // at THAT hostile (target set only by 10e; step 10c clears an invader's
+            // target every tick; the read is also gated on V52, so a V51 world never
+            // depends on that tick order). Scalars, not an
+            // object literal: this runs per fighter per tick (hot-loop rule).
+            let haveHostile = false;
+            let hostileX = 0;
+            let hostileY = 0;
+            if (aimed) {
+              haveHostile = true;
+              hostileX = ants.targetPosX[id]!;
+              hostileY = ants.targetPosY[id]!;
+            } else {
+              const nearest = pickNearestHostileUnderground(ants, id, gridColonyId);
+              if (nearest !== null) {
+                haveHostile = true;
+                hostileX = nearest.targetX;
+                hostileY = nearest.targetY;
+              }
+            }
+            if (haveHostile) {
+              const invUnderground = world.undergroundGrids[gridColonyId];
+              if (invUnderground) {
+                // Wall-aware greedy step — avoids freezing against solid
+                // walls that blocked the direct cardinal path. See
+                // pickInvaderUndergroundStep. Routes through rawDx/rawDy so the
+                // shared pickCardinalStep block does the FP→step conversion.
+                const tileX = posX >> FP_SHIFT;
+                const tileY = posY >> FP_SHIFT;
+                const tTileX = hostileX >> FP_SHIFT;
+                const tTileY = hostileY >> FP_SHIFT;
+                const step = pickInvaderUndergroundStep(
+                  invUnderground,
+                  tileX,
+                  tileY,
+                  tTileX,
+                  tTileY,
+                  getScratch(world),
+                );
+                rawDx = unpackStepDx(step) * FP_ONE;
+                rawDy = unpackStepDy(step) * FP_ONE;
+              } else {
+                rawDx = hostileX - posX;
+                rawDy = hostileY - posY;
+              }
+              haveTarget = true;
+            }
           }
           // no hostile → idle fallback: dx=dy=0 (haveTarget stays false)
         }
@@ -1938,6 +1953,51 @@ function surfaceEntranceFieldDir(
   return surfaceField[tileY * SURFACE_GRID_WIDTH + tileX]!;
 }
 
+/**
+ * Ant `id` claims no tile in the same-colony occupancy pass (resolveSameColonyOccupancy):
+ * it neither bumps a friend off its tile nor is bumped. (Pure; the per-ant half of
+ * the rule, isOccupancyExempt the per-tile half.) #364 (V59): the invader hunt
+ * (invader-retarget.ts) reads it to know which friends' tiles it would be bumped
+ * back off.
+ */
+function claimsNoTile(world: WorldState, id: number): boolean {
+  const ants = world.ants;
+  // Issue #17 Phase 1 — brood entities currently being carried by an alive
+  // nurse follow the nurse's position via `tickNurseActions` step 16c sync,
+  // so they MUST NOT participate in occupancy displacement. Otherwise the
+  // resolver would bump the brood off the carrier's tile every tick of in-
+  // tunnel transit, the next 16c sync would snap it back, and the player
+  // would see a 1-tile-jitter visual artifact + the carry render offset
+  // would briefly appear above an empty tile.
+  const carrierId = ants.carriedBy[id]!;
+  if (carrierId !== -1 && ants.alive[carrierId] === 1) return true;
+  // V40 (#299): the queen never contests a tile. She is the lowest id in her
+  // colony and stands still for thousands of ticks (on the surface beside the
+  // entrance until her chamber completes, then in it), so any worker whose route
+  // crosses her tile is bumped off every tick — and a searcher bumped back onto
+  // the exempt entrance tile re-takes the same trail-following step next tick,
+  // a livelock measured at 1 600-3 000 ticks per forager on the #297 seeds (two
+  // foragers of a 3-worker colony frozen on the doorstep while its queen starved).
+  // Stacking on the queen is already allowed inside chamber footprints; allow it
+  // everywhere.
+  if (world.colonies[ants.colonyId[id]!]?.queenEntityId === id) return true;
+  // V43 (#323) / V44 (#325): a sentry walking to its post, or a tunnel defender
+  // holding or walking to its post, neither claims a tile nor is bumped.
+  if (sentryPassesThroughFriends(world, id) || defenderPassesThroughFriends(world, id)) {
+    return true;
+  }
+  // #322 (V49): nor does an idle worker mustering home under the alarm.
+  if (idleMusterPassesThroughFriends(world, id)) return true;
+  // V51 (#290 PR 4, D11): nor does a hungry fighter walking home to eat. Bumped
+  // like any ant, one leaving a crowded rally stepped onto a tile a fed friend
+  // held and was pushed back every tick, until it starved a tile from open ground.
+  if (fighterWalksHomeToEat(world, id)) return true;
+  // V52 (#290 PR 5): nor does a raider hauling loot home. Bumped like any ant, one
+  // climbing a one-wide enemy shaft behind its own idle invaders was pushed back
+  // off their tiles every tick and never got out. (Only V52 writes Hauling.)
+  return fighterIsHauling(world, id);
+}
+
 function resolveSameColonyOccupancy(world: WorldState): void {
   const ants = world.ants;
   // V33 (#243): park a shifted ant at tile CENTER, like every other position
@@ -1955,27 +2015,10 @@ function resolveSameColonyOccupancy(world: WorldState): void {
   for (let id = 0; id < world.nextEntityId; id++) {
     if (ants.alive[id] !== 1) continue;
 
-    // Issue #17 Phase 1 — brood entities currently being carried by an alive
-    // nurse follow the nurse's position via `tickNurseActions` step 16c sync,
-    // so they MUST NOT participate in occupancy displacement. Otherwise the
-    // resolver would bump the brood off the carrier's tile every tick of in-
-    // tunnel transit, the next 16c sync would snap it back, and the player
-    // would see a 1-tile-jitter visual artifact + the carry render offset
-    // would briefly appear above an empty tile.
-    const carrierId = ants.carriedBy[id]!;
-    if (carrierId !== -1 && ants.alive[carrierId] === 1) continue;
+    // An ant that claims no tile (claimsNoTile) neither bumps nor is bumped.
+    if (claimsNoTile(world, id)) continue;
 
     const colonyId = ants.colonyId[id]!;
-    // V40 (#299): the queen never contests a tile. She is the lowest id in her
-    // colony and stands still for thousands of ticks (on the surface beside the
-    // entrance until her chamber completes, then in it), so any worker whose route
-    // crosses her tile is bumped off every tick — and a searcher bumped back onto
-    // the exempt entrance tile re-takes the same trail-following step next tick,
-    // a livelock measured at 1 600-3 000 ticks per forager on the #297 seeds (two
-    // foragers of a 3-worker colony frozen on the doorstep while its queen starved).
-    // Stacking on the queen is already allowed inside chamber footprints; allow it
-    // everywhere.
-    if (world.colonies[colonyId]?.queenEntityId === id) continue;
     const zone = ants.zone[id]!;
     // Issue #61 — include `gridColonyId` in the occupancy key so cross-grid
     // ants (Phase 09.1 Chunk 3+4 fighter invaders with currentGridColonyId !==
@@ -2006,19 +2049,6 @@ function resolveSameColonyOccupancy(world: WorldState): void {
         ? rawGridColonyId
         : colonyId;
     if (isOccupancyExempt(world, exemptColonyId, zone, tileX, tileY)) continue;
-    // V43 (#323) / V44 (#325): a sentry walking to its post, or a tunnel defender
-    // holding or walking to its post, neither claims a tile nor is bumped.
-    if (sentryPassesThroughFriends(world, id) || defenderPassesThroughFriends(world, id)) continue;
-    // #322 (V49): nor does an idle worker mustering home under the alarm.
-    if (idleMusterPassesThroughFriends(world, id)) continue;
-    // V51 (#290 PR 4, D11): nor does a hungry fighter walking home to eat. Bumped
-    // like any ant, one leaving a crowded rally stepped onto a tile a fed friend
-    // held and was pushed back every tick, until it starved a tile from open ground.
-    if (fighterWalksHomeToEat(world, id)) continue;
-    // V52 (#290 PR 5): nor does a raider hauling loot home. Bumped like any ant, one
-    // climbing a one-wide enemy shaft behind its own idle invaders was pushed back
-    // off their tiles every tick and never got out. (Only V52 writes Hauling.)
-    if (fighterIsHauling(world, id)) continue;
 
     // Issue #108 (v13+) — zero the gridColonyId portion of the key when
     // zone === Surface. Mirrors combat tile-key encoding (tile-key.ts:56);
@@ -2118,49 +2148,4 @@ function resolveSameColonyOccupancy(world: WorldState): void {
     // next tick usually breaks the tie.
     void shifted;
   }
-}
-
-// ---------------------------------------------------------------------------
-// isOccupancyExempt — tile-based exemption for same-colony occupancy rule.
-//
-// Returns true when (zone, tileX, tileY) is a "work site" where multiple
-// same-colony ants must be able to stack:
-//   - Any same-colony chamber footprint (food deposit, nursing, expansion).
-//   - Any same-colony entrance (surface tile; underground shaft bottom at tileY=0).
-//   - Any food pile (surface only; piles are infinite pickup sources per SURF-02).
-//
-// Inlined per-ant. Chamber / entrance / pile counts are small in practice
-// (bounded by colony design), so the linear scan is acceptable in the movement
-// hot path. Runs O(chambers + entrances + piles) per move rather than per ant
-// per work-site lookup — no Set/Map allocation.
-// ---------------------------------------------------------------------------
-function isOccupancyExempt(
-  world: WorldState,
-  colonyId: number,
-  zone: number,
-  tileX: number,
-  tileY: number,
-): boolean {
-  const colony = world.colonies[colonyId];
-  if (!colony) return false;
-
-  if (isInChamberFootprint(colony, tileX, tileY)) return true;
-
-  if (colony.entrances) {
-    for (let e = 0; e < colony.entrances.length; e++) {
-      const ent = colony.entrances[e]!;
-      if (zone === Zone.Surface) {
-        if (ent.surfaceTileX === tileX && ent.surfaceTileY === tileY) return true;
-      } else {
-        // Underground shaft bottom at (entrance col, tileY=0)
-        if (ent.surfaceTileX === tileX && tileY === 0) return true;
-      }
-    }
-  }
-
-  if (zone === Zone.Surface) {
-    if (pileAtTile(world, tileX, tileY) >= 0) return true;
-  }
-
-  return false;
 }

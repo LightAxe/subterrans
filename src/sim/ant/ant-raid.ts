@@ -57,9 +57,16 @@ import { Zone } from '../terrain.js';
 import {
   SIM_VERSION_V52_RAIDING,
   SIM_VERSION_V53_NO_LOOT_WHEN_FULL,
+  SIM_VERSION_V59_INVADER_RETARGET,
   type WorldState,
 } from '../types.js';
-import { DIR_DX, DIR_DY, canEnterUndergroundTile } from './ant-motion.js';
+import {
+  DIR_DX,
+  DIR_DY,
+  canEnterUndergroundTile,
+  stampFriendTiles,
+  tileSaturated,
+} from './ant-motion.js';
 
 /** Fighter `id` is hauling loot home (FightingSubState.Hauling; V52 only writes it). */
 export function fighterIsHauling(world: WorldState, id: number): boolean {
@@ -144,6 +151,47 @@ function stockStepDir(world: WorldState, id: number, start: boolean): number {
 }
 
 /**
+ * #364 (V59) — drop from `cand` (hostiles within the reach window of raider `id`,
+ * standing at (tx, ty) in nest `gridColonyId`) those on a tile SATURATED for it:
+ * tileSaturatedFor's rule (ant-motion.ts) — its own tile when a lower-id friend
+ * stands there too, any other tile when any friend does — evaluated from ONE pass
+ * over the ants (stampFriendTiles) that stamps its friends' tiles in the reach
+ * window, so each candidate is an O(1) lookup (not a scan of every entity per candidate). Keeps
+ * `cand`'s order. Allocation-free (scratch window).
+ */
+function dropSaturatedCandidates(
+  world: WorldState,
+  id: number,
+  gridColonyId: number,
+  tx: number,
+  ty: number,
+  cand: number[],
+): void {
+  const ants = world.ants;
+  const raid = getScratch(world).raid;
+  const S = RAID_REACH_WINDOW_SIDE;
+  const ox = tx - RAID_REACH_WINDOW_RADIUS;
+  const oy = ty - RAID_REACH_WINDOW_RADIUS;
+  const friendArr = raid.friendStamp;
+  if (raid.friendCurrent >= 0x7fffffff) {
+    friendArr.fill(0); // the stamp would wrap: start over
+    raid.friendCurrent = 0;
+  }
+  const stamp = (raid.friendCurrent += 1);
+  const ownHeld = stampFriendTiles(world, id, gridColonyId, ox, oy, S, S, friendArr, stamp);
+  let kept = 0;
+  for (let i = 0; i < cand.length; i++) {
+    const c = cand[i]!;
+    const wx = (ants.posX[c]! >> FP_SHIFT) - ox;
+    const wy = (ants.posY[c]! >> FP_SHIFT) - oy;
+    const own = wx === RAID_REACH_WINDOW_RADIUS && wy === RAID_REACH_WINDOW_RADIUS;
+    if (tileSaturated(own, ownHeld, friendArr, wy * S + wx, stamp)) continue;
+    cand[kept++] = c;
+  }
+  cand.length = kept;
+}
+
+/**
  * A hostile — an adult of another colony (a worker, fighter or nurse, or a queen;
  * brood does not count) — stands below ground in nest `gridColonyId` within
  * `R` PATH tiles of raider `id` (at most RAID_REACH_WINDOW_RADIUS): reached by a BFS through
@@ -151,6 +199,10 @@ function stockStepDir(world: WorldState, id: number, start: boolean): number {
  * the candidates (path distance is never shorter), so the BFS runs only with a
  * candidate near and the final pick reads only them. Returns that hostile (the nearest by path; the first found on a tie), or
  * -1 if none is in reach. Allocation-free (scratch window).
+ * From V59 (#364) a hostile on a tile SATURATED for the raider does not count
+ * (tileSaturatedFor's rule, applied by dropSaturatedCandidates: its colony already
+ * holds the duel there). It neither stops the raider looting nor draws it in to
+ * queue behind that duel.
  */
 function hostileInReach(world: WorldState, id: number, gridColonyId: number, R: number): number {
   const ants = world.ants;
@@ -163,6 +215,7 @@ function hostileInReach(world: WorldState, id: number, gridColonyId: number, R: 
   const raid = getScratch(world).raid;
   const cand = raid.reachCand;
   cand.length = 0;
+  const v59 = world.simVersion >= SIM_VERSION_V59_INVADER_RETARGET;
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
     const c = world.colonies[key as unknown as keyof typeof world.colonies]!;
@@ -174,9 +227,11 @@ function hostileInReach(world: WorldState, id: number, gridColonyId: number, R: 
         continue;
       const dx = (ants.posX[o]! >> FP_SHIFT) - tx;
       const dy = (ants.posY[o]! >> FP_SHIFT) - ty;
-      if ((dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy) <= R) cand.push(o);
+      if ((dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy) > R) continue;
+      cand.push(o);
     }
   }
+  if (v59 && cand.length > 0) dropSaturatedCandidates(world, id, gridColonyId, tx, ty, cand);
   if (cand.length === 0) return -1;
 
   // Pass 2 — bounded BFS (depth R) over the (2W+1)² window centred on the raider.

@@ -104,6 +104,26 @@ export interface ScratchArena {
       number,
       { cells: Int32Array; stamp: number; entranceId: number; invaders: number[] }
     >;
+    /** #364 (V59) — ant-motion.ts tileSaturatedFor's one-cell window, cleared to 0
+     *  after every call (so its fixed stamp 1 never meets a stale value). */
+    saturationProbe: Int32Array;
+    /** #364 (V59) — invader-retarget.ts's per-call buffers, sized to the largest
+     *  nest grid seen: a cell equal to `stamp` holds a friend (`friend`), is
+     *  claimed by a lower-id friend (`block`), holds any hostile (`anyHostile`) or
+     *  a free one (`hostile`), or was reached by the BFS (`seen`) THIS call;
+     *  `firstStep` is the reached cell's first step. Stamps, not clears: each call
+     *  bumps `stamp`. */
+    retarget: {
+      friend: Int32Array;
+      block: Int32Array;
+      hostile: Int32Array;
+      anyHostile: Int32Array;
+      seen: Int32Array;
+      firstStep: Int32Array;
+      queueX: Int32Array;
+      queueY: Int32Array;
+      stamp: number;
+    };
   };
   /** ant-movement.ts — same-colony occupancy resolution map. */
   movementOccupancy: Map<number, number>;
@@ -152,6 +172,11 @@ export interface ScratchArena {
     reachDist: Int32Array;
     reachQ: Int32Array;
     reachCurrent: number;
+    /** #364 (V59) — ant-raid.ts dropSaturatedCandidates: the reach window's cells
+     *  holding a friend of the raider this call (== `friendCurrent`). Stamps, not
+     *  clears: each call bumps `friendCurrent`. */
+    friendStamp: Int32Array;
+    friendCurrent: number;
     /** hostileInReach's candidates (hostiles within Manhattan R), refilled per call. */
     reachCand: number[];
     /**
@@ -208,6 +233,18 @@ export function getScratch(world: WorldState): ScratchArena {
         sentryRawPostsBuilt: new Set(),
         sentryNextRank: new Map(),
         defenderReach: new Map(),
+        saturationProbe: new Int32Array(1),
+        retarget: {
+          friend: new Int32Array(0),
+          block: new Int32Array(0),
+          hostile: new Int32Array(0),
+          anyHostile: new Int32Array(0),
+          seen: new Int32Array(0),
+          firstStep: new Int32Array(0),
+          queueX: new Int32Array(0),
+          queueY: new Int32Array(0),
+          stamp: 0,
+        },
       },
       movementOccupancy: new Map(),
       tickIdle: [],
@@ -231,6 +268,8 @@ export function getScratch(world: WorldState): ScratchArena {
         reachDist: new Int32Array(RAID_REACH_WINDOW_CELLS),
         reachQ: new Int32Array(RAID_REACH_WINDOW_CELLS),
         reachCurrent: 0,
+        friendStamp: new Int32Array(RAID_REACH_WINDOW_CELLS),
+        friendCurrent: 0,
         reachCand: [],
         committedFp: new Map(),
         committedTick: -1,
