@@ -184,6 +184,13 @@ function replayed(sc: Scenario, changeAt = -1): Run {
 const SLOW = 120_000; // four multi-thousand-tick runs; slow on a loaded CI box
 
 describe('V60 raid orders replay deterministically, across save/load and copy (#352)', () => {
+  it('a non-integer raid type drops the whole command (float literal: not in src/sim/)', () => {
+    const r = raidWorld(0);
+    tick(r.world, [rally(0, r, 3.5 as RaidType)]);
+    expect(r.player.rallyPoint).toBeNull();
+    expect(r.player.raidType).toBe(RaidType.Loot);
+  });
+
   it(
     'Deny (own stores kept full): steals, and drops what it cannot store by its entrance',
     () => {

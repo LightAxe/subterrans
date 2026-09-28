@@ -55,7 +55,7 @@ describe('#352 (V60) — ColonyRecord.raidType save field', () => {
   });
 
   it('rejects a tampered value: out of range, non-integer, a written Loot, a string', () => {
-    for (const bad of [5, -1, Number.parseFloat('1.5'), 0, '2', null]) {
+    for (const bad of [5, -1, 1.5, 0, '2', null]) {
       const world = createScenario(7);
       const { save, colonies } = raw(world);
       colonies[String(PLAYER_COLONY_ID)]!['raidType'] = bad;

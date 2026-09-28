@@ -142,7 +142,8 @@ export function raidOrderOfRally(
   cmd: SetRallyPointCommand,
 ): RaidType | null {
   if (!worldHasRaidOrders(world)) return null;
-  const type = cmd.raidType ?? RaidType.Loot;
+  // Only an ABSENT type is Loot: a present null is malformed, as the sim treats it.
+  const type = cmd.raidType === undefined ? RaidType.Loot : cmd.raidType;
   if (!isRaidType(type)) return null;
   return enemyEntranceAt(world, colonyId, cmd.tileX, cmd.tileY) === null ? null : type;
 }

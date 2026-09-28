@@ -162,6 +162,12 @@ export function nextRaidCaption(
   // colony whose entrance the order is on (a third colony raided by someone else
   // is not "your fighters destroying"). A new target only sets the baseline.
   const target = spoilTarget(world, colonyId);
+  // Spoil news owed against a target the order is no longer on (the order ended
+  // or moved to another colony) is dropped, or it could show later as "Raiding:
+  // Spoil" under another order; a new target keeps its own loss baseline below.
+  if (target === null || target.colonyId !== state.spoilTargetId) {
+    state.owedSinceTick.spoiling = -Infinity;
+  }
   if (target === null) {
     state.spoilTargetId = -1;
   } else {

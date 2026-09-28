@@ -163,6 +163,10 @@ describe('the order caption', () => {
       RaidType.Spoil,
     );
     expect(raidOrderOfRally(w, PLAYER_COLONY_ID, cmd({ raidType: 7 as RaidType }))).toBeNull();
+    // A present null is malformed (the sim drops it), not Loot as an absent type is.
+    expect(
+      raidOrderOfRally(w, PLAYER_COLONY_ID, cmd({ raidType: null as unknown as RaidType })),
+    ).toBeNull();
     expect(raidOrderOfRally(w, PLAYER_COLONY_ID, cmd({ tileX: d.x - 20 }))).toBeNull();
     w.simVersion = SIM_VERSION_V59_INVADER_RETARGET;
     expect(raidOrderOfRally(w, PLAYER_COLONY_ID, cmd({}))).toBeNull();
@@ -257,6 +261,38 @@ describe('raid news captions under an order', () => {
     resetRaidCaptionState(s, w, PLAYER_COLONY_ID);
     expect(nextRaidCaption(s, w, PLAYER_COLONY_ID)).toBeNull();
     enemy.foodLostToRaidsFp += 1024;
+    expect(nextRaidCaption(s, w, PLAYER_COLONY_ID)).toBeNull();
+    third.foodLostToRaidsFp += 1024;
+    expect(nextRaidCaption(s, w, PLAYER_COLONY_ID)).toBe('spoiling');
+  });
+
+  it('owed Spoil news is dropped when the order ends or moves to another colony', () => {
+    const w = world();
+    const c = w.colonies[PLAYER_COLONY_ID]!;
+    const d = enemyDoor(w);
+    const enemy = w.colonies[ENEMY_COLONY_ID]!;
+    c.rallyPoint = { tileX: d.x, tileY: d.y };
+    c.raidType = RaidType.Spoil;
+    const s = createRaidCaptionState();
+    resetRaidCaptionState(s, w, PLAYER_COLONY_ID);
+    expect(nextRaidCaption(s, w, PLAYER_COLONY_ID)).toBeNull(); // the target's baseline
+    enemy.foodLostToRaidsFp += 1024;
+    // Owed, but the caption queue is busy (never marked shown) ...
+    expect(nextRaidCaption(s, w, PLAYER_COLONY_ID)).toBe('spoiling');
+    // ... and the order changes to Loot: it must not show later as Spoil news.
+    c.raidType = RaidType.Loot;
+    expect(nextRaidCaption(s, w, PLAYER_COLONY_ID)).toBeNull();
+    c.raidType = RaidType.Spoil;
+    expect(nextRaidCaption(s, w, PLAYER_COLONY_ID)).toBeNull(); // back on: a new baseline
+
+    // Moved to a third colony's entrance while owed: dropped, and the new
+    // target's loss so far is only its baseline; a later loss of it is news.
+    enemy.foodLostToRaidsFp += 1024;
+    expect(nextRaidCaption(s, w, PLAYER_COLONY_ID)).toBe('spoiling');
+    const door = { ...enemy.entrances[0]!, entranceId: 999_001, surfaceTileX: d.x + 9 };
+    const third = { ...enemy, colonyId: 7, entrances: [door], foodLostToRaidsFp: 4096 };
+    (w.colonies as Record<number, typeof third>)[7] = third;
+    c.rallyPoint = { tileX: door.surfaceTileX, tileY: door.surfaceTileY };
     expect(nextRaidCaption(s, w, PLAYER_COLONY_ID)).toBeNull();
     third.foodLostToRaidsFp += 1024;
     expect(nextRaidCaption(s, w, PLAYER_COLONY_ID)).toBe('spoiling');

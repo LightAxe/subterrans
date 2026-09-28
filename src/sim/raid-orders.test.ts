@@ -75,8 +75,6 @@ import { allocateEntityId } from './types.js';
 import { getScratch } from './scratch.js';
 
 const E = ENEMY_COLONY_ID;
-/** A non-integer raid type (no float literal in src/sim/). */
-const FP_HALF_FRACTION = Number.parseFloat('0' + '.5');
 const P = PLAYER_COLONY_ID;
 
 function tileOf(world: WorldState, id: number): { x: number; y: number } {
@@ -173,11 +171,11 @@ describe('the raid order on the colony (V60)', () => {
     expect(r.player.raidType).toBe(RaidType.Loot);
   });
 
-  it('a malformed raid type drops the whole command', () => {
+  it('a malformed raid type drops the whole command (a non-integer: raid-order-replay.test.ts)', () => {
     const r = raidWorld();
     const w = r.world;
     const at = { colonyId: P, tileX: r.enemyDoor.x, tileY: r.enemyDoor.y, issuedAtTick: 0 };
-    for (const bad of [5, -1, 3 + FP_HALF_FRACTION, Number.NaN, '1', null]) {
+    for (const bad of [5, -1, Number.NaN, '1', null]) {
       tick(w, [{ type: 'SetRallyPoint', ...at, raidType: bad as unknown as RaidType }]);
       expect(r.player.rallyPoint).toBeNull();
       expect(r.player.raidType).toBe(RaidType.Loot);
