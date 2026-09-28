@@ -520,6 +520,39 @@ describe('Deny (V60)', () => {
       expect(w.ants.subTask[id]).toBe(FightingSubState.Hauling);
     });
 
+    it('a load eaten into: piles the whole pickups and keeps what the stores can take of the rest', () => {
+      // A 992 fp load (one meal eaten) with 100 fp of room: the excess (892)
+      // rounds up past the load, so the whole pickups (512) go in the pile, the
+      // hauler keeps 100 of the 480 remainder for the stores, and only the other
+      // 380 — which neither a pile nor the stores can hold — is let go.
+      const load = RAID_CARRY_FP - 32;
+      const whole = FOOD_PICKUP_AMOUNT;
+      const r = raidWorld();
+      const w = r.world;
+      order(r, RaidType.Deny);
+      roomFor(r, 100);
+      const id = addHauler(w, P, r.playerDoor.x - 1, r.playerDoor.y + 1, null, load);
+      updateRaiders(w);
+      expect(pileFpNear(w, r.playerDoor.x, r.playerDoor.y)).toBe(whole);
+      expect(w.ants.foodCarrying[id]).toBe(100);
+      expect(w.ants.subTask[id]).toBe(FightingSubState.Hauling);
+      expect(r.player.raidTrips).toBe(0);
+    });
+
+    it('the partial drop at the entity cap keeps the whole load (no pile, no trip)', () => {
+      const r = raidWorld();
+      const w = r.world;
+      order(r, RaidType.Deny);
+      roomFor(r, 600);
+      const id = addHauler(w, P, r.playerDoor.x - 1, r.playerDoor.y + 1, null, RAID_CARRY_FP);
+      const piles = pileCount(w);
+      w.nextEntityId = MAX_ENTITIES;
+      updateRaiders(w);
+      expect(w.ants.foodCarrying[id]).toBe(RAID_CARRY_FP);
+      expect(pileCount(w)).toBe(piles);
+      expect(r.player.raidTrips).toBe(0);
+    });
+
     it('at its shaft top with part of the room: drops the excess by the entrance, stores the rest', () => {
       // The pool is full; the larder has 600 fp free. Of a 1024 fp load the
       // excess (424) rounds up to one pickup: 512 is left outside, the other 512

@@ -643,8 +643,11 @@ function ceilPickupsFp(fp: number): number {
  * drops nothing. Otherwise the part it drops is the excess (load − room) rounded UP
  * to whole pickups — piles hold whole pickups, so rounding up (rather than down)
  * loses nothing: the hauler keeps what the stores can take (up to one pickup less
- * than the room). When that is the whole load, the whole load is dropped
- * (placeDenyLoad, which lets a load under one pickup go — the whole-pickup rule).
+ * than the room). When that is the whole load (the load's part-pickup remainder
+ * is more than the room), it piles the whole pickups and keeps what the stores can
+ * take of the remainder, letting only the rest go; with no room at all it is the
+ * whole-load drop (placeDenyLoad, which lets a load under one pickup go — the
+ * whole-pickup rule).
  * A partial drop leaves it Hauling with the rest, no trip counted yet (the deposit
  * counts it). Returns true when the hauler is left empty-handed.
  *
@@ -664,8 +667,20 @@ function denyDropUnstorable(
   const room = colonyDepositableRoom(world, colony);
   if (room >= load) return false;
   const drop = ceilPickupsFp(load - room);
-  if (drop >= load) return placeDenyLoad(world, colony, id, tx, ty);
-  if (placePile(world, tx, ty, drop)) ants.foodCarrying[id] = load - drop;
+  if (drop < load) {
+    if (placePile(world, tx, ty, drop)) ants.foodCarrying[id] = load - drop;
+    return false;
+  }
+  // The excess rounds up to the whole load: the load's part-pickup remainder (a
+  // load eaten into by the hauler's meals) is more than the room. Pile the whole
+  // pickups, keep what the stores can take of the remainder, and let the rest
+  // go — neither a pile nor the stores can hold it. With no room (or no
+  // remainder) this is the plain whole-load drop.
+  const whole = wholeLoadFp(load);
+  const keep = Math.min(load - whole, room);
+  if (keep <= 0) return placeDenyLoad(world, colony, id, tx, ty);
+  if (whole > 0 && !placePile(world, tx, ty, whole)) return false;
+  ants.foodCarrying[id] = keep;
   return false;
 }
 
