@@ -572,7 +572,7 @@ export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): voi
   // chamberless fallback bucket, so the AI gate would never fire once the first
   // chamber filled.
   //
-  // Issue #33 — also gate on Queen-completed-or-pending. Pre-fix the FS
+  // Issue #33 (pre-V61 only; see #370 below) — also gate on Queen-completed-or-pending. Pre-fix the FS
   // gate fired on tick 0 (starting food 1280 ≫ threshold=8) and the
   // FS chamber landed at the entrance shaft floor (Y≈1). That single
   // shallow chamber preempted the bootstrap dig (which only ran while
@@ -580,8 +580,8 @@ export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): voi
   // anchor. The Queen-first ordering mirrors a human player's natural
   // build sequence and lets the bootstrap finish digging the entrance
   // shaft before the FS lands on it.
-  // FS uniqueness check: a duplicate-issuance window opens once Queen-pending
-  // exists (the FS gate above is now satisfied) and persists until the
+  // FS uniqueness check: a duplicate-issuance window opens once the gate is
+  // satisfied (Queen-pending before V61; tick 0 from V61) and persists until the
   // first FS PendingChamber transitions to a ChamberRecord. tick.ts dedupes
   // by exact (anchorTileX, anchorTileY) so a second FS at the SAME spot is
   // rejected, but if the BFS picks a DIFFERENT valid anchor on a later
@@ -1458,8 +1458,9 @@ function findOpenChamberSpot(
   //
   // Codex P2 follow-up: restrict the gate to Queen. FoodStorage and
   // Nursery use shallower preferredDepth (5 / 7) and don't suffer from
-  // the early-shallow-anchor problem (Queen-first ordering already
-  // ensures the deep dig happens before they're considered). Applying
+  // the early-shallow-anchor problem (a shallow FS/Nursery cannot end the
+  // bootstrap dig, which runs until a Queen chamber is COMPLETED — and from
+  // V61 the first FS is placed at the shaft floor on purpose, #370). Applying
   // the gate to FS/Nursery introduces a hard-fail mode: if valid anchors
   // exist only outside ±tolerance (e.g. the dig has gone deeper than
   // preferredDepth before the gate fires), the chamber would be silently

@@ -35,7 +35,8 @@ import { createScenario } from '../sim/scenario.js';
 import { hashWorldState } from './world-hash.js';
 import { hashFoodProjection, hungerProjection } from './food-projection.js';
 import type { WorldState } from '../sim/types.js';
-import { allocateEntityId } from '../sim/types.js';
+import { allocateEntityId, LATEST_SIM_VERSION } from '../sim/types.js';
+import { MIN_ACCEPTED_SIM_VERSION } from './save.js';
 import {
   BASE_FOOD_STORAGE_CAPACITY,
   ENEMY_COLONY_ID,
@@ -87,10 +88,26 @@ const PROJECTION = process.env.BYTE_GATE_PROJECTION === '1';
 // #370 — BYTE_GATE_SIM_VERSION=N pins every scenario world to simVersion N, so a PR
 // that adds a version gate can prove the pre-gate path byte-identical: capture on
 // the base commit (where N is LATEST), verify on the branch with the same N.
-const PIN_SIM_VERSION =
-  process.env.BYTE_GATE_SIM_VERSION === undefined
-    ? null
-    : Number(process.env.BYTE_GATE_SIM_VERSION);
+const PIN_SIM_VERSION = parsePinnedSimVersion(process.env.BYTE_GATE_SIM_VERSION);
+
+/** A malformed pin must fail loudly: NaN would turn every `simVersion >=` gate off on
+ *  BOTH sides and let the proof pass vacuously. */
+function parsePinnedSimVersion(raw: string | undefined): number | null {
+  if (raw === undefined) return null;
+  const n = Number(raw);
+  if (
+    raw.trim() === '' ||
+    !Number.isInteger(n) ||
+    n < MIN_ACCEPTED_SIM_VERSION ||
+    n > LATEST_SIM_VERSION
+  ) {
+    throw new Error(
+      `BYTE_GATE_SIM_VERSION=${raw} is not a simVersion in ` +
+        `[${MIN_ACCEPTED_SIM_VERSION}, ${LATEST_SIM_VERSION}]`,
+    );
+  }
+  return n;
+}
 const hashFor: (world: WorldState) => string = PROJECTION ? hashFoodProjection : hashWorldState;
 
 // #229 — fnv1a + hashWorldState moved to world-hash.ts (shared with the

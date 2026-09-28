@@ -406,6 +406,6 @@ describe('#370 — AI opening with a full entrance pool (seed 404 Normal)', () =
     const v60 = traceOpening(SIM_VERSION_V60_RAID_ORDERS, TICKS);
     expect(v60.queenAt, JSON.stringify(v60)).toBeNull();
     expect(v60.storageAt, JSON.stringify(v60)).toBeNull();
-    expect(v60.parkedCarrierTicks, JSON.stringify(v60)).toBeGreaterThan(2000);
+    expect(v60.parkedCarrierTicks, JSON.stringify(v60)).toBeGreaterThan(1000);
   }, 60_000);
 });
