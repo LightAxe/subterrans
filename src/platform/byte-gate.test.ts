@@ -16,6 +16,8 @@
 //   Verify the split reproduces it (on the split branch):
 //     BYTE_GATE_MODE=verify  BYTE_GATE_FILE=/abs/baseline.json \
 //       npx vitest run src/platform/byte-gate.test.ts
+//   A version-gated change: add BYTE_GATE_SIM_VERSION=<base LATEST> to the verify
+//   run (and optionally the capture) to pin every scenario to the pre-gate version.
 //
 // Proof obligation: same scenarios ⇒ byte-identical serialized WorldState (incl.
 // rngState — the RNG-pull-reorder detector) at every checkpoint and at the end.
@@ -82,6 +84,13 @@ const PC = PLAYER_COLONY_ID as ColonyId;
 const EC = ENEMY_COLONY_ID as ColonyId;
 const COVERAGE = process.env.BYTE_GATE_COVERAGE === '1';
 const PROJECTION = process.env.BYTE_GATE_PROJECTION === '1';
+// #370 — BYTE_GATE_SIM_VERSION=N pins every scenario world to simVersion N, so a PR
+// that adds a version gate can prove the pre-gate path byte-identical: capture on
+// the base commit (where N is LATEST), verify on the branch with the same N.
+const PIN_SIM_VERSION =
+  process.env.BYTE_GATE_SIM_VERSION === undefined
+    ? null
+    : Number(process.env.BYTE_GATE_SIM_VERSION);
 const hashFor: (world: WorldState) => string = PROJECTION ? hashFoodProjection : hashWorldState;
 
 // #229 — fnv1a + hashWorldState moved to world-hash.ts (shared with the
@@ -434,6 +443,7 @@ interface ScenarioResult {
 
 function runScenario(scn: Scenario): ScenarioResult {
   const world = createScenario(scn.seed, scn.difficulty);
+  if (PIN_SIM_VERSION !== null) world.simVersion = PIN_SIM_VERSION;
   scn.setup?.(world);
   const checkpoints: Array<[number, string]> = [];
   const cov = newCoverage();
