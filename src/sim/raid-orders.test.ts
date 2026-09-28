@@ -465,6 +465,100 @@ describe('Deny (V60)', () => {
     expect(pileAmountFp(w3, pileAtTile(w3, x, y))).toBe(FOOD_PICKUP_AMOUNT + RAID_CARRY_FP);
   });
 
+  describe('with room for part of the load: it drops only what will not fit', () => {
+    /** Player stores full but for `room` fp of pool headroom. */
+    function roomFor(r: RaidWorld, room: number): void {
+      fillPlayerStores(r);
+      setPoolFoodForTest(r.world, r.player, BASE_FOOD_STORAGE_CAPACITY - room);
+    }
+    function pileFpNear(w: WorldState, x: number, y: number): number {
+      let fp = 0;
+      for (let o = 0; o < pileCount(w); o++) {
+        const slot = pileSlotAt(w, o);
+        if (Math.abs(pileTileX(w, slot) - x) <= 1 && Math.abs(pileTileY(w, slot) - y) <= 1) {
+          fp += pileAmountFp(w, slot);
+        }
+      }
+      return fp;
+    }
+
+    it('room for half a load: half is dropped at the door, half carried down and stored', () => {
+      const r = raidWorld();
+      const w = r.world;
+      order(r, RaidType.Deny);
+      roomFor(r, RAID_CARRY_FP >> 1);
+      const pool0 = colonyPoolFood(w, r.player);
+      const id = addHauler(w, P, r.playerDoor.x - 1, r.playerDoor.y + 1, null, RAID_CARRY_FP);
+      updateRaiders(w);
+      expect(w.ants.foodCarrying[id]).toBe(RAID_CARRY_FP >> 1);
+      expect(w.ants.subTask[id]).toBe(FightingSubState.Hauling);
+      expect(r.player.raidTrips).toBe(0);
+      expect(pileFpNear(w, r.playerDoor.x, r.playerDoor.y)).toBe(RAID_CARRY_FP >> 1);
+      // It goes down and deposits the rest (the stores had room for it).
+      const keep = (): void => {
+        w.ants.lastMealTick[r.player.queenEntityId] = w.tick;
+        for (const l of r.player.larvae) w.ants.lastMealTick[l] = w.tick;
+        w.ants.lastMealTick[id] = w.tick;
+      };
+      expect(run(w, 400, () => w.ants.foodCarrying[id] === 0, keep)).toBeGreaterThan(0);
+      expect(r.player.raidTrips).toBe(1);
+      expect(colonyPoolFood(w, r.player)).toBe(pool0 + (RAID_CARRY_FP >> 1));
+      expect(pileFpNear(w, r.playerDoor.x, r.playerDoor.y)).toBe(RAID_CARRY_FP >> 1);
+    });
+
+    it('the excess is rounded UP to whole pickups, so nothing is lost', () => {
+      // Room for 600 fp of a 1024 fp load: 424 will not fit → one whole pickup
+      // (512) is dropped, and the 512 kept fits the 600 of room.
+      const r = raidWorld();
+      const w = r.world;
+      order(r, RaidType.Deny);
+      roomFor(r, 600);
+      const id = addHauler(w, P, r.playerDoor.x - 1, r.playerDoor.y + 1, null, RAID_CARRY_FP);
+      updateRaiders(w);
+      expect(pileFpNear(w, r.playerDoor.x, r.playerDoor.y)).toBe(FOOD_PICKUP_AMOUNT);
+      expect(w.ants.foodCarrying[id]).toBe(RAID_CARRY_FP - FOOD_PICKUP_AMOUNT);
+      expect(w.ants.subTask[id]).toBe(FightingSubState.Hauling);
+    });
+
+    it('at its shaft top with part of the room: drops the excess by the entrance, stores the rest', () => {
+      // The pool is full; the larder has 600 fp free. Of a 1024 fp load the
+      // excess (424) rounds up to one pickup: 512 is left outside, the other 512
+      // carried on to the larder — not the whole load dumped, as with no room.
+      const r = raidWorld();
+      const w = r.world;
+      order(r, RaidType.Deny);
+      fillPlayerStores(r);
+      setChamberStockForTest(w, r.player, r.playerLarder, FOOD_CHAMBER_CAPACITY - 600);
+      const id = addHauler(w, P, r.playerDoor.x, 0, P, RAID_CARRY_FP);
+      tickRaidActions(w);
+      expect(pileFpNear(w, r.playerDoor.x, r.playerDoor.y)).toBe(FOOD_PICKUP_AMOUNT);
+      expect(w.ants.foodCarrying[id]).toBe(RAID_CARRY_FP - FOOD_PICKUP_AMOUNT);
+      expect(w.ants.subTask[id]).toBe(FightingSubState.Hauling);
+      expect(r.player.raidTrips).toBe(0);
+      const larder0 = chamberStock(w, r.playerLarder);
+      const keep = (): void => {
+        w.ants.lastMealTick[r.player.queenEntityId] = w.tick;
+        for (const l of r.player.larvae) w.ants.lastMealTick[l] = w.tick;
+        w.ants.lastMealTick[id] = w.tick;
+      };
+      expect(run(w, 400, () => w.ants.foodCarrying[id] === 0, keep)).toBeGreaterThan(0);
+      expect(chamberStock(w, r.playerLarder)).toBe(larder0 + RAID_CARRY_FP - FOOD_PICKUP_AMOUNT);
+      expect(r.player.raidTrips).toBe(1);
+    });
+
+    it('Loot with the same half room keeps the whole load (no pile)', () => {
+      const r = raidWorld();
+      const w = r.world;
+      order(r, RaidType.Loot);
+      roomFor(r, RAID_CARRY_FP >> 1);
+      const piles = pileCount(w);
+      const id = addHauler(w, P, r.playerDoor.x - 1, r.playerDoor.y + 1, null, RAID_CARRY_FP);
+      updateRaiders(w);
+      expect(w.ants.foodCarrying[id]).toBe(RAID_CARRY_FP);
+      expect(pileCount(w)).toBe(piles);
+    });
+  });
+
   it('a load under one pickup is let go without a pile or a trip', () => {
     const r = raidWorld();
     const w = r.world;

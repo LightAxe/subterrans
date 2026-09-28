@@ -1306,7 +1306,8 @@ export const SIM_VERSION_V59_INVADER_RETARGET = 59 as const;
  * Loot), and its fighters rallied on an enemy entrance act by it:
  *   - Loot: the V53 raid, unchanged.
  *   - Deny: loot regardless of room at home; a hauler reaching its own entrance
- *     with nowhere to store the load drops it there as a surface food pile
+ *     drops what its stores cannot take (rounded up to whole pickups) there as a
+ *     surface food pile and carries the rest down to store it
  *     (`denyHaulerDropsLoad`, ant-raid.ts).
  *   - Spoil: loot's eligibility, but a spoiler standing on an enemy FoodStorage
  *     chamber destroys RAID_CARRY_FP there every SPOIL_TICKS_PER_LOAD ticks and

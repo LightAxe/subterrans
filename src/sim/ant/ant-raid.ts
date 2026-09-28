@@ -46,6 +46,7 @@
 import type { ColonyRecord } from '../colony/colony-store.js';
 import { computeStockFlowField } from '../chamber-flow.js';
 import {
+  FOOD_PICKUP_AMOUNT,
   RAID_CARRY_FP,
   RAID_ENGAGE_RADIUS_TILES,
   RAID_LOOT_START_STOCK_FP,
@@ -61,6 +62,7 @@ import {
   depositCarriedFood,
   depositIntoPool,
   isFoodChamberDepositable,
+  PICKUP_SHIFT,
   pileDropRoomFp,
   takeFromStock,
   topUpOrSpawnCorpsePile,
@@ -599,13 +601,14 @@ function raidQueenTarget(
 }
 
 /**
- * #352 (V60) — Deny: surface hauler `id` of `colony` drops its load beside its
- * own entrance when the colony cannot store it. It does when its colony's raid
- * type is Deny, it stands within one tile (Chebyshev) of one of its colony's open
+ * #352 (V60) — Deny: surface hauler `id` of `colony` drops beside its own
+ * entrance what the colony cannot store. It does when its colony's raid type is
+ * Deny, it stands within one tile (Chebyshev) of one of its colony's open
  * entrances (it walks home by the surface entrance flow field, so it crosses that
  * ring before it can step onto the shaft and go down), and the room its stores
- * can take (`colonyDepositableRoom`) is less than its load. Where and how it drops:
- * `placeDenyLoad`. Returns true if it dropped.
+ * can take (`colonyDepositableRoom`) is less than its load: the whole load with no
+ * room, else only the excess, carrying the rest down to deposit
+ * (denyDropUnstorable). Returns true when it dropped the whole load.
  */
 function denyHaulerDropsLoad(world: WorldState, colony: ColonyRecord, id: number): boolean {
   if (colonyRaidType(world, colony) !== RaidType.Deny) return false;
@@ -625,8 +628,45 @@ function denyHaulerDropsLoad(world: WorldState, colony: ColonyRecord, id: number
     atDoor = ex >= -1 && ex <= 1 && ey >= -1 && ey <= 1;
   }
   if (!atDoor) return false;
-  if (colonyDepositableRoom(world, colony) >= load) return false;
-  return placeDenyLoad(world, colony, id, tx, ty);
+  return denyDropUnstorable(world, colony, id, tx, ty);
+}
+
+/** `fp` rounded UP to whole pickups (piles hold whole pickups). */
+function ceilPickupsFp(fp: number): number {
+  return ((fp + FOOD_PICKUP_AMOUNT - 1) >> PICKUP_SHIFT) << PICKUP_SHIFT;
+}
+
+/**
+ * #352 (V60) — Deny: hauler `id` of `colony`, at surface tile (tx, ty) or at its
+ * shaft top below it, drops the part of its load its stores cannot take, and keeps
+ * the rest to deposit. With room (`colonyDepositableRoom`) for the whole load it
+ * drops nothing. Otherwise the part it drops is the excess (load − room) rounded UP
+ * to whole pickups — piles hold whole pickups, so rounding up (rather than down)
+ * loses nothing: the hauler keeps what the stores can take (up to one pickup less
+ * than the room). When that is the whole load, the whole load is dropped
+ * (placeDenyLoad, which lets a load under one pickup go — the whole-pickup rule).
+ * A partial drop leaves it Hauling with the rest, no trip counted yet (the deposit
+ * counts it). Returns true when the hauler is left empty-handed.
+ *
+ * No bouncing: a load only ever shrinks, a drop happens only while the room is
+ * short of the load, and a hauler in its own nest never climbs out — if the room
+ * shrinks again before it deposits, it drops the new excess at its shaft top.
+ */
+function denyDropUnstorable(
+  world: WorldState,
+  colony: ColonyRecord,
+  id: number,
+  tx: number,
+  ty: number,
+): boolean {
+  const ants = world.ants;
+  const load = ants.foodCarrying[id]!;
+  const room = colonyDepositableRoom(world, colony);
+  if (room >= load) return false;
+  const drop = ceilPickupsFp(load - room);
+  if (drop >= load) return placeDenyLoad(world, colony, id, tx, ty);
+  if (placePile(world, tx, ty, drop)) ants.foodCarrying[id] = load - drop;
+  return false;
 }
 
 /**
@@ -658,19 +698,30 @@ function placeDenyLoad(
     ants.subTask[id] = FightingSubState.MovingToRally;
     return true;
   }
+  // The load is consumed only once the pile has it (a failed insertion — e.g.
+  // no entity id left for a new pile — keeps it on the hauler).
+  if (!placePile(world, tx, ty, fp)) return false;
+  ants.foodCarrying[id] = 0;
+  ants.subTask[id] = FightingSubState.MovingToRally;
+  colony.raidTrips += 1;
+  return true;
+}
+
+/**
+ * #352 (V60) — put `fp` (whole pickups) as a surface food pile at (tx, ty), or on
+ * the first of its N/E/S/W neighbours, skipping any tile that is not walkable, is
+ * an entrance (of any colony: no pile may lie on a shaft) or whose pile (or new
+ * pile) cannot keep all of it (`pileDropRoomFp`). Returns whether it was placed;
+ * nothing changes when it was not.
+ */
+function placePile(world: WorldState, tx: number, ty: number, fp: number): boolean {
   for (let i = -1; i < DIR_DX.length; i++) {
     const nx = i < 0 ? tx : tx + DIR_DX[i]!;
     const ny = i < 0 ? ty : ty + DIR_DY[i]!;
     if (!canEnterSurfaceTile(world, nx, ny)) continue;
     if (isEntranceTileOfAnyColony(world, nx, ny)) continue;
     if (pileDropRoomFp(world, nx, ny) < fp) continue;
-    // The load is consumed only once the pile has it (a failed insertion — e.g.
-    // no entity id left for a new pile — keeps it on the hauler).
-    if (!topUpOrSpawnCorpsePile(world, nx, ny, fp)) continue;
-    ants.foodCarrying[id] = 0;
-    ants.subTask[id] = FightingSubState.MovingToRally;
-    colony.raidTrips += 1;
-    return true;
+    if (topUpOrSpawnCorpsePile(world, nx, ny, fp)) return true;
   }
   return false;
 }
@@ -791,21 +842,18 @@ export function tickRaidActions(world: WorldState): void {
     if (left === 0) {
       ants.subTask[id] = FightingSubState.MovingToRally;
       colony.raidTrips += 1;
-    } else if (
-      ty === 0 &&
-      ents != null &&
-      colonyRaidType(world, colony) === RaidType.Deny &&
-      colonyDepositableRoom(world, colony) < left
-    ) {
+    } else if (ty === 0 && ents != null && colonyRaidType(world, colony) === RaidType.Deny) {
       // #352 (V60): a Deny hauler that went down with room at the door and found
-      // none (another hauler or a forager filled it first, or it came down under
-      // Loot) does not wait for room: at the top of its shaft it leaves the rest
-      // outside, beside the open entrance above it, and goes back. With room in a
-      // chamber (only the pool is full) it walks on to it, as any hauler does.
+      // less (another hauler or a forager filled it first, or it came down under
+      // Loot) does not wait for room: at the top of its shaft it leaves what its
+      // stores cannot take outside, beside the open entrance above it
+      // (denyDropUnstorable) — all of it, and goes back, or the excess, and walks
+      // on to a chamber with the rest. With room enough in a chamber (only the pool
+      // is full) it drops nothing and walks on, as any hauler does.
       for (let e = 0; e < ents.length; e++) {
         const ent = ents[e]!;
         if (!ent.isOpen || ent.surfaceTileX !== tx) continue;
-        placeDenyLoad(world, colony, id, ent.surfaceTileX, ent.surfaceTileY);
+        denyDropUnstorable(world, colony, id, ent.surfaceTileX, ent.surfaceTileY);
         break;
       }
     }
