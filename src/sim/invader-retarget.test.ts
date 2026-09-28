@@ -36,6 +36,8 @@ import { Zone, ugSet, UndergroundTileState } from './terrain.js';
 import { FP_ONE, FP_SHIFT } from './fixed.js';
 import { getScratch } from './scratch.js';
 import { copyWorldState } from './types.js';
+// eslint-disable-next-line no-restricted-imports -- the rollover/copy proofs compare the full serialized world (telemetry.test.ts:8 pattern)
+import { serializeWorldState } from '../platform/save.js';
 import { setPoolFoodForTest } from './food/food-test-utils.js';
 import {
   ENEMY_COLONY_ID,
@@ -595,20 +597,9 @@ describe('#364 — results never depend on the unsaved search-stamp counters', (
     for (let x = 91; x <= 111; x += 4) addEnemyWorker(r.world, x, 6);
     return r.world;
   }
-  /** Everything the ants did, for comparison. */
+  /** The whole serialized world (the save format), for comparison. */
   function state(w: WorldState): string {
-    const a = w.ants;
-    const n = w.nextEntityId;
-    return JSON.stringify([
-      w.tick,
-      w.rngState,
-      Array.from(a.alive.subarray(0, n)),
-      Array.from(a.posX.subarray(0, n)),
-      Array.from(a.posY.subarray(0, n)),
-      Array.from(a.hp.subarray(0, n)),
-      Array.from(a.subTask.subarray(0, n)),
-      Array.from(a.foodCarrying.subarray(0, n)),
-    ]);
+    return JSON.stringify(serializeWorldState(w));
   }
   function run(w: WorldState, ticks: number): void {
     for (let t = 0; t < ticks; t++) tick(w, []);
