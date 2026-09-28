@@ -204,6 +204,12 @@ import {
   resetRampageCaptionState,
   routeEventCaption,
 } from './recurring-captions.js';
+import {
+  createGatheringWarningState,
+  markGatheringWarningShown,
+  nextGatheringWarning,
+  resetGatheringWarningState,
+} from './enemy-gathering.js';
 import { checkAndTrigger, resetCaptions, type CaptionKey } from './onboarding-captions.js';
 // Stage 3b controls rework (issue #18, #3) — first-use navigation hints.
 import {
@@ -782,6 +788,8 @@ export class GameScene extends Phaser.Scene {
   private readonly raidCaptions = createRaidCaptionState();
   // #350 — the spider-rampage warning owed until the caption queue is idle.
   private readonly rampageCaption = createRampageCaptionState();
+  // #372 — the enemy-army gathering warning (once per gathering; re-armed in finishBoot).
+  private readonly gatheringWarning = createGatheringWarningState();
   private renderFrame = 0; // frame counter for glow fade maps
   private readonly contestedGlowFrames: Map<number, number> = new Map(); // surface glow fade
   private readonly undergroundGlowFrames: Map<number, number> = new Map(); // underground glow fade
@@ -1672,8 +1680,20 @@ export class GameScene extends Phaser.Scene {
     // queen damage, invasion) get dropped, so each waits, owed, and is retried each
     // frame (recurring-captions.ts).
     //
+    // #372 — the enemy-army gathering warning, once per gathering near one of
+    // the player's entrances (enemy-gathering.ts). Offered first: an army about
+    // to invade outranks the spider and raid news.
+    const gatherText = nextGatheringWarning(this.gatheringWarning, this.world, PLAYER_COLONY_ID);
+    if (
+      gatherText !== null &&
+      uiScene &&
+      offerRecurringCaption(uiScene, gatherText, this.layout.w / 2, 60)
+    ) {
+      markGatheringWarningShown(this.gatheringWarning);
+    }
+
     // #350 — the spider-rampage warning, owed from its spider_rampage_start until
-    // it shows or goes stale. Offered first: it outranks raid news.
+    // it shows or goes stale. Offered after the gathering warning: it outranks raid news.
     if (uiScene) {
       offerOwedRampageCaption(this.rampageCaption, this.world, uiScene, this.layout.w / 2, 60);
     }
@@ -1907,6 +1927,8 @@ export class GameScene extends Phaser.Scene {
     resetRaidCaptionState(this.raidCaptions, this.world, PLAYER_COLONY_ID);
     // #350 — a prior round's owed rampage warning must not carry over.
     resetRampageCaptionState(this.rampageCaption);
+    // #372 — a new round or loaded save starts armed with nothing owed.
+    resetGatheringWarningState(this.gatheringWarning);
     // Stage 2 §B: a fresh/loaded world must rebake every allocated terrain RT (the prior
     // session's RTs are stale). Optional chaining — finishBoot can run before create() has
     // instantiated the cache in some boot orderings; the first frame then lazily bakes.

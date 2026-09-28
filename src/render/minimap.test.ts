@@ -16,11 +16,27 @@ import {
   MINIMAP_SCALE_Y,
   drawMinimap,
   bakeMinimapDapple,
+  drawMinimapBorder,
+  drawMinimapEnemyFighters,
+  drawMinimapGatheringRing,
+  MINIMAP_BORDER_COLOR,
+  MINIMAP_BORDER_OUTLINE_COLOR,
+  MINIMAP_ENEMY_DOT_PX,
+  COLOR_MINIMAP_ENEMY_FIGHTER,
+  COLOR_MINIMAP_ENEMY_FIGHTER_BACKING,
+  COLOR_MINIMAP_GATHERING_RING,
+  MINIMAP_RING_MIN_R,
+  MINIMAP_RING_MAX_R,
+  MINIMAP_RING_PERIOD_MS,
 } from './minimap.js';
+import { GATHER_MIN_FIGHTERS } from './enemy-gathering.js';
+import { addFighter, raidWorld } from '../sim/raid-test-utils.js';
+import { AntTask } from '../sim/enums.js';
 import type { GfxLike } from './draw-surface.js';
 import { createWorldState } from '../sim/types.js';
 import type { WorldState } from '../sim/types.js';
 import {
+  ENEMY_COLONY_ID,
   PLAYER_COLONY_ID,
   PLAYER_START_X,
   PLAYER_START_Y,
@@ -348,5 +364,249 @@ describe('bakeMinimapDapple', () => {
       expect(y).toBeGreaterThanOrEqual(0);
       expect(y).toBeLessThan(mmH);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #372 — the frame, enemy fighter dots and the gathering ring
+// ---------------------------------------------------------------------------
+
+/** fillRects grouped by the fillStyle colour in force when each was drawn. */
+function rectsByColor(gfx: MockGfx): Map<number, number[][]> {
+  const out = new Map<number, number[][]>();
+  let color = -1;
+  for (const c of gfx.calls) {
+    if (c.method === 'fillStyle') color = c.args[0] as number;
+    if (c.method === 'fillRect') {
+      const list = out.get(color) ?? [];
+      list.push(c.args as number[]);
+      out.set(color, list);
+    }
+  }
+  return out;
+}
+
+/** strokeCircle calls with the lineStyle [width, color, alpha] in force. */
+function circles(gfx: MockGfx): { style: number[]; args: number[] }[] {
+  const out: { style: number[]; args: number[] }[] = [];
+  let style: number[] = [];
+  for (const c of gfx.calls) {
+    if (c.method === 'lineStyle') style = c.args as number[];
+    if (c.method === 'strokeCircle') out.push({ style, args: c.args as number[] });
+  }
+  return out;
+}
+
+describe('#372 drawMinimapBorder — a visible frame outside the map', () => {
+  it('a light 2px band hugging the rect inside a 1px dark line, covering no map pixel', () => {
+    const gfx = new MockGfx();
+    drawMinimapBorder(gfx, hud);
+    const mm = hud.MINIMAP;
+    const by = rectsByColor(gfx);
+    const light = by.get(MINIMAP_BORDER_COLOR)!;
+    const dark = by.get(MINIMAP_BORDER_OUTLINE_COLOR)!;
+    expect(light).toEqual([
+      [mm.x - 2, mm.y - 2, mm.w + 4, 2],
+      [mm.x - 2, mm.y + mm.h, mm.w + 4, 2],
+      [mm.x - 2, mm.y, 2, mm.h],
+      [mm.x + mm.w, mm.y, 2, mm.h],
+    ]);
+    expect(dark).toEqual([
+      [mm.x - 3, mm.y - 3, mm.w + 6, 1],
+      [mm.x - 3, mm.y + mm.h + 2, mm.w + 6, 1],
+      [mm.x - 3, mm.y - 2, 1, mm.h + 4],
+      [mm.x + mm.w + 2, mm.y - 2, 1, mm.h + 4],
+    ]);
+    // Nothing overlaps the map rect.
+    for (const [x, y, w, h] of [...light, ...dark]) {
+      const inside = x! < mm.x + mm.w && x! + w! > mm.x && y! < mm.y + mm.h && y! + h! > mm.y;
+      expect(inside).toBe(false);
+    }
+  });
+
+  it('drawMinimap draws the frame', () => {
+    const gfx = new MockGfx();
+    const world = makeMinimalWorld({ colonies: stubColonies });
+    drawMinimap(gfx, world, createViewState(PLAYER_START_X, PLAYER_START_Y), hud);
+    expect(rectsByColor(gfx).get(MINIMAP_BORDER_COLOR)).toHaveLength(4);
+  });
+});
+
+describe('#372 drawMinimapEnemyFighters — every enemy surface fighter, always', () => {
+  const mm = hud.MINIMAP;
+  const d = MINIMAP_ENEMY_DOT_PX;
+
+  it('one dark backing + one red dot per enemy surface fighter, centred on it', () => {
+    const { world: w } = raidWorld();
+    addFighter(w, ENEMY_COLONY_ID, 40, 64, null);
+    addFighter(w, ENEMY_COLONY_ID, 80, 20, null);
+    const gfx = new MockGfx();
+    drawMinimapEnemyFighters(gfx, w, hud, PLAYER_COLONY_ID);
+    const by = rectsByColor(gfx);
+    const red = by.get(COLOR_MINIMAP_ENEMY_FIGHTER)!;
+    const back = by.get(COLOR_MINIMAP_ENEMY_FIGHTER_BACKING)!;
+    expect(red).toHaveLength(2);
+    expect(back).toHaveLength(2);
+    // Tile centre 40.5 → mm.x + 50.625 → a 3px dot from round(49.125) = 49.
+    expect(red[0]).toEqual([mm.x + 49, mm.y + Math.round(64.5 * 1.25 - 1.5), d, d]);
+    expect(back[0]).toEqual([mm.x + 48, mm.y + Math.round(64.5 * 1.25 - 2.5), d + 2, d + 2]);
+    // Backings all come before the dots (a crowd reads as one outlined blob).
+    const firstRed = gfx.calls.findIndex(
+      (c) => c.method === 'fillStyle' && c.args[0] === COLOR_MINIMAP_ENEMY_FIGHTER,
+    );
+    let lastBackRect = -1;
+    gfx.calls.forEach((c, i) => {
+      if (c.method === 'fillRect' && c.args[2] === d + 2) lastBackRect = i;
+    });
+    expect(lastBackRect).toBeLessThan(firstRed);
+  });
+
+  it('skips own, dead, underground and non-fighting ants', () => {
+    const { world: w } = raidWorld();
+    addFighter(w, PLAYER_COLONY_ID, 40, 64, null);
+    addFighter(w, ENEMY_COLONY_ID, 40, 5, PLAYER_COLONY_ID);
+    const dead = addFighter(w, ENEMY_COLONY_ID, 41, 64, null);
+
+    w.ants.alive[dead] = 0;
+    const worker = addFighter(w, ENEMY_COLONY_ID, 42, 64, null);
+
+    w.ants.task[worker] = AntTask.Foraging;
+    const gfx = new MockGfx();
+    drawMinimapEnemyFighters(gfx, w, hud, PLAYER_COLONY_ID);
+    expect(rectsByColor(gfx).get(COLOR_MINIMAP_ENEMY_FIGHTER) ?? []).toHaveLength(0);
+  });
+
+  it('CLNY-08: "enemy" is every colony but the viewer’s', () => {
+    const { world: w } = raidWorld();
+    addFighter(w, PLAYER_COLONY_ID, 40, 64, null);
+    const gfx = new MockGfx();
+    drawMinimapEnemyFighters(gfx, w, hud, ENEMY_COLONY_ID);
+    expect(rectsByColor(gfx).get(COLOR_MINIMAP_ENEMY_FIGHTER)).toHaveLength(1);
+  });
+
+  it('dots at the map edge stay inside the map rect', () => {
+    const { world: w } = raidWorld();
+    const a = addFighter(w, ENEMY_COLONY_ID, 0, 0, null);
+    const b = addFighter(w, ENEMY_COLONY_ID, 127, 127, null);
+
+    w.ants.posX[a] = 0;
+
+    w.ants.posY[a] = 0;
+
+    w.ants.posX[b] = 128 * 256 - 1;
+    const gfx = new MockGfx();
+    drawMinimapEnemyFighters(gfx, w, hud, PLAYER_COLONY_ID);
+    for (const [x, y, rw, rh] of [
+      ...rectsByColor(gfx).get(COLOR_MINIMAP_ENEMY_FIGHTER)!,
+      ...rectsByColor(gfx).get(COLOR_MINIMAP_ENEMY_FIGHTER_BACKING)!,
+    ]) {
+      expect(x).toBeGreaterThanOrEqual(mm.x);
+      expect(y).toBeGreaterThanOrEqual(mm.y);
+      expect(x! + rw!).toBeLessThanOrEqual(mm.x + mm.w);
+      expect(y! + rh!).toBeLessThanOrEqual(mm.y + mm.h);
+    }
+  });
+
+  it('drawMinimap draws the dots after the viewport outline (never hidden by it)', () => {
+    const { world: w } = raidWorld();
+    addFighter(w, ENEMY_COLONY_ID, 40, 64, null);
+    const gfx = new MockGfx();
+    drawMinimap(gfx, w, createViewState(PLAYER_START_X, PLAYER_START_Y), hud);
+    const viewport = gfx.calls.findIndex((c) => c.method === 'fillStyle' && c.args[0] === 0xffffff);
+    const red = gfx.calls.findIndex(
+      (c) => c.method === 'fillStyle' && c.args[0] === COLOR_MINIMAP_ENEMY_FIGHTER,
+    );
+    expect(viewport).toBeGreaterThanOrEqual(0);
+    expect(red).toBeGreaterThan(viewport);
+  });
+});
+
+describe('#372 drawMinimapGatheringRing — a pulsing ring round a gathering army', () => {
+  const mm = hud.MINIMAP;
+
+  function gathered(n: number, x = 36, y = 62): WorldState {
+    const { world: w } = raidWorld();
+    for (let i = 0; i < n; i++)
+      addFighter(w, ENEMY_COLONY_ID, x + (i % 4), y + ((i / 4) | 0), null);
+    return w;
+  }
+
+  it('no ring below GATHER_MIN_FIGHTERS', () => {
+    const gfx = new MockGfx();
+    drawMinimapGatheringRing(gfx, gathered(GATHER_MIN_FIGHTERS - 1), hud, PLAYER_COLONY_ID, 0);
+    expect(circles(gfx)).toHaveLength(0);
+  });
+
+  it('a red ring over a dark halo, centred on the army, pulsing in radius and alpha', () => {
+    const w = gathered(GATHER_MIN_FIGHTERS);
+    // Army box: tile centres 36.5..39.5 × 62.5..63.5.
+    const cx = mm.x + ((36.5 + 39.5) / 2) * 1.25;
+    const cy = mm.y + ((62.5 + 63.5) / 2) * 1.25;
+    const period = MINIMAP_RING_PERIOD_MS;
+    const low = new MockGfx();
+    drawMinimapGatheringRing(low, w, hud, PLAYER_COLONY_ID, (period * 3) / 4); // sin = -1
+    const high = new MockGfx();
+    drawMinimapGatheringRing(high, w, hud, PLAYER_COLONY_ID, period / 4); // sin = +1
+    const [haloLo, ringLo] = circles(low);
+    const [, ringHi] = circles(high);
+    expect(haloLo!.style).toEqual([4, 0x000000, 0.55]);
+    expect(ringLo!.style[0]).toBe(2);
+    expect(ringLo!.style[1]).toBe(COLOR_MINIMAP_GATHERING_RING);
+    expect(ringLo!.style[2]).toBeCloseTo(0.55, 5);
+    expect(ringHi!.style[2]).toBeCloseTo(1, 5);
+    expect(ringLo!.args[0]).toBeCloseTo(cx, 5);
+    expect(ringLo!.args[1]).toBeCloseTo(cy, 5);
+    // A small army gets the minimum radius, +2 px at the pulse peak.
+    expect(ringLo!.args[2]).toBeCloseTo(MINIMAP_RING_MIN_R, 5);
+    expect(ringHi!.args[2]).toBeCloseTo(MINIMAP_RING_MIN_R + 2, 5);
+    expect(haloLo!.args).toEqual(ringLo!.args);
+  });
+
+  it('the radius grows with a spread-out army, up to MINIMAP_RING_MAX_R', () => {
+    const { world: w } = raidWorld();
+    // Spread over 20 tiles east-west (all within 24 of the x-24 door).
+    for (let i = 0; i < GATHER_MIN_FIGHTERS; i++)
+      addFighter(w, ENEMY_COLONY_ID, 26 + 4 * i, 70, null);
+    const gfx = new MockGfx();
+    drawMinimapGatheringRing(gfx, w, hud, PLAYER_COLONY_ID, (MINIMAP_RING_PERIOD_MS * 3) / 4);
+    const r = circles(gfx)[1]!.args[2]!;
+    expect(r).toBeCloseTo((20 * 1.25) / 2 + 4, 5); // half the box diagonal + 4
+    expect(r).toBeGreaterThan(MINIMAP_RING_MIN_R);
+    const { world: far } = raidWorld();
+    for (let i = 0; i < GATHER_MIN_FIGHTERS; i++) {
+      const [x, y] = i % 2 === 0 ? [10 + i, 54] : [34 + i, 76]; // 14..18 tiles off the door
+      addFighter(far, ENEMY_COLONY_ID, x, y, null);
+    }
+    const g2 = new MockGfx();
+    drawMinimapGatheringRing(g2, far, hud, PLAYER_COLONY_ID, (MINIMAP_RING_PERIOD_MS * 3) / 4);
+    expect(circles(g2)[1]!.args[2]).toBeCloseTo(MINIMAP_RING_MAX_R, 5);
+  });
+
+  it('near the map edge the ring is pulled inside the rect', () => {
+    const { world: w, player } = raidWorld();
+    player.entrances.push({ entranceId: 9000, surfaceTileX: 2, surfaceTileY: 2, isOpen: true });
+    for (let i = 0; i < GATHER_MIN_FIGHTERS; i++)
+      addFighter(w, ENEMY_COLONY_ID, i % 3, (i / 3) | 0, null);
+    const gfx = new MockGfx();
+    drawMinimapGatheringRing(gfx, w, hud, PLAYER_COLONY_ID, MINIMAP_RING_PERIOD_MS / 4);
+    const [cx, cy, r] = circles(gfx)[0]!.args as [number, number, number];
+    const reach = r + 2;
+    expect(cx - reach).toBeGreaterThanOrEqual(mm.x - 1e-9);
+    expect(cy - reach).toBeGreaterThanOrEqual(mm.y - 1e-9);
+  });
+
+  it('drawMinimap rings the army, on the frame time it is given', () => {
+    const w = gathered(GATHER_MIN_FIGHTERS);
+    const vs = createViewState(PLAYER_START_X, PLAYER_START_Y);
+    const a = new MockGfx();
+    drawMinimap(a, w, vs, hud, PLAYER_COLONY_ID, MINIMAP_RING_PERIOD_MS / 4);
+    const b = new MockGfx();
+    drawMinimap(b, w, vs, hud, PLAYER_COLONY_ID, (MINIMAP_RING_PERIOD_MS * 3) / 4);
+    expect(circles(a)).toHaveLength(2);
+    expect(circles(a)[1]!.args[2]).not.toBeCloseTo(circles(b)[1]!.args[2]!, 3);
+    // Viewed from the enemy side, there is no army near its door.
+    const c = new MockGfx();
+    drawMinimap(c, w, vs, hud, ENEMY_COLONY_ID, 0);
+    expect(circles(c)).toHaveLength(0);
   });
 });

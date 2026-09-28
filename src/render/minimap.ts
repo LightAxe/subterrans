@@ -4,7 +4,9 @@
 // The minimap always shows the surface view regardless of activeView per PRD §7a.
 //
 // Exports:
-//   drawMinimap(gfx, world, viewState, hud) — called per frame from UIScene.update()
+//   drawMinimap(gfx, world, viewState, hud, viewerColonyId?, frameTimeMs?) — called
+//     per frame from UIScene.update(); #372 adds the frame border, the enemy
+//     fighter dots and the pulsing ring round a gathering enemy army
 //   minimapClickToTile(px, py, hud) — converts screen pixel to tile coord, returns null if outside
 //   applyMinimapClick(viewState, px, py, hud) — pan surface camera + X-link underground camera
 //   MINIMAP_SCALE_X, MINIMAP_SCALE_Y — default-layout pixel-to-tile scale factors
@@ -24,7 +26,7 @@ import {
   PLAYER_COLONY_ID,
   ENEMY_COLONY_ID,
 } from '../sim/constants.js';
-import { FP_SHIFT } from '../sim/fixed.js';
+import { FP_ONE, FP_SHIFT } from '../sim/fixed.js';
 import { isAlive } from '../sim/ant/ant-store.js';
 import { sgGet } from '../sim/terrain.js';
 import { spatialHash } from './terrain-noise.js';
@@ -39,6 +41,10 @@ import {
 } from './camera.js';
 import { clampCameraView, minimapNavTargets, visibleWorldRect } from './camera-adapter.js';
 import type { GfxLike } from './draw-surface.js';
+import { AntTask } from '../sim/enums.js';
+import { Zone } from '../sim/terrain.js';
+import type { ColonyId } from '../sim/colony/colony-store.js';
+import { isEnemyGathering, measureEnemyGathering } from './enemy-gathering.js';
 
 // Exported for tests + external consumers. Derived from the default 800×592
 // layout's minimap rect so they stay byte-identical to the pre-#238 values
@@ -54,6 +60,30 @@ export const MINIMAP_SCALE_Y = DEFAULT_MINIMAP.h / SURFACE_GRID_HEIGHT; // 1.25
 // than the live 4×4 marker — subtler, conveys 'remains' rather than
 // active colony.
 const COLOR_DEAD_COLONY_MEMORIAL = 0x444444 as const;
+
+// #372 — the minimap frame: a light 2px band round the map inside a 1px dark
+// line, both OUTSIDE the map rect (so no map pixel is covered). The playtest
+// found the unframed minimap melting into the surface ground behind it.
+export const MINIMAP_BORDER_COLOR = 0xe8dcb4;
+export const MINIMAP_BORDER_OUTLINE_COLOR = 0x000000;
+/** Width (px) of the light band; the dark line sits one px further out. */
+export const MINIMAP_BORDER_PX = 2;
+
+// #372 — enemy fighters on the minimap: a bright red square on a dark backing
+// one px wider each side, so a lone fighter reads against both the pale ground
+// and the white viewport outline, and a crowd fuses into one outlined red blob.
+export const COLOR_MINIMAP_ENEMY_FIGHTER = 0xff2a1f;
+export const COLOR_MINIMAP_ENEMY_FIGHTER_BACKING = 0x1a0000;
+/** Side (px) of the red square; the backing is 2px larger. */
+export const MINIMAP_ENEMY_DOT_PX = 3;
+
+// #372 — the ring round a gathering army (isEnemyGathering): red, pulsing once
+// a second in radius and alpha, over a dark halo.
+export const COLOR_MINIMAP_GATHERING_RING = 0xff2a1f;
+export const MINIMAP_RING_PERIOD_MS = 1000;
+/** Ring radius bounds (px) around the army's bounding box. */
+export const MINIMAP_RING_MIN_R = 9;
+export const MINIMAP_RING_MAX_R = 24;
 
 /** Clamp a scalar to [lo, hi] (render-side float math, ARCHITECTURE.md Principle 6). */
 function clamp(v: number, lo: number, hi: number): number {
@@ -99,6 +129,8 @@ export function drawMinimap(
   world: WorldState,
   viewState: ViewState,
   hud: HudLayout,
+  viewerColonyId: ColonyId = PLAYER_COLONY_ID,
+  frameTimeMs = 0,
 ): void {
   // Scale + anchor derive from the passed layout's minimap rect so the minimap
   // reflows on resize; at the default 800×592 layout these equal the exported
@@ -209,6 +241,121 @@ export function drawMinimap(
   gfx.fillRect(rx, ry + rh - 1, rw, 1); // bottom edge
   gfx.fillRect(rx, ry, 1, rh); // left edge
   gfx.fillRect(rx + rw - 1, ry, 1, rh); // right edge
+
+  // #372 — enemy fighters and the ring round a gathering army, on top of the
+  // viewport outline so neither hides behind it.
+  drawMinimapEnemyFighters(gfx, world, hud, viewerColonyId);
+  drawMinimapGatheringRing(gfx, world, hud, viewerColonyId, frameTimeMs);
+
+  // #372 — the frame, outside the map rect (nothing above draws there).
+  drawMinimapBorder(gfx, hud);
+}
+
+/** #372 — frame the minimap: a light band and a dark outer line, outside the rect. */
+export function drawMinimapBorder(gfx: GfxLike, hud: HudLayout): void {
+  const mm = hud.MINIMAP;
+  const b = MINIMAP_BORDER_PX;
+  frameRect(
+    gfx,
+    mm.x - b - 1,
+    mm.y - b - 1,
+    mm.w + 2 * b + 2,
+    mm.h + 2 * b + 2,
+    1,
+    MINIMAP_BORDER_OUTLINE_COLOR,
+  );
+  frameRect(gfx, mm.x - b, mm.y - b, mm.w + 2 * b, mm.h + 2 * b, b, MINIMAP_BORDER_COLOR);
+}
+
+/** A `t`-px frame whose outer edge is the rect (x, y, w, h). */
+function frameRect(
+  gfx: GfxLike,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  t: number,
+  color: number,
+): void {
+  gfx.fillStyle(color, 1);
+  gfx.fillRect(x, y, w, t); // top
+  gfx.fillRect(x, y + h - t, w, t); // bottom
+  gfx.fillRect(x, y + t, t, h - 2 * t); // left
+  gfx.fillRect(x + w - t, y + t, t, h - 2 * t); // right
+}
+
+/**
+ * #372 — every enemy fighter on the surface (any colony but the viewer's, doing
+ * the Fighting task) as a red dot, always. The minimap shows only the surface
+ * (PRD §7a), so fighters in the tunnels are not drawn. Two passes (all backings,
+ * then all dots) so a crowd reads as one red blob with a dark outline. Dots are
+ * clamped into the map rect.
+ */
+export function drawMinimapEnemyFighters(
+  gfx: GfxLike,
+  world: WorldState,
+  hud: HudLayout,
+  viewerColonyId: ColonyId,
+): void {
+  const mm = hud.MINIMAP;
+  const sx = mm.w / SURFACE_GRID_WIDTH;
+  const sy = mm.h / SURFACE_GRID_HEIGHT;
+  const ants = world.ants;
+  const end = Math.min(world.nextEntityId, ants.alive.length);
+  const d = MINIMAP_ENEMY_DOT_PX;
+  for (let pass = 0; pass < 2; pass++) {
+    const size = pass === 0 ? d + 2 : d;
+    gfx.fillStyle(
+      pass === 0 ? COLOR_MINIMAP_ENEMY_FIGHTER_BACKING : COLOR_MINIMAP_ENEMY_FIGHTER,
+      1,
+    );
+    for (let id = 0; id < end; id++) {
+      if (ants.alive[id] !== 1) continue;
+      if (ants.zone[id] !== Zone.Surface) continue;
+      if (ants.task[id] !== AntTask.Fighting) continue;
+      if (ants.colonyId[id] === viewerColonyId) continue;
+      const cx = mm.x + (ants.posX[id]! / FP_ONE) * sx;
+      const cy = mm.y + (ants.posY[id]! / FP_ONE) * sy;
+      const x = clamp(Math.round(cx - size / 2), mm.x, mm.x + mm.w - size);
+      const y = clamp(Math.round(cy - size / 2), mm.y, mm.y + mm.h - size);
+      gfx.fillRect(x, y, size, size);
+    }
+  }
+}
+
+/**
+ * #372 — while an enemy army is gathering near one of the viewer's entrances
+ * (isEnemyGathering), ring it: a red circle round the army's bounding box,
+ * pulsing in radius (+2px) and alpha once per MINIMAP_RING_PERIOD_MS, over a
+ * dark halo. The radius is clamped to [MINIMAP_RING_MIN_R, MINIMAP_RING_MAX_R]
+ * and the centre pulled in so the ring stays inside the map rect.
+ */
+export function drawMinimapGatheringRing(
+  gfx: GfxLike,
+  world: WorldState,
+  hud: HudLayout,
+  viewerColonyId: ColonyId,
+  frameTimeMs: number,
+): void {
+  const g = measureEnemyGathering(world, viewerColonyId);
+  if (!isEnemyGathering(g)) return;
+  const mm = hud.MINIMAP;
+  const sx = mm.w / SURFACE_GRID_WIDTH;
+  const sy = mm.h / SURFACE_GRID_HEIGHT;
+  const x0 = g.minTileX * sx;
+  const x1 = g.maxTileX * sx;
+  const y0 = g.minTileY * sy;
+  const y1 = g.maxTileY * sy;
+  const phase = 0.5 + 0.5 * Math.sin((2 * Math.PI * frameTimeMs) / MINIMAP_RING_PERIOD_MS);
+  const base = clamp(Math.hypot(x1 - x0, y1 - y0) / 2 + 4, MINIMAP_RING_MIN_R, MINIMAP_RING_MAX_R);
+  const r = base + 2 * phase;
+  const reach = r + 2; // the halo's outer edge
+  const cx = clamp(mm.x + (x0 + x1) / 2, mm.x + reach, mm.x + mm.w - reach);
+  const cy = clamp(mm.y + (y0 + y1) / 2, mm.y + reach, mm.y + mm.h - reach);
+  gfx.lineStyle(4, 0x000000, 0.55);
+  gfx.strokeCircle(cx, cy, r);
+  gfx.lineStyle(2, COLOR_MINIMAP_GATHERING_RING, 0.55 + 0.45 * phase);
+  gfx.strokeCircle(cx, cy, r);
 }
 
 export function minimapClickToTile(

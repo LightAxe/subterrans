@@ -318,7 +318,13 @@ import {
   type TooltipTarget,
 } from './tooltips.js';
 import { DEFAULT_LAYOUT, cssScaleX, type LayoutContext } from './layout.js';
-import { buildHudLayout, type HudLayout, type HudRect } from './hud-layout.js';
+import {
+  buildHudLayout,
+  captionWrapWidth,
+  CAPTION_PAD_X,
+  type HudLayout,
+  type HudRect,
+} from './hud-layout.js';
 import { setViewportSize } from './camera-adapter.js';
 import {
   pauseMenuItems,
@@ -1557,11 +1563,15 @@ export class UIScene extends Phaser.Scene {
     }
 
     // Minimap
+    // #372 — the viewer is the player colony: every other colony's surface
+    // fighters show as red dots, and a gathering army pulses (on scene time).
     drawMinimap(
       this.gfx as unknown as import('./draw-surface.js').GfxLike,
       world,
       this.viewState,
       this.hud,
+      PLAYER_COLONY_ID,
+      this.time.now,
     );
 
     // View toggle button background
@@ -1895,9 +1905,10 @@ export class UIScene extends Phaser.Scene {
       fontFamily: 'monospace',
       color: '#ffffcc',
       backgroundColor: '#00000088',
-      padding: { x: 8, y: 4 },
+      padding: { x: CAPTION_PAD_X, y: 4 },
       align: 'center',
-      wordWrap: { width: 500 },
+      // #372 — wrap so the box clears the tool palette (hud-layout.ts).
+      wordWrap: { width: captionWrapWidth(req.x, this.hud) },
     });
     captionText.setOrigin(0.5, 0.5);
     captionText.setDepth(30);
