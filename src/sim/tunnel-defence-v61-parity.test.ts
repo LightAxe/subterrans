@@ -9,15 +9,18 @@
 // through the whole tick: six defenders go down a player entrance, meet three
 // invaders in a one-tile tunnel shared with a forager, and chase them; the
 // fingerprint of every ant's tile and zone over the run must equal the one main
-// produces. Non-vacuity: some defender is chasing (target set, not walking to its
-// post) on some tick with a nestmate on its own or a neighbouring tile.
+// produces (GOLDEN was captured by running this file's fingerprint on main, where
+// the chase predicate below was the same condition inline: a tunnel defender not
+// passing through friends). Non-vacuity: on some tick a live defender is chasing
+// (defenderChasesInvader on end-of-tick state; its step-10c scratch lives until the
+// next tick) with a live nestmate on its own or a neighbouring tile.
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
 import { createScenario } from './scenario.js';
 import { allocateEntityId } from './types.js';
 import type { WorldState } from './types.js';
 import { initAnt } from './ant/ant-store.js';
-import { getScratch } from './scratch.js';
+import { defenderChasesInvader } from './ant/ant-combat-targeting.js';
 import { AntTask } from './enums.js';
 import { Zone, UndergroundTileState, ugSet } from './terrain.js';
 import { FP_SHIFT, FP_ONE } from './fixed.js';
@@ -28,8 +31,7 @@ import {
   WORKER_LIFESPAN_TICKS,
 } from './constants.js';
 
-/** simVersion 61 (SIM_VERSION_V61_AI_EARLY_STORAGE), written out so this file runs
- *  unchanged on a tree from before #371. */
+/** simVersion 61 (SIM_VERSION_V61_AI_EARLY_STORAGE). */
 const V61 = 61;
 const TICKS = 220;
 /** Captured on main 934a44d (before #371) by running this file there. */
@@ -125,7 +127,6 @@ describe('#371 — pinned V61: the tunnel defenders’ occupancy exemption is un
     const all = [...defenders, ...others];
     for (let t = 0; t < TICKS; t++) {
       tick(world, []);
-      const moving = getScratch(world).antTargeting.sentryMoving;
       for (const id of all) {
         mix(world.ants.posX[id]! >> FP_SHIFT);
         mix(world.ants.posY[id]! >> FP_SHIFT);
@@ -133,14 +134,14 @@ describe('#371 — pinned V61: the tunnel defenders’ occupancy exemption is un
         mix(world.ants.alive[id]!);
       }
       for (const d of defenders) {
-        if (world.ants.zone[d] !== Zone.Underground || world.ants.targetPosX[d] === -1) continue;
-        if (d < moving.length && moving[d] === 1) continue;
+        if (world.ants.alive[d] !== 1 || !defenderChasesInvader(world, d)) continue;
         const dx = world.ants.posX[d]! >> FP_SHIFT;
         const dy = world.ants.posY[d]! >> FP_SHIFT;
         if (
           all.some(
             (o) =>
               o !== d &&
+              world.ants.alive[o] === 1 &&
               world.ants.colonyId[o] === PLAYER_COLONY_ID &&
               world.ants.zone[o] === Zone.Underground &&
               Math.abs((world.ants.posX[o]! >> FP_SHIFT) - dx) +
