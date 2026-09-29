@@ -2412,6 +2412,23 @@ describe('#371 (V62) — the AI defends its own nest', () => {
     expect(rallies(world)).toEqual([setAt(9, 4)]);
   });
 
+  it('a colony past the entrance cap (a loaded save is not checked for it) still gets a right scan', () => {
+    const { world, colony } = setup();
+    for (let k = 1; k <= 4; k++) {
+      colony.entrances.push({
+        entranceId: 10 + k,
+        surfaceTileX: DOOR_X + 20 * k,
+        surfaceTileY: 0,
+        isOpen: true,
+      });
+    }
+    expect(colony.entrances.length).toBeGreaterThan(4);
+    ant(world, FOE, DOOR_X + 21, 1); // one on entrance 11 (index 1)
+    ant(world, FOE, DOOR_X + 81, 1); // two on entrance 14 (index 4, past the cap)
+    ant(world, FOE, DOOR_X + 79, 1);
+    expect(aiThreatenedEntrance(world, colony)?.entranceId).toBe(14);
+  });
+
   it('a raid scan with two entrances: weights, and the sally raider nearest the threatened one (lowest id on a tie)', () => {
     const { world, colony } = setup();
     colony.entrances.push({

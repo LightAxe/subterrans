@@ -32,6 +32,7 @@ import {
   AI_MAX_OPERATION_FIGHTERS,
   QUEEN_EGG_FOOD_THRESHOLD,
   NEUTRAL_COLONY_ID,
+  MAX_ENTRANCES_PER_COLONY,
 } from '../sim/constants.js';
 import {
   colonyFoodCapacity,
@@ -836,9 +837,9 @@ function threatAt(world: WorldState, colony: ColonyRecord, i: number, radius: nu
 
 /**
  * One pass over the ants for a raid on `colony` (threatAt, surface raiders counted
- * out to `radius`), shared by every aiNestDefence decision this tick. Sized by the
- * colony's entrances (at most MAX_ENTRANCES_PER_COLONY); built once per call, never
- * inside the entity loop.
+ * out to `radius`), shared by every aiNestDefence decision this tick. The
+ * per-entrance columns hold the colony's entrances in [0, entrances.length) (at most
+ * MAX_ENTRANCES_PER_COLONY); entries past it are stale and never read.
  */
 interface RaidScan {
   /** Enemy fighters inside the nest. */
@@ -856,6 +857,22 @@ interface RaidScan {
   nearRally: boolean;
 }
 
+// sim-scratch: the one RaidScan every scanRaid call fills. Render-side (no replay or
+// save state): the controller runs synchronously, one colony at a time, scanRaid
+// resets every field and the active per-entrance range before its pass, and each
+// caller reads the result before the next scanRaid call. Sized for the entrance cap,
+// so no AI tick allocates for the scan (#371).
+const RAID_SCAN: RaidScan = {
+  inside: 0,
+  near: 0,
+  home: 0,
+  weight: new Int32Array(MAX_ENTRANCES_PER_COLONY),
+  nearest: new Int32Array(MAX_ENTRANCES_PER_COLONY),
+  nearestD: new Int32Array(MAX_ENTRANCES_PER_COLONY),
+  nearRally: false,
+};
+
+/** Fills and returns the shared RAID_SCAN; valid until the next scanRaid call. */
 function scanRaid(
   world: WorldState,
   colony: ColonyRecord,
@@ -864,15 +881,27 @@ function scanRaid(
 ): RaidScan {
   const ents = colony.entrances;
   const len = ents.length;
-  const scan: RaidScan = {
-    inside: 0,
-    near: 0,
-    home: 0,
-    weight: new Int32Array(len),
-    nearest: new Int32Array(len).fill(-1),
-    nearestD: new Int32Array(len),
-    nearRally: false,
-  };
+  // The sim caps a colony at MAX_ENTRANCES_PER_COLONY entrances (DesignateEntrance);
+  // a save is not checked for it, so a longer list gets its own columns.
+  const scan: RaidScan =
+    len <= MAX_ENTRANCES_PER_COLONY
+      ? RAID_SCAN
+      : {
+          inside: 0,
+          near: 0,
+          home: 0,
+          weight: new Int32Array(len),
+          nearest: new Int32Array(len),
+          nearestD: new Int32Array(len),
+          nearRally: false,
+        };
+  scan.inside = 0;
+  scan.near = 0;
+  scan.home = 0;
+  scan.nearRally = false;
+  scan.weight.fill(0, 0, len);
+  scan.nearest.fill(-1, 0, len);
+  scan.nearestD.fill(0, 0, len);
   const ants = world.ants;
   for (let i = 0; i < world.nextEntityId; i++) {
     const where = threatAt(world, colony, i, radius);
