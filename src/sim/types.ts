@@ -1408,7 +1408,30 @@ export const SIM_VERSION_V62_AI_NEST_DEFENCE = 62 as const;
  * byte-identically. MIN_ACCEPTED is UNCHANGED (V50).
  */
 export const SIM_VERSION_V63_AI_DEEP_QUEEN = 63 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V63_AI_DEEP_QUEEN;
+
+/**
+ * #372 (V64) — automatic defence, and an AI probe sends only its cohort.
+ *
+ *   - Automatic defence (sim, every colony alike — CLNY-08): while an enemy ant is
+ *     below ground in a colony's nest, in the part joined to one of its open
+ *     entrances (the **breached entrance**: of the entrances whose shaft reaches an
+ *     intruder, the one nearest an intruder), that colony's fighters with NO orders — the
+ *     sentries — defend it as tunnel defenders do (V44): they go down the breached
+ *     entrance and hunt the intruders (the V62 spread). Fighters with orders keep
+ *     them. Once no intruder is left they are sentries again and go back to their
+ *     posts. Surplus sentries do not stand down (V47) while an enemy is in the nest.
+ *   - Probe cohort (sim): up to V63 a rally applied to every fighter of the colony,
+ *     so an AI probe that recorded 3 fighters sent all of them. From V64, while a
+ *     colony's rally is its AI probe's rally (AIStateRecord.operationKind 'Probe'
+ *     and the rally on the operation's target tile), only the fighters in the
+ *     probe's cohort (operationFighterIds) answer it; the rest have no orders.
+ * No new serialized field, command, world.rngState draw, entity-ID advance or
+ * tick-order change (the breached entrance is per-tick scratch, recomputed at step
+ * 10c before anything reads it). A V63 save replays byte-identically.
+ * MIN_ACCEPTED is UNCHANGED (V50).
+ */
+export const SIM_VERSION_V64_AUTO_DEFENCE = 64 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V64_AUTO_DEFENCE;
 
 /**
  * S2 — AI colony state machine states.

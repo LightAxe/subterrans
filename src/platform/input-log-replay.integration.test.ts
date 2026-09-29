@@ -117,8 +117,11 @@ function driveAI(world: WorldState): void {
       recoveryEndTick: 0,
       operationKind: 'Probe',
       operationStartTick: world.tick,
-      operationTargetTileX: RALLY_TILE_X,
-      operationTargetTileY: RALLY_TILE_Y,
+      // Not the rally tile: from V64 (#372) a rally ON the probe's target applies
+      // only to the probe's cohort, and this cohort is empty, so the fighter would
+      // ignore it and the one-tick-early clear would change nothing it does.
+      operationTargetTileX: -1,
+      operationTargetTileY: -1,
       operationFighterIds: [],
       operationFighterCount: 0,
       operationStartFighterCount: 0,

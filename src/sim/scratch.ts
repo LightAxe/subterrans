@@ -104,6 +104,17 @@ export interface ScratchArena {
       number,
       { cells: Int32Array; stamp: number; entranceId: number; invaders: number[] }
     >;
+    /** #372 (V64) — colonyId → its breached entrance's entranceId this tick
+     *  (findBreachedEntrances, cleared and refilled first thing in every step-10c
+     *  pass, before anything reads it); `breachIntruders` its per-colony intruder
+     *  list, `breachReach`/`breachReachStamp` the stamped reach of the entrance
+     *  being tried (stamps, not clears), `breachNoPosts` the survey's post list (it
+     *  asks for none, so it stays empty). */
+    breachedEntrance: Map<number, number>;
+    breachIntruders: number[];
+    breachReach: Int32Array;
+    breachReachStamp: number;
+    breachNoPosts: number[];
     /** #364 (V59) — ant-motion.ts tileSaturatedFor's one-cell window, cleared to 0
      *  after every call (so its fixed stamp 1 never meets a stale value). */
     saturationProbe: Int32Array;
@@ -270,6 +281,11 @@ export function getScratch(world: WorldState): ScratchArena {
         sentryRawPostsBuilt: new Set(),
         sentryNextRank: new Map(),
         defenderReach: new Map(),
+        breachedEntrance: new Map(),
+        breachIntruders: [],
+        breachReach: new Int32Array(0),
+        breachReachStamp: 0,
+        breachNoPosts: [],
         saturationProbe: new Int32Array(1),
         retarget: {
           friend: new Int32Array(0),

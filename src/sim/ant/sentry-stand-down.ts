@@ -5,7 +5,7 @@ import { FIGHT_AGGRO_RADIUS, SURFACE_GRID_HEIGHT, SURFACE_GRID_WIDTH } from '../
 import { AntTask, FightingSubState } from '../enums.js';
 import { FP_SHIFT } from '../fixed.js';
 import { Zone } from '../terrain.js';
-import type { WorldState } from '../types.js';
+import { SIM_VERSION_V64_AUTO_DEFENCE, type WorldState } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
 import { getScratch } from '../scratch.js';
 
@@ -45,6 +45,16 @@ export function standDownSurplusSentries(world: WorldState, colony: ColonyRecord
     if (ants.alive[id] === 1 && ants.task[id] === AntTask.Fighting) surplus += 1;
   }
   if (surplus <= 0) return;
+  // #372 (V64): nor while an enemy ant is below ground in its nest: its sentries
+  // are about to defend it (automatic defence, step 10c).
+  if (world.simVersion >= SIM_VERSION_V64_AUTO_DEFENCE) {
+    for (let o = 0; o < ants.alive.length; o++) {
+      if (ants.alive[o] !== 1 || ants.zone[o] !== Zone.Underground) continue;
+      if (ants.currentGridColonyId[o] === colony.colonyId && ants.colonyId[o] !== colony.colonyId) {
+        return;
+      }
+    }
+  }
 
   // Stamp every surface tile within STAND_DOWN_ENEMY_RADIUS of an enemy ant, once
   // per enemy tile, so each candidate below is one lookup, never a hostile rescan.
