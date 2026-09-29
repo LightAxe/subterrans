@@ -10,6 +10,7 @@ import {
   SIM_VERSION_V19_AI_STATE,
   SIM_VERSION_V55_ROUTED_HOMING,
   SIM_VERSION_V56_OPPONENT_FRONTAGE,
+  SIM_VERSION_V62_AI_NEST_DEFENCE,
 } from './types.js';
 import { applyCommands } from './tick.js';
 import type { SimCommand } from './commands.js';
@@ -678,5 +679,47 @@ describe('#347 — a player-colony AI reads its opponent (V56)', () => {
     setAIRallyOperation(world, ENEMY_COLONY_ID as ColonyId, 24, 0, [10, 11, 12], 'Invasion');
     const evt = world.events.find((e) => e.type === 'invasion_start');
     expect(evt?.payload).toMatchObject({ colonyId: ENEMY_COLONY_ID, targetGrid: PLAYER_COLONY_ID });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #371 (V62) — the AI raid clock (SetAIRaidClock → AIStateRecord.raidSinceTick)
+// ---------------------------------------------------------------------------
+
+describe('#371 — SetAIRaidClock (V62)', () => {
+  const clock = (raiding: unknown): SimCommand =>
+    ({
+      type: 'SetAIRaidClock',
+      colonyId: ENEMY_COLONY_ID,
+      raiding,
+      issuedAtTick: 0,
+    }) as SimCommand;
+
+  it('starts at the tick it applies, keeps its start while running, and clears', () => {
+    const world = makeMinimalWorld();
+    world.simVersion = SIM_VERSION_V62_AI_NEST_DEFENCE;
+    const rec = getAIStateForColony(world, ENEMY_COLONY_ID as ColonyId)!;
+    world.tick = 500;
+    applyCommands(world, [clock(true)]);
+    expect(rec.raidSinceTick).toBe(500);
+    world.tick = 900;
+    applyCommands(world, [clock(true)]);
+    expect(rec.raidSinceTick).toBe(500);
+    applyCommands(world, [clock(false)]);
+    expect(rec.raidSinceTick).toBe(-1);
+  });
+
+  it('is a no-op below V62, and for a non-boolean or an unknown colony', () => {
+    const world = makeMinimalWorld();
+    world.simVersion = SIM_VERSION_V62_AI_NEST_DEFENCE - 1;
+    const rec = getAIStateForColony(world, ENEMY_COLONY_ID as ColonyId)!;
+    world.tick = 500;
+    applyCommands(world, [clock(true)]);
+    expect(rec.raidSinceTick).toBe(-1);
+    world.simVersion = SIM_VERSION_V62_AI_NEST_DEFENCE;
+    applyCommands(world, [clock('yes')]);
+    expect(rec.raidSinceTick).toBe(-1);
+    applyCommands(world, [{ ...clock(true), colonyId: 99 } as SimCommand]);
+    expect(rec.raidSinceTick).toBe(-1);
   });
 });

@@ -105,9 +105,12 @@ down only the entrance it defends). Since **#371 (simVersion V62)** tunnel
 defenders after invaders spread over them — each goes for the nearest invader by
 path whose tile no nestmate already holds the duel on (the #364 rule invaders use;
 in its own nest only a fighter, or an ant that combat would pair first, counts) —
-instead of stacking on the nearest one; and the rule-based AI rallies on its own
-entrance when enemy fighters are in its nest or a force at least as big as its own
-fighters is at its door, and clears the rally when they are gone.
+instead of stacking on the nearest one; and the rule-based AI defends a **raid**
+(an enemy fighter in its nest, or two or more on the surface near its entrances):
+it rallies on the threatened entrance while raiders are inside or it is not
+stronger at home, otherwise it sallies at the nearest raider, and clears the rally
+when they are gone. A raid holds the AI's probes and invasions — with no enemy
+inside, for 60 s at most, so fighters parked by the door cannot stop it attacking.
 _Avoid_: **guard**, **garrison**.
 
 **Nurse**:

@@ -170,6 +170,18 @@ export interface StartAIOperationCommand extends SimCommandBase {
   readonly fighterIds: readonly number[];
 }
 
+/**
+ * #371 (V62) — the AI controller starts (`raiding: true`) or clears the raid clock
+ * of its colony's AIStateRecord (`raidSinceTick`). Pushed instead of writing
+ * world.aiState directly, so the sim alone reproduces it on replay (ADR-0007, #258).
+ * Starting a clock that is already running keeps its start. No-op below V62.
+ */
+export interface SetAIRaidClockCommand extends SimCommandBase {
+  readonly type: 'SetAIRaidClock';
+  readonly colonyId: ColonyId;
+  readonly raiding: boolean;
+}
+
 export type SimCommand =
   | NoOpCommand
   | SetBehaviorRatioCommand
@@ -183,7 +195,8 @@ export type SimCommand =
   | SyncAIStateCommand
   | StartAIOperationCommand
   | MarkSpiderPriorityCommand
-  | SetColonyAlarmCommand;
+  | SetColonyAlarmCommand
+  | SetAIRaidClockCommand;
 
 export const MAX_COMMANDS_PER_TICK = 64; // PRD §5 line 680 — FIFO silent-drop beyond cap
 

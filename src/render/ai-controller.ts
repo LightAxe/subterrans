@@ -145,11 +145,13 @@ export function runAIController(world: WorldState, aiColonyId: ColonyId): void {
   // emits operational commands (probe entry, invasion tick, behavior ratio sync).
   const aiStateRecord = world.aiState.find((r) => r.colonyId === aiColonyId);
   // #371 (V62): the own entrance a raid is on this tick, or null (aiNestDefence).
-  // Decided before the operations below: during a raid the colony starts no probe,
-  // commits no invasion cohort and calls a probe in flight home (its one rally
-  // point is on the raid).
-  const defended = aiNestDefence(world, colony, aiStateRecord);
-  const holdOperations = defended !== null;
+  // Decided before the operations below: while a raid holds operations the colony
+  // starts no probe, commits no invasion cohort and calls a probe in flight home (its
+  // one rally point is on the raid). With no enemy inside the hold ends after
+  // AI_DEFENCE_OPS_HOLD_LIMIT_TICKS; the colony keeps defending but operates again.
+  const raid = { holdOperations: false };
+  const defended = aiNestDefence(world, colony, aiStateRecord, raid);
+  const holdOperations = raid.holdOperations;
   if (aiStateRecord !== undefined) {
     const curState = aiStateRecord.state;
     if (curState === 'WarFooting' && !holdOperations) {
@@ -164,7 +166,7 @@ export function runAIController(world: WorldState, aiColonyId: ColonyId): void {
     if (curState === 'Invading') {
       aiInvasionTick(world, aiColonyId, holdOperations);
     }
-    // #371 (V62): no probe rally during a raid. aiProbeTick re-emits the probe's
+    // #371 (V62): no probe rally while a raid holds operations. aiProbeTick re-emits the probe's
     // rally only while the colony has none; on a tick where aiNestDefence has just
     // queued the defence rally (the rally was null), that re-emit would land after it
     // and send the fighters back out.
@@ -712,7 +714,8 @@ export function aiEntranceDesignation(world: WorldState, colony: ColonyRecord): 
 }
 
 // ---------------------------------------------------------------------------
-// #371 (V62) — nest defence (render-side policy; nothing new in WorldState)
+// #371 (V62) — nest defence (render-side policy; its one piece of state, the raid
+// clock AIStateRecord.raidSinceTick, is kept by the sim via SetAIRaidClock)
 // ---------------------------------------------------------------------------
 //
 // A RAID is on while an enemy fighter is inside the colony's nest, or at least
@@ -721,7 +724,8 @@ export function aiEntranceDesignation(world: WorldState, colony: ColonyRecord): 
 // to AI_DEFENCE_HOLD_RADIUS_TILES). For as long as it is on — and only the
 // raiders' own coming and going decides that, never the colony's numbers — the
 // colony holds its operations (no probe starts, no invasion cohort is committed, a
-// probe in flight is called home), drafts fighters (AI_DEFENCE_RATIO), and puts its
+// probe in flight is called home; with no enemy inside, for at most
+// AI_DEFENCE_OPS_HOLD_LIMIT_TICKS), drafts fighters (AI_DEFENCE_RATIO), and puts its
 // one rally point on the raid:
 //   - on the threatened entrance (its fighters go below as tunnel defenders, V44)
 //     while raiders are inside, or while the raiders on the surface are at least as
@@ -740,13 +744,16 @@ export function aiEntranceDesignation(world: WorldState, colony: ColonyRecord): 
 //
 // Constraints and accepted exposure:
 //   - The AI controller owns its colony's rally: any rally on an own entrance, or
-//     within AI_DEFENCE_HOLD_RADIUS_TILES of one (bar a probe's own target), is read
-//     as a defence rally and cleared when no raid is on. A driver that mixes human
-//     or scripted rallies into a runAIController colony would have them cleared.
-//   - Two enemy fighters parked within the threat radius (sentries at an entrance
-//     opened near the AI's) keep a raid on for as long as they stay: no probe or
-//     invasion, ratio 2:8. The colony sallies at them when stronger at home, so it
-//     is fought rather than a hard lock.
+//     within AI_DEFENCE_HOLD_RADIUS_TILES of one (bar, while a probe runs or on the
+//     tick after an operation ends, the operation's target and any entrance tile),
+//     is read as a defence rally and cleared when no raid is on.
+//     A driver that mixes human or scripted rallies into a runAIController colony
+//     would have them cleared.
+//   - Enemy fighters parked within the threat radius (sentries at an entrance opened
+//     near the AI's) keep a raid on for as long as they stay, but hold operations
+//     for AI_DEFENCE_OPS_HOLD_LIMIT_TICKS at most (timed by the sim-side raid clock,
+//     AIStateRecord.raidSinceTick): after that the colony probes and invades again
+//     while still defending. An enemy inside the nest holds operations regardless.
 
 /**
  * Behaviour ratio during a raid: every worker that comes Idle (a forager finishing
@@ -771,6 +778,19 @@ export const AI_DEFENCE_ALERT_RAIDERS = 2 as const;
  * edge still count and the colony does not flip back below mid-fight.
  */
 export const AI_DEFENCE_HOME_RADIUS_TILES = 40 as const;
+/**
+ * The longest a raid with no enemy inside the nest holds the colony's operations:
+ * 1200 ticks = 60 s at 20 Hz. Long enough to repel a real raid — in the scripted
+ * rush trials (seeds 300–323) a raid that gets anywhere is decided a few hundred to
+ * ~900 ticks after the rally — and shorter than AI_INVADING_TIMEOUT_TICKS (1800), so
+ * a colony that enters Invading as parked raiders arrive still commits its cohort
+ * (600 ticks of its shared pre-cohort + invasion budget left if the raid began as it
+ * entered Invading, more if earlier, less if later; one that runs out goes to Recovery, and the next Invading, the clock still running, commits
+ * at once). After it, two enemy fighters parked by the door no longer stop probes and
+ * invasions; the colony keeps defending (ratio 2:8 included). An enemy inside always
+ * holds.
+ */
+export const AI_DEFENCE_OPS_HOLD_LIMIT_TICKS = 1200 as const;
 /**
  * A sally rally stays where it is while an enemy raider is within this many tiles of
  * it, so the rally is not re-sent every tick as the raiders move.
@@ -815,40 +835,93 @@ function threatAt(world: WorldState, colony: ColonyRecord, i: number, radius: nu
 }
 
 /**
- * #371 (V62) — the own open entrance a raid is on, or null when no raid is on (see
- * the section comment). Each enemy fighter inside weighs 2 on the open entrance
- * nearest its column, each one on the surface within the threat radius 1 on its
- * nearest open entrance; the entrance with the most weight wins, ties to `prefer`
- * (the entrance already defended) and then the lowest index. Read-only and
- * allocation-free.
+ * One pass over the ants for a raid on `colony` (threatAt, surface raiders counted
+ * out to `radius`), shared by every aiNestDefence decision this tick. Sized by the
+ * colony's entrances (at most MAX_ENTRANCES_PER_COLONY); built once per call, never
+ * inside the entity loop.
  */
-export function aiThreatenedEntrance(
+interface RaidScan {
+  /** Enemy fighters inside the nest. */
+  inside: number;
+  /** Enemy fighters on the surface within `radius` of an open entrance. */
+  near: number;
+  /** The colony's own fighters at home. */
+  home: number;
+  /** Per entrance index: 2 per raider inside charged to it, 1 per surface raider. */
+  readonly weight: Int32Array;
+  /** Per entrance index: the surface raider nearest it (lowest id on a tie), or -1. */
+  readonly nearest: Int32Array;
+  readonly nearestD: Int32Array;
+  /** A surface raider stands within AI_DEFENCE_SALLY_KEEP_TILES of `rally`. */
+  nearRally: boolean;
+}
+
+function scanRaid(
   world: WorldState,
   colony: ColonyRecord,
-  prefer: NestEntrance | null = null,
-  radius: number = AI_DEFENCE_THREAT_RADIUS_TILES,
-): NestEntrance | null {
+  radius: number,
+  rally: { readonly tileX: number; readonly tileY: number } | null,
+): RaidScan {
   const ents = colony.entrances;
-  let inside = 0;
-  let near = 0;
+  const len = ents.length;
+  const scan: RaidScan = {
+    inside: 0,
+    near: 0,
+    home: 0,
+    weight: new Int32Array(len),
+    nearest: new Int32Array(len).fill(-1),
+    nearestD: new Int32Array(len),
+    nearRally: false,
+  };
+  const ants = world.ants;
   for (let i = 0; i < world.nextEntityId; i++) {
     const where = threatAt(world, colony, i, radius);
-    if (where >= 0 && where < ents.length) inside += 1;
-    else if (where >= ents.length) near += 1;
+    if (where === THREAT_OWN_HOME) {
+      scan.home += 1;
+      continue;
+    }
+    if (where < 0) continue;
+    if (where < len) {
+      scan.inside += 1;
+      scan.weight[where]! += 2;
+      continue;
+    }
+    scan.near += 1;
+    scan.weight[where - len]! += 1;
+    const tx = ants.posX[i]! >> FP_SHIFT;
+    const ty = ants.posY[i]! >> FP_SHIFT;
+    for (let e = 0; e < len; e++) {
+      const ent = ents[e]!;
+      const d = Math.abs(tx - ent.surfaceTileX) + Math.abs(ty - ent.surfaceTileY);
+      if (scan.nearest[e] === -1 || d < scan.nearestD[e]!) {
+        scan.nearest[e] = i;
+        scan.nearestD[e] = d;
+      }
+    }
+    if (
+      rally !== null &&
+      Math.abs(tx - rally.tileX) + Math.abs(ty - rally.tileY) <= AI_DEFENCE_SALLY_KEEP_TILES
+    ) {
+      scan.nearRally = true;
+    }
   }
-  if (inside === 0 && near < AI_DEFENCE_ALERT_RAIDERS) return null;
+  return scan;
+}
+
+/** The own open entrance a scanned raid is on, or null (see aiThreatenedEntrance). */
+function raidEntrance(
+  colony: ColonyRecord,
+  scan: RaidScan,
+  prefer: NestEntrance | null,
+): NestEntrance | null {
+  if (scan.inside === 0 && scan.near < AI_DEFENCE_ALERT_RAIDERS) return null;
+  const ents = colony.entrances;
   let pick: NestEntrance | null = null;
   let pickWeight = 0;
   for (let e = 0; e < ents.length; e++) {
     const ent = ents[e]!;
-    if (!ent.isOpen) continue;
-    let weight = 0;
-    for (let i = 0; i < world.nextEntityId; i++) {
-      const where = threatAt(world, colony, i, radius);
-      if (where === e) weight += 2;
-      else if (where === ents.length + e) weight += 1;
-    }
-    if (weight === 0) continue;
+    const weight = scan.weight[e]!;
+    if (!ent.isOpen || weight === 0) continue;
     if (
       pick === null ||
       weight > pickWeight ||
@@ -861,6 +934,27 @@ export function aiThreatenedEntrance(
   return pick;
 }
 
+/** A scanned raid: none inside, and more fighters at home than surface raiders. */
+function raidSallies(scan: RaidScan): boolean {
+  return scan.inside === 0 && scan.home > scan.near;
+}
+
+/**
+ * #371 (V62) — the own open entrance a raid is on, or null when no raid is on (see
+ * the section comment). Each enemy fighter inside weighs 2 on the open entrance
+ * nearest its column, each one on the surface within the threat radius 1 on its
+ * nearest open entrance; the entrance with the most weight wins, ties to `prefer`
+ * (the entrance already defended) and then the lowest index. Read-only.
+ */
+export function aiThreatenedEntrance(
+  world: WorldState,
+  colony: ColonyRecord,
+  prefer: NestEntrance | null = null,
+  radius: number = AI_DEFENCE_THREAT_RADIUS_TILES,
+): NestEntrance | null {
+  return raidEntrance(colony, scanRaid(world, colony, radius, null), prefer);
+}
+
 /**
  * #371 (V62) — during a raid, the colony is stronger at home than the raiders on
  * the surface and none is inside: it sallies rather than going below. Read-only.
@@ -870,17 +964,7 @@ export function aiDefenceSallies(
   colony: ColonyRecord,
   radius: number = AI_DEFENCE_THREAT_RADIUS_TILES,
 ): boolean {
-  const ents = colony.entrances;
-  let inside = 0;
-  let near = 0;
-  let home = 0;
-  for (let i = 0; i < world.nextEntityId; i++) {
-    const where = threatAt(world, colony, i, radius);
-    if (where === THREAT_OWN_HOME) home += 1;
-    else if (where >= 0 && where < ents.length) inside += 1;
-    else if (where >= ents.length) near += 1;
-  }
-  return inside === 0 && home > near;
+  return raidSallies(scanRaid(world, colony, radius, null));
 }
 
 /**
@@ -922,16 +1006,31 @@ function rallyOnOwnEntrance(colony: ColonyRecord): NestEntrance | null {
 /**
  * The colony's rally is a DEFENCE rally (one this policy set): on one of its own
  * entrances, or a sally rally — on the surface within the hold radius of an own
- * entrance — that is not a probe in flight's own target. The AI puts a rally there
- * for nothing else, so no memory is needed and a save loads to the same decision.
+ * entrance — that is not an operation's rally: while a probe runs, or on the tick
+ * after an operation ends (its rally still up, the sim's clear queued), a rally on
+ * the operation's target (aiState.invasionRallyTile, kept after a probe ends) or on
+ * any entrance tile (an ended invasion's is on the enemy's entrance) is not ours, so
+ * it is not re-sent as a defence rally. The AI puts a rally there for nothing else,
+ * so no memory is needed; the queue and aiState are WorldState, so a save loads to
+ * the same decision.
  */
-function isDefenceRally(colony: ColonyRecord, aiState: AIStateRecord | undefined): boolean {
+function isDefenceRally(
+  world: WorldState,
+  colony: ColonyRecord,
+  aiState: AIStateRecord | undefined,
+): boolean {
   const rp = colony.rallyPoint;
   if (rp === null) return false;
   if (rallyOnOwnEntrance(colony) !== null) return true;
-  if (
+  // An operation's rally: while a probe runs, or on the tick after an operation ends
+  // (its rally still up, the sim's clear queued behind it). Otherwise a rally on the
+  // kept stale target is the AI's own, and gets cleared.
+  const opRally =
     aiState !== undefined &&
-    aiState.operationKind === 'Probe' &&
+    (aiState.operationKind === 'Probe' || queuedRally(world, colony) === null);
+  if (opRally && isEntranceTileOfAnyColony(world, rp.tileX, rp.tileY)) return false;
+  if (
+    opRally &&
     aiState.invasionRallyTileX === rp.tileX &&
     aiState.invasionRallyTileY === rp.tileY
   ) {
@@ -944,68 +1043,47 @@ function isDefenceRally(colony: ColonyRecord, aiState: AIStateRecord | undefined
   return false;
 }
 
-/** The enemy fighter on the surface in the raid nearest `ent`, or -1. */
-function nearestSurfaceRaider(
-  world: WorldState,
-  colony: ColonyRecord,
-  ent: NestEntrance,
-  radius: number,
-): number {
-  const ants = world.ants;
-  const len = colony.entrances.length;
-  let best = -1;
-  let bestD = 0;
-  for (let i = 0; i < world.nextEntityId; i++) {
-    if (threatAt(world, colony, i, radius) < len) continue;
-    const d =
-      Math.abs((ants.posX[i]! >> FP_SHIFT) - ent.surfaceTileX) +
-      Math.abs((ants.posY[i]! >> FP_SHIFT) - ent.surfaceTileY);
-    if (best === -1 || d < bestD) {
-      best = i;
-      bestD = d;
-    }
-  }
-  return best;
-}
-
-/** A surface raider stands within AI_DEFENCE_SALLY_KEEP_TILES of the colony's rally. */
-function raiderNearRally(world: WorldState, colony: ColonyRecord, radius: number): boolean {
-  const rp = colony.rallyPoint;
-  if (rp === null) return false;
-  const ants = world.ants;
-  const len = colony.entrances.length;
-  for (let i = 0; i < world.nextEntityId; i++) {
-    if (threatAt(world, colony, i, radius) < len) continue;
-    const d =
-      Math.abs((ants.posX[i]! >> FP_SHIFT) - rp.tileX) +
-      Math.abs((ants.posY[i]! >> FP_SHIFT) - rp.tileY);
-    if (d <= AI_DEFENCE_SALLY_KEEP_TILES) return true;
-  }
-  return false;
-}
-
 /**
  * #371 (V62) — the raid response (see the section comment). Returns the entrance
- * the raid is on (the colony holds its operations while non-null), or null.
+ * the raid is on, or null; `out.holdOperations` says whether the colony holds its
+ * operations (a raid does, until AI_DEFENCE_OPS_HOLD_LIMIT_TICKS with no enemy inside).
  * A committed INVASION keeps the rally: this does nothing while one runs (the whole
  * army is racing for the enemy queen). A probe in flight is called home: its rally
  * is replaced by the defence rally, and when the raid is over this clears the
- * defence rally and aiProbeTick re-emits the probe's (a probe that times out
- * meanwhile clears the rally itself, leaving the colony one sim tick without a
- * rally before this sets it again). Off below V62.
+ * defence rally and aiProbeTick re-emits the probe's (a tick later: it waits for the
+ * clear to land, so the probe's fighters have no rally for that tick — the raid is
+ * over, so nothing is left undefended). A probe that ends meanwhile
+ * queues its own ClearRallyPoint (advanceAIState, applied next tick ahead of this
+ * call's commands): the decision still reads the colony's CURRENT rally, so the raid
+ * keeps its hold radius, and the defence rally is compared against the rally as it
+ * will be once the queue applies (queuedRally), so it is sent again behind the
+ * clear — no tick without a rally, no early end. Off below V62.
  */
 export function aiNestDefence(
   world: WorldState,
   colony: ColonyRecord,
   aiState: AIStateRecord | undefined,
+  out?: { holdOperations: boolean },
 ): NestEntrance | null {
+  if (out !== undefined) out.holdOperations = false;
   if (world.simVersion < SIM_VERSION_V62_AI_NEST_DEFENCE) return null;
-  if (aiState?.operationKind === 'Invasion') return null;
-  const ours = isDefenceRally(colony, aiState);
+  if (aiState?.operationKind === 'Invasion') {
+    // The raid clock means nothing while the army is out; a raid after the
+    // invasion starts a fresh one.
+    if (aiState.raidSinceTick !== -1) _emitRaidClock(world, colony.colonyId, false);
+    return null;
+  }
+  const ours = isDefenceRally(world, colony, aiState);
   const radius = ours ? AI_DEFENCE_HOLD_RADIUS_TILES : AI_DEFENCE_THREAT_RADIUS_TILES;
-  const threat = aiThreatenedEntrance(world, colony, rallyOnOwnEntrance(colony), radius);
+  const scan = scanRaid(world, colony, radius, colony.rallyPoint);
+  const threat = raidEntrance(colony, scan, rallyOnOwnEntrance(colony));
+  // The raid clock (AIStateRecord.raidSinceTick, kept by the sim): started when a
+  // raid is first seen, cleared when it is over.
+  if (aiState !== undefined && (threat === null) !== (aiState.raidSinceTick === -1)) {
+    _emitRaidClock(world, colony.colonyId, threat !== null);
+  }
   if (threat === null) {
-    if (ours) {
+    if (ours && queuedRally(world, colony) !== null) {
       pushCommand(
         world,
         { type: 'ClearRallyPoint', colonyId: colony.colonyId, issuedAtTick: world.tick },
@@ -1014,33 +1092,88 @@ export function aiNestDefence(
     }
     return null;
   }
+  // A raid with no enemy inside holds operations for AI_DEFENCE_OPS_HOLD_LIMIT_TICKS
+  // at most, so enemy fighters parked by the door cannot stop the AI attacking. It
+  // still defends (rally, ratio) — except that a probe in flight keeps its own rally
+  // (and gets it back if an enemy inside had it called home). The clock restarts
+  // whenever the raid ends, even for a tick (raiders dropping below two, or out of
+  // range): a player pulsing a pair in and out can renew the hold, at the cost of
+  // actually raiding.
+  const stale =
+    scan.inside === 0 &&
+    aiState !== undefined &&
+    aiState.raidSinceTick !== -1 &&
+    world.tick - aiState.raidSinceTick >= AI_DEFENCE_OPS_HOLD_LIMIT_TICKS;
+  if (out !== undefined) out.holdOperations = !stale;
+  if (stale && aiState.operationKind === 'Probe') {
+    const pr = queuedRally(world, colony);
+    const px = aiState.invasionRallyTileX;
+    const py = aiState.invasionRallyTileY;
+    if (px !== -1 && (pr === null || pr.tileX !== px || pr.tileY !== py)) {
+      _emitSetRallyPoint(world, colony.colonyId, px, py);
+    }
+    return threat;
+  }
   let tx = threat.surfaceTileX;
   let ty = threat.surfaceTileY;
-  if (aiDefenceSallies(world, colony, radius)) {
+  if (raidSallies(scan)) {
     // Keep a sally rally that still has a raider by it; else go for the raider
     // nearest the threatened entrance — unless that raider stands on an entrance
     // tile: a rally on another colony's entrance is a raid on that nest (#352), so
     // the colony holds its own threatened entrance instead.
-    if (ours && rallyOnOwnEntrance(colony) === null && raiderNearRally(world, colony, radius)) {
-      return threat;
-    }
-    const r = nearestSurfaceRaider(world, colony, threat, radius);
-    if (r !== -1) {
-      const rx = world.ants.posX[r]! >> FP_SHIFT;
-      const ry = world.ants.posY[r]! >> FP_SHIFT;
-      if (!isEntranceTileOfAnyColony(world, rx, ry)) {
-        tx = rx;
-        ty = ry;
+    const cur = colony.rallyPoint;
+    if (
+      cur !== null &&
+      ours &&
+      rallyOnOwnEntrance(colony) === null &&
+      !isEntranceTileOfAnyColony(world, cur.tileX, cur.tileY) &&
+      scan.nearRally
+    ) {
+      tx = cur.tileX;
+      ty = cur.tileY;
+    } else {
+      const r = scan.nearest[colony.entrances.indexOf(threat)]!;
+      if (r !== -1) {
+        const rx = world.ants.posX[r]! >> FP_SHIFT;
+        const ry = world.ants.posY[r]! >> FP_SHIFT;
+        if (!isEntranceTileOfAnyColony(world, rx, ry)) {
+          tx = rx;
+          ty = ry;
+        }
       }
     }
   }
-  // Only a changed rally is sent: a sally rally on a probe's own target tile reads
-  // as not ours (isDefenceRally), and would otherwise be re-sent every tick.
-  const rp = colony.rallyPoint;
+  // Only a changed rally is sent (against the rally as the queue will leave it): a
+  // sally rally that isDefenceRally reads as not ours (on a running probe's target)
+  // would otherwise be re-sent every tick.
+  const rp = queuedRally(world, colony);
   if (rp === null || rp.tileX !== tx || rp.tileY !== ty) {
     _emitSetRallyPoint(world, colony.colonyId, tx, ty);
   }
   return threat;
+}
+
+/** #371 (V62) — start (`raiding`) or clear the colony's raid clock (sim-side). */
+function _emitRaidClock(world: WorldState, colonyId: ColonyId, raiding: boolean): void {
+  pushCommand(world, { type: 'SetAIRaidClock', colonyId, raiding, issuedAtTick: world.tick }, 'ai');
+}
+
+/**
+ * The colony's rally as it will be once the commands already queued this tick
+ * apply: the last SetRallyPoint / ClearRallyPoint for the colony in
+ * world.commandQueue, else its current rally. Read-only.
+ */
+function queuedRally(
+  world: WorldState,
+  colony: ColonyRecord,
+): { readonly tileX: number; readonly tileY: number } | null {
+  const q = world.commandQueue;
+  for (let k = q.length - 1; k >= 0; k--) {
+    const c = q[k]!;
+    if (c.type === 'SetRallyPoint' && c.colonyId === colony.colonyId) return c;
+    if (c.type === 'ClearRallyPoint' && c.colonyId === colony.colonyId) return null;
+  }
+  return colony.rallyPoint;
 }
 
 // ---------------------------------------------------------------------------
@@ -1133,7 +1266,7 @@ function aiStateMachineTick_probeEntry(
 }
 
 /**
- * aiProbeTick — runs while state === Probing and no raid is on (#371, V62).
+ * aiProbeTick — runs while state === Probing and no raid holds operations (#371, V62).
  * Re-emit SetRallyPoint only when colony.rallyPoint is null (e.g. first post-load tick
  * if the saved rallyPoint was somehow cleared). Per spec NTH-5: colony.rallyPoint is
  * the derived consequence; aiState.invasionRallyTileX/Y is the sim-state-of-record.
