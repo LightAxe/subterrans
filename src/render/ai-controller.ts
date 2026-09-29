@@ -4,7 +4,7 @@
 // The simulation has ONE code path for all colonies; AI differentiates at the CALLER
 // (GameScene's onBeforeTick calls runAIController only for non-player colonyIds).
 
-import type { WorldState } from '../sim/types.js';
+import type { AIStateRecord, WorldState } from '../sim/types.js';
 import {
   SIM_VERSION_V53_NO_LOOT_WHEN_FULL,
   SIM_VERSION_V61_AI_EARLY_STORAGE,
@@ -164,7 +164,11 @@ export function runAIController(world: WorldState, aiColonyId: ColonyId): void {
     if (curState === 'Invading') {
       aiInvasionTick(world, aiColonyId, holdOperations);
     }
-    if (curState === 'Probing') {
+    // #371 (V62): no probe rally while the colony defends or has raiders at its
+    // door. aiProbeTick re-emits the probe's rally only while the colony has none;
+    // on a tick where aiNestDefence has just queued the defence rally (the rally was
+    // null), that re-emit would land after it and send the fighters back out.
+    if (curState === 'Probing' && !holdOperations) {
       aiProbeTick(world, aiColonyId);
     }
   }
@@ -887,25 +891,16 @@ export const AI_DEFENCE_DOOR_RADIUS_TILES = 6 as const;
  */
 export function aiRaidersAtDoor(world: WorldState, colony: ColonyRecord): boolean {
   if (world.simVersion < SIM_VERSION_V62_AI_NEST_DEFENCE) return false;
-  const ants = world.ants;
-  const own = colony.colonyId;
+  // One "who counts as a raider" rule (threatAt), with the door radius: an enemy
+  // fighter on the surface within it counts; one inside the nest is
+  // aiThreatenedEntrance's business, not the door's.
+  const doorFrom = colony.entrances.length;
   let near = 0;
   let ownFighters = 0;
   for (let i = 0; i < world.nextEntityId; i++) {
-    if (ants.alive[i] !== 1 || ants.task[i] !== AntTask.Fighting) continue;
-    const cid = ants.colonyId[i]!;
-    if (cid === own) {
-      ownFighters += 1;
-      continue;
-    }
-    if (cid === NEUTRAL_COLONY_ID || ants.zone[i] !== Zone.Surface) continue;
-    const tx = ants.posX[i]! >> FP_SHIFT;
-    const ty = ants.posY[i]! >> FP_SHIFT;
-    const e = nearestOpenEntrance(colony.entrances, tx, ty, true);
-    if (e === -1) return false;
-    const ent = colony.entrances[e]!;
-    const d = Math.abs(ent.surfaceTileX - tx) + Math.abs(ent.surfaceTileY - ty);
-    if (d <= AI_DEFENCE_DOOR_RADIUS_TILES) near += 1;
+    const where = threatAt(world, colony, i, AI_DEFENCE_DOOR_RADIUS_TILES);
+    if (where === THREAT_OWN_FIGHTER) ownFighters += 1;
+    else if (where >= doorFrom) near += 1;
   }
   return near >= AI_DEFENCE_ALERT_RAIDERS && near * 2 >= ownFighters;
 }
@@ -933,7 +928,8 @@ function rallyOnOwnEntrance(colony: ColonyRecord): NestEntrance | null {
  *     whole army is racing for the enemy queen; calling it back would throw the
  *     invasion away);
  *   - a PROBE is called home: the rally moves to the entrance, and when the threat
- *     is gone this clears it and aiProbeTick re-emits the probe's rally (a probe
+ *     is gone this clears it and aiProbeTick re-emits the probe's rally (once no
+ *     raiders are at the door either) (a probe
  *     that times out meanwhile clears the rally itself; this sets it again next
  *     tick if the raid is still on);
  *   - while defending, runAIController starts no probe and commits no invasion
@@ -948,7 +944,7 @@ function rallyOnOwnEntrance(colony: ColonyRecord): NestEntrance | null {
 export function aiNestDefence(
   world: WorldState,
   colony: ColonyRecord,
-  operationKind: string,
+  operationKind: AIStateRecord['operationKind'],
 ): NestEntrance | null {
   if (world.simVersion < SIM_VERSION_V62_AI_NEST_DEFENCE) return null;
   if (operationKind === 'Invasion') return null;
@@ -1060,7 +1056,8 @@ function aiStateMachineTick_probeEntry(
 }
 
 /**
- * aiProbeTick — runs while state === Probing.
+ * aiProbeTick — runs while state === Probing and operations are not held (#371, V62:
+ * not while defending or with raiders at the door).
  * Re-emit SetRallyPoint only when colony.rallyPoint is null (e.g. first post-load tick
  * if the saved rallyPoint was somehow cleared). Per spec NTH-5: colony.rallyPoint is
  * the derived consequence; aiState.invasionRallyTileX/Y is the sim-state-of-record.

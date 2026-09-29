@@ -2021,6 +2021,32 @@ describe('#371 (V62) — the AI defends its own nest', () => {
     ]);
   });
 
+  it('a probe whose rally is gone gets it back only once the raid is over', () => {
+    const { world, colony } = setup();
+    const rec = createDefaultAIStateRecord(AI);
+    rec.state = 'Probing';
+    rec.operationKind = 'Probe';
+    rec.invasionRallyTileX = 9;
+    rec.invasionRallyTileY = 4;
+    world.aiState.push(rec);
+    colony.rallyPoint = null; // e.g. the tick after a defence clear landed
+    const id = ant(world, FOE, DOOR_X, 10, AI); // ...and the raid is back
+    runAIController(world, AI);
+    // Only the defence rally: no probe rally queued after it to undo it.
+    expect(rallies(world)).toEqual([
+      expect.objectContaining({ type: 'SetRallyPoint', tileX: DOOR_X, tileY: 0 }),
+    ]);
+    // Raiders at the door, not inside, and fewer than the sentries: no rally at
+    // all (sentries fight up top), and still no probe rally while they are there.
+    world.ants.alive[id] = 0;
+    for (let i = 0; i < 3; i++) ant(world, AI, DOOR_X + 1, 1);
+    ant(world, FOE, DOOR_X + 2, 1);
+    ant(world, FOE, DOOR_X - 2, 1);
+    world.commandQueue.length = 0;
+    runAIController(world, AI);
+    expect(rallies(world)).toHaveLength(0);
+  });
+
   it('defends the entrance the raiders are under, and keeps it on a tie', () => {
     const { world, colony } = setup();
     colony.entrances.push({
