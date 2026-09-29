@@ -294,7 +294,9 @@ export function sentryTakesCover(
  * within SENTRY_ALL_CLEAR_RADIUS of the door it would climb out of: two tiles past
  * the radius that sends sentries at the door down, so it comes back out only once
  * the spider could not send it straight back in. Called from the ascent block in
- * tickAntMovement; true means skip this ascent.
+ * tickAntMovement; true means skip this ascent. (#372, V64: an automatic defender
+ * cut off below in a part the breached shaft does not reach waits here too — it has
+ * no orders — where a rally tunnel defender would climb out. Deliberate: CONTEXT.md.)
  */
 export function sentryHoldsBelow(
   world: WorldState,
