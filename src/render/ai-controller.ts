@@ -838,8 +838,9 @@ function threatAt(world: WorldState, colony: ColonyRecord, i: number, radius: nu
 /**
  * One pass over the ants for a raid on `colony` (threatAt, surface raiders counted
  * out to `radius`), shared by every aiNestDefence decision this tick. The
- * per-entrance columns hold the colony's entrances in [0, entrances.length) (at most
- * MAX_ENTRANCES_PER_COLONY); entries past it are stale and never read.
+ * per-entrance columns hold the colony's entrances in [0, entrances.length) (normally
+ * at most MAX_ENTRANCES_PER_COLONY; grown for a longer list); entries past it are
+ * stale and never read.
  */
 interface RaidScan {
   /** Enemy fighters inside the nest. */
@@ -849,10 +850,10 @@ interface RaidScan {
   /** The colony's own fighters at home. */
   home: number;
   /** Per entrance index: 2 per raider inside charged to it, 1 per surface raider. */
-  readonly weight: Int32Array;
+  weight: Int32Array;
   /** Per entrance index: the surface raider nearest it (lowest id on a tie), or -1. */
-  readonly nearest: Int32Array;
-  readonly nearestD: Int32Array;
+  nearest: Int32Array;
+  nearestD: Int32Array;
   /** A surface raider stands within AI_DEFENCE_SALLY_KEEP_TILES of `rally`. */
   nearRally: boolean;
 }
@@ -860,8 +861,9 @@ interface RaidScan {
 // sim-scratch: the one RaidScan every scanRaid call fills. Render-side (no replay or
 // save state): the controller runs synchronously, one colony at a time, scanRaid
 // resets every field and the active per-entrance range before its pass, and each
-// caller reads the result before the next scanRaid call. Sized for the entrance cap,
-// so no AI tick allocates for the scan (#371).
+// caller reads the result before the next scanRaid call. Sized for the entrance cap
+// and grown (once, then reused) for a longer entrance list, so no AI tick allocates
+// for the scan in steady state (#371).
 const RAID_SCAN: RaidScan = {
   inside: 0,
   near: 0,
@@ -872,6 +874,11 @@ const RAID_SCAN: RaidScan = {
   nearRally: false,
 };
 
+/** Test hook: the scratch's per-entrance column (to pin that it is reused). */
+export function raidScanWeightBufferForTests(): Int32Array {
+  return RAID_SCAN.weight;
+}
+
 /** Fills and returns the shared RAID_SCAN; valid until the next scanRaid call. */
 function scanRaid(
   world: WorldState,
@@ -881,20 +888,14 @@ function scanRaid(
 ): RaidScan {
   const ents = colony.entrances;
   const len = ents.length;
-  // The sim caps a colony at MAX_ENTRANCES_PER_COLONY entrances (DesignateEntrance);
-  // a save is not checked for it, so a longer list gets its own columns.
-  const scan: RaidScan =
-    len <= MAX_ENTRANCES_PER_COLONY
-      ? RAID_SCAN
-      : {
-          inside: 0,
-          near: 0,
-          home: 0,
-          weight: new Int32Array(len),
-          nearest: new Int32Array(len),
-          nearestD: new Int32Array(len),
-          nearRally: false,
-        };
+  const scan = RAID_SCAN;
+  // The sim caps a colony at MAX_ENTRANCES_PER_COLONY entrances (DesignateEntrance),
+  // but a save is not checked for it: grow the columns once for a longer list.
+  if (len > scan.weight.length) {
+    scan.weight = new Int32Array(len);
+    scan.nearest = new Int32Array(len);
+    scan.nearestD = new Int32Array(len);
+  }
   scan.inside = 0;
   scan.near = 0;
   scan.home = 0;

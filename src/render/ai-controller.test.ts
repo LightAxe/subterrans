@@ -38,6 +38,7 @@ import {
   AI_DEFENCE_ALERT_RAIDERS,
   AI_DEFENCE_HOLD_RADIUS_TILES,
   AI_DEFENCE_OPS_HOLD_LIMIT_TICKS,
+  raidScanWeightBufferForTests,
   AI_DEFENCE_HOME_RADIUS_TILES,
   AI_DEFENCE_SALLY_KEEP_TILES,
 } from './ai-controller.js';
@@ -2427,6 +2428,12 @@ describe('#371 (V62) — the AI defends its own nest', () => {
     ant(world, FOE, DOOR_X + 81, 1); // two on entrance 14 (index 4, past the cap)
     ant(world, FOE, DOOR_X + 79, 1);
     expect(aiThreatenedEntrance(world, colony)?.entranceId).toBe(14);
+    // The scratch grew once for the longer list and is reused, not reallocated.
+    const grown = raidScanWeightBufferForTests();
+    expect(grown.length).toBeGreaterThanOrEqual(colony.entrances.length);
+    expect(aiThreatenedEntrance(world, colony)?.entranceId).toBe(14);
+    expect(aiNestDefence(world, colony, undefined)?.entranceId).toBe(14);
+    expect(raidScanWeightBufferForTests()).toBe(grown);
   });
 
   it('a raid scan with two entrances: weights, and the sally raider nearest the threatened one (lowest id on a tie)', () => {
