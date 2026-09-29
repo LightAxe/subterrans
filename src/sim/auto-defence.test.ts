@@ -451,6 +451,12 @@ describe('#372 (V64) — fighter-orders: which fighters a probe rally applies to
     updateFightAntTargets(world);
     expect(fighterBarredFromOwnShaft(world, inCohort, colony, a.x, a.y)).toBe(false);
     expect(fighterBarredFromOwnShaft(world, outside, colony, a.x, a.y)).toBe(true);
+    // With an intruder below, that colony defends by its rally, not automatically:
+    // no breach, so no second defended entrance the survey would not cover.
+    spawn(world, E, a.x + 3, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
+    updateFightAntTargets(world);
+    expect(getScratch(world).antTargeting.breachedEntrance.get(P)).toBeUndefined();
+    expect(fighterDefendsTunnels(world, outside)).toBe(false);
   });
 
   it('a non-fighter is never "outside the cohort"', () => {
@@ -487,6 +493,26 @@ describe('#372 (V64) — which entrance is breached', () => {
     spawn(world, E, a.x - 2, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
     updateFightAntTargets(world);
     expect(breached(world)).toBe(a.id);
+  });
+
+  it('stays with the defenders already in: a part of the nest with own fighters below beats a nearer intruder elsewhere', () => {
+    const { world, a, b } = nest(V64, true);
+    // Cut the tunnel between the shafts: two parts, A's and B's.
+    ugSet(world.undergroundGrids[P]!, b.x - 3, TUNNEL_Y, UndergroundTileState.Solid);
+    // An intruder deep in A's part (far from A's shaft), a defender after it, and an
+    // intruder right under B's shaft.
+    spawn(world, E, a.x - 12, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
+    spawn(world, P, a.x - 10, TUNNEL_Y, Zone.Underground);
+    spawn(world, E, b.x, 1, Zone.Underground, { grid: P, speed: 0 });
+    updateFightAntTargets(world);
+    expect(breached(world)).toBe(a.id);
+    // With nobody below yet, the nearer one (B's) would be breached.
+    const w2 = nest(V64, true);
+    ugSet(w2.world.undergroundGrids[P]!, w2.b.x - 3, TUNNEL_Y, UndergroundTileState.Solid);
+    spawn(w2.world, E, w2.a.x - 12, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
+    spawn(w2.world, E, w2.b.x, 1, Zone.Underground, { grid: P, speed: 0 });
+    updateFightAntTargets(w2.world);
+    expect(breached(w2.world)).toBe(w2.b.id);
   });
 
   it('on a tie, the lower entranceId', () => {

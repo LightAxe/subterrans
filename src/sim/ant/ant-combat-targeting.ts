@@ -570,8 +570,8 @@ function rallyDefendedEntrance(world: WorldState, colony: ColonyRecord): Fighter
  * and this is the open entrance its fighters with no orders defend (automatic
  * defence). Null below V64 and while the colony has sent its fighters at the spider
  * (the pass records none then). Read only from step 10c on (the pass recomputes it
- * before anything reads it; nothing between step 10c and step 16 changes the rally,
- * the spider order or an entrance).
+ * before anything reads it; nothing between step 10c and step 16 changes the rally
+ * or the spider order, and step 12 only ever opens entrances, never closes one).
  */
 function autoDefendedEntrance(world: WorldState, colonyId: number): FighterEntrance | null {
   const entranceId = getScratch(world).antTargeting.breachedEntrance.get(colonyId);
@@ -623,9 +623,12 @@ function fighterAutoDefendedEntrance(world: WorldState, id: number): FighterEntr
  * BREACHED entrance, the entrance its fighters with no orders defend. A colony has
  * one while an enemy ant is below ground in its nest, in the part of the nest one
  * of its open entrances' shafts reaches (the reach a tunnel defender of that
- * entrance hunts in). Of those entrances, the breached one is the nearest an
- * intruder (Manhattan from the intruder to the top of the shaft; lower entranceId
- * on a tie) — the way it came in. Only colonies whose rally is not every
+ * entrance hunts in). Of those entrances, the breached one is the one whose reach
+ * holds the most of the colony's own fighters below (so the breach stays with the
+ * defenders already in), then the nearest a reached intruder (Manhattan from the
+ * intruder to the top of the shaft: the way it came in), then the lower
+ * entranceId. Not a colony whose rally is on an own open entrance (it defends by
+ * that rally). Only colonies whose rally is not every
  * fighter's order are surveyed: no rally, or an AI probe's (fighter-orders.ts),
  * and not one sent at the spider. Cleared first, so a colony no longer invaded
  * has none. Nothing below V64.
@@ -644,6 +647,9 @@ function findBreachedEntrances(world: WorldState): void {
     const cid = col.colonyId;
     if (world.spiderPriorityColonyId === cid) continue;
     if (col.rallyPoint != null && !colonyRallyIsProbe(world, col)) continue;
+    // A rally on an own open entrance (a probe's, in a test world) already makes
+    // tunnel defence; one defended entrance per colony keeps the survey single.
+    if (rallyDefendedEntrance(world, col) !== null) continue;
     const grid = world.undergroundGrids[cid];
     if (grid === undefined) continue;
     intruders.length = 0;
@@ -659,73 +665,91 @@ function findBreachedEntrances(world: WorldState): void {
       at.breachReachStamp = 0;
     }
     const ents = col.entrances;
-    // Try the open entrances nearest an intruder first; the first whose shaft
-    // reaches one is the breached entrance. Each round takes the least
-    // (distance, entranceId) above the last one tried (a handful of entrances:
-    // allocation-free, and entranceIds are distinct, so no entrance is tried twice).
-    let lastDist = -1;
-    let lastId = -1;
-    for (;;) {
-      let best: FighterEntrance | null = null;
-      let bestDist = 0;
-      for (let e = 0; e < ents.length; e++) {
-        const ent = ents[e]!;
-        if (!ent.isOpen) continue;
-        const d = nearestIntruderDistance(world, intruders, ent.surfaceTileX);
-        if (d < lastDist || (d === lastDist && ent.entranceId <= lastId)) continue;
-        if (best === null || d < bestDist || (d === bestDist && ent.entranceId < best.entranceId)) {
-          best = ent;
-          bestDist = d;
-        }
-      }
-      if (best === null) break;
-      lastDist = bestDist;
-      lastId = best.entranceId;
+    // Every open entrance whose shaft reaches an intruder is a candidate. Prefer
+    // the one whose reach already holds the most of the colony's own fighters
+    // below (the defenders already in: once they are down after an intruder the
+    // breach stays with them rather than flipping to a nearer intruder in a part
+    // of the nest they cannot get to), then the one nearest a reached intruder,
+    // then the lower entranceId. A handful of entrances, one BFS each.
+    let bestId = -1;
+    let bestOwn = 0;
+    let bestDist = 0;
+    for (let e = 0; e < ents.length; e++) {
+      const ent = ents[e]!;
+      if (!ent.isOpen) continue;
       at.breachReachStamp += 1;
       const stamp = at.breachReachStamp;
-      surveyDefendedNest(world, grid, best, ents, 0, at.breachNoPosts, at.breachReach, stamp);
-      if (anyIntruderReached(world, grid, intruders, at.breachReach, stamp)) {
-        breached.set(cid, best.entranceId);
-        break;
+      surveyDefendedNest(world, grid, ent, ents, 0, at.breachNoPosts, at.breachReach, stamp);
+      const dist = nearestReachedIntruderDistance(
+        world,
+        grid,
+        intruders,
+        at.breachReach,
+        stamp,
+        ent.surfaceTileX,
+      );
+      if (dist < 0) continue;
+      const own = ownFightersReached(world, cid, grid, at.breachReach, stamp);
+      if (
+        bestId < 0 ||
+        own > bestOwn ||
+        (own === bestOwn && (dist < bestDist || (dist === bestDist && ent.entranceId < bestId)))
+      ) {
+        bestId = ent.entranceId;
+        bestOwn = own;
+        bestDist = dist;
       }
     }
+    if (bestId >= 0) breached.set(cid, bestId);
   }
 }
 
 /** The Manhattan distance from the top of the shaft at column `shaftX` (row 0) to
- *  the nearest of `intruders`, in its nest's coordinates. */
-function nearestIntruderDistance(
+ *  the nearest of `intruders` standing on a tile of `grid` stamped `stamp` in
+ *  `reach`, in its nest's coordinates; -1 if none of them does. */
+function nearestReachedIntruderDistance(
   world: WorldState,
+  grid: UndergroundGrid,
   intruders: readonly number[],
+  reach: Int32Array,
+  stamp: number,
   shaftX: number,
 ): number {
   const ants = world.ants;
   let best = -1;
   for (let i = 0; i < intruders.length; i++) {
     const o = intruders[i]!;
-    const d = Math.abs((ants.posX[o]! >> FP_SHIFT) - shaftX) + (ants.posY[o]! >> FP_SHIFT);
+    const tx = ants.posX[o]! >> FP_SHIFT;
+    const ty = ants.posY[o]! >> FP_SHIFT;
+    if (tx < 0 || tx >= grid.width || ty < 0 || ty >= grid.height) continue;
+    if (reach[ty * grid.width + tx] !== stamp) continue;
+    const d = Math.abs(tx - shaftX) + ty;
     if (best < 0 || d < best) best = d;
   }
   return best;
 }
 
-/** Some ant of `intruders` stands on a tile of `grid` stamped `stamp` in `reach`. */
-function anyIntruderReached(
+/** How many of colony `colonyId`'s fighters stand below ground in its own nest on a
+ *  tile of `grid` stamped `stamp` in `reach`. */
+function ownFightersReached(
   world: WorldState,
+  colonyId: number,
   grid: UndergroundGrid,
-  intruders: readonly number[],
   reach: Int32Array,
   stamp: number,
-): boolean {
+): number {
   const ants = world.ants;
-  for (let i = 0; i < intruders.length; i++) {
-    const o = intruders[i]!;
+  let n = 0;
+  for (let o = 0; o < ants.alive.length; o++) {
+    if (ants.alive[o] !== 1 || ants.task[o] !== AntTask.Fighting) continue;
+    if (ants.colonyId[o] !== colonyId || ants.zone[o] !== Zone.Underground) continue;
+    if (ants.currentGridColonyId[o] !== colonyId) continue;
     const tx = ants.posX[o]! >> FP_SHIFT;
     const ty = ants.posY[o]! >> FP_SHIFT;
     if (tx < 0 || tx >= grid.width || ty < 0 || ty >= grid.height) continue;
-    if (reach[ty * grid.width + tx] === stamp) return true;
+    if (reach[ty * grid.width + tx] === stamp) n += 1;
   }
-  return false;
+  return n;
 }
 
 /**

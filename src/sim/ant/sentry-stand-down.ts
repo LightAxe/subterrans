@@ -46,7 +46,10 @@ export function standDownSurplusSentries(world: WorldState, colony: ColonyRecord
   }
   if (surplus <= 0) return;
   // #372 (V64): nor while an enemy ant is below ground in its nest: its sentries
-  // are about to defend it (automatic defence, step 10c).
+  // are about to defend it (automatic defence, step 10c). A live scan, not step
+  // 10c's breach (step 8 runs first and the scratch must not be read before it is
+  // rebuilt), so an intruder no shaft reaches also holds the stand-down: rare, and
+  // keeping a fighter too many is the safe side.
   if (world.simVersion >= SIM_VERSION_V64_AUTO_DEFENCE) {
     for (let o = 0; o < ants.alive.length; o++) {
       if (ants.alive[o] !== 1 || ants.zone[o] !== Zone.Underground) continue;
