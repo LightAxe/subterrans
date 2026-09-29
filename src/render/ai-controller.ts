@@ -150,9 +150,8 @@ export function runAIController(world: WorldState, aiColonyId: ColonyId): void {
   // starts no probe, commits no invasion cohort and calls a probe in flight home (its
   // one rally point is on the raid). With no enemy inside the hold ends after
   // AI_DEFENCE_OPS_HOLD_LIMIT_TICKS; the colony keeps defending but operates again.
-  const raid = { holdOperations: false };
-  const defended = aiNestDefence(world, colony, aiStateRecord, raid);
-  const holdOperations = raid.holdOperations;
+  const defended = aiNestDefence(world, colony, aiStateRecord, RAID_RESULT);
+  const holdOperations = RAID_RESULT.holdOperations;
   if (aiStateRecord !== undefined) {
     const curState = aiStateRecord.state;
     if (curState === 'WarFooting' && !holdOperations) {
@@ -858,6 +857,10 @@ interface RaidScan {
   /** A surface raider stands within AI_DEFENCE_SALLY_KEEP_TILES of `rally`. */
   nearRally: boolean;
 }
+
+// sim-scratch: runAIController's out-parameter for aiNestDefence, reused every call
+// (aiNestDefence overwrites holdOperations first; read right after, same call).
+const RAID_RESULT = { holdOperations: false };
 
 // sim-scratch: the one RaidScan every scanRaid call fills. Render-side (no replay or
 // save state): the controller runs synchronously, one colony at a time, scanRaid
