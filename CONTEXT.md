@@ -103,8 +103,8 @@ the most of the colony's fighters below (the defenders stay with their fight), t
 the one nearest an intruder, then the lower entranceId. Every fighter
 of the colony with **no orders** — its sentries, at any entrance — then defends the
 breached entrance exactly as a **tunnel defender** of it would: it walks there (not
-stopping for enemies on the surface or taking cover from the spider, as a tunnel
-defender does not), goes down and hunts the intruders. (One cut off below in a part
+stopping for enemies on the surface or taking cover from the spider, nor going down
+any other shaft, as a tunnel defender does not), goes down and hunts the intruders. (One cut off below in a part
 the breached shaft does not reach climbs out and walks round, and, having no orders,
 still waits below while the spider is near its door, as a sentry does.) Fighters with orders
 (a rally, a raid, a probe's cohort, the spider order) keep them. Once no intruder is

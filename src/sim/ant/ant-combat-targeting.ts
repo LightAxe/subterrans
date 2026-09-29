@@ -333,10 +333,10 @@ export function fighterBarredFromOwnShaft(
     return false;
   }
   // #372 (V64): a fighter with no orders goes down the breached entrance.
+  // Bound for it, it goes down no other: not even to take cover from the spider
+  // (as a rally tunnel defender does not).
   const auto = fighterAutoDefendedEntrance(world, id);
-  if (auto !== null && auto.surfaceTileX === entranceX && auto.surfaceTileY === entranceY) {
-    return false;
-  }
+  if (auto !== null) return auto.surfaceTileX !== entranceX || auto.surfaceTileY !== entranceY;
   return !sentryTakesCover(world, id, entranceX, entranceY);
 }
 
@@ -676,7 +676,12 @@ function findBreachedEntrances(world: WorldState): void {
     let bestId = -1;
     let bestOwn = 0;
     let bestDist = 0;
-    // Stamps above this one are this colony's surveys in this pass.
+    // Stamps from this one on are this colony's surveys in this pass. (Wrapped
+    // long before an Int32 cell could no longer hold one.)
+    if (at.breachReachStamp >= 0x3fffffff) {
+      at.breachReach.fill(0);
+      at.breachReachStamp = 0;
+    }
     const firstStamp = at.breachReachStamp + 1;
     for (let e = 0; e < ents.length; e++) {
       const ent = ents[e]!;

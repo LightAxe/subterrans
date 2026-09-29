@@ -720,6 +720,32 @@ describe('#372 (V64) — automatic defence through tick()', () => {
     }
   }, 30_000);
 
+  it('on its way to the breached entrance it takes no other shaft, not even from the spider', () => {
+    const { world, a, b } = nest(V64, true);
+    const colony = world.colonies[P]!;
+    // A spider right by entrance B; an automatic defender on B's doorstep; A breached.
+    const spider = createScenario(7, 'Normal').spider!;
+    spider.posX = ((b.x + 1) << FP_SHIFT) + (FP_ONE >> 1);
+    spider.posY = (b.y << FP_SHIFT) + (FP_ONE >> 1);
+    world.spider = spider;
+    const id = spawn(world, P, b.x, b.y, Zone.Surface);
+    spawn(world, E, a.x - 2, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
+    updateFightAntTargets(world);
+    expect(fighterBarredFromOwnShaft(world, id, colony, b.x, b.y)).toBe(true);
+    expect(fighterBarredFromOwnShaft(world, id, colony, a.x, a.y)).toBe(false);
+    // With no intruder it is a sentry again and does take cover down B.
+    const w2 = nest(V64, true);
+    const s2 = createScenario(7, 'Normal').spider!;
+    s2.posX = spider.posX;
+    s2.posY = spider.posY;
+    w2.world.spider = s2;
+    const id2 = spawn(w2.world, P, w2.b.x, w2.b.y, Zone.Surface);
+    updateFightAntTargets(w2.world);
+    expect(fighterBarredFromOwnShaft(w2.world, id2, w2.world.colonies[P]!, w2.b.x, w2.b.y)).toBe(
+      false,
+    );
+  });
+
   it('surplus sentries do not stand down while the nest is invaded (V64), and do at V63', () => {
     for (const version of [V64, V63]) {
       const { world, a, atA } = garrison(version, 5, false);
