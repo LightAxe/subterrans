@@ -599,3 +599,47 @@ describe('#371 (V62) — tunnel defenders spread over the invaders', () => {
     expect(Math.max(...engaged), engaged.join(',')).toBeLessThan(3);
   }, 30_000);
 });
+
+describe('#371 (V62) — in its own nest only fellow fighters hold a duel', () => {
+  it('a defender goes for the invader standing among its own workers, not a farther one', () => {
+    const { world, colony, ids, ent } = rallyOnOwnEntrance(1);
+    const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
+    for (let y = 0; y <= 3; y++) ugSet(grid, ent.x, y, UndergroundTileState.Open);
+    for (let x = ent.x; x <= ent.x + 14; x++) ugSet(grid, x, 3, UndergroundTileState.Open);
+    // A side pocket off the tunnel, three tiles down at column +3.
+    for (let y = 4; y <= 6; y++) ugSet(grid, ent.x + 3, y, UndergroundTileState.Open);
+    colony.digFlowFieldDirty = true;
+    zoneFlips(world, ids, 60);
+    const still = (colonyId: number, x: number, y: number, task: number): number => {
+      const id = allocateEntityId(world);
+      initAnt(world.ants, id, {
+        colonyId,
+        posX: (x << FP_SHIFT) + (FP_ONE >> 1),
+        posY: (y << FP_SHIFT) + (FP_ONE >> 1),
+        task: task as AntTask,
+        subTask: 0,
+        speed: 0,
+        lifespan: WORKER_LIFESPAN_TICKS,
+        zone: Zone.Underground,
+      });
+      world.ants.hp[id] = 1000;
+      world.ants.currentGridColonyId[id] = PLAYER_COLONY_ID;
+      world.colonies[colonyId]!.workers.push(id);
+      return id;
+    };
+    world.colonies[ENEMY_COLONY_ID]!.rallyPoint = { tileX: ent.x, tileY: ent.y };
+    // The near invader (in the pocket) stands on a tile a worker of the nest holds;
+    // the far one stands alone at the end of the tunnel. The worker holds no duel a
+    // defender could add nothing to, so the near one is the defender's.
+    const w = still(PLAYER_COLONY_ID, ent.x + 3, 6, AntTask.Foraging);
+    world.ants.subTask[w] = ForagingSubState.CarryingFood;
+    still(ENEMY_COLONY_ID, ent.x + 3, 6, AntTask.Fighting);
+    still(ENEMY_COLONY_ID, ent.x + 13, 3, AntTask.Fighting);
+    const d = ids[0]!;
+    for (let t = 0; t < 60; t++) tick(world, []);
+    expect([world.ants.posX[d]! >> FP_SHIFT, world.ants.posY[d]! >> FP_SHIFT]).toEqual([
+      ent.x + 3,
+      6,
+    ]);
+  }, 30_000);
+});

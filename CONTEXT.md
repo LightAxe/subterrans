@@ -103,9 +103,11 @@ one walking across the surface to that entrance routes round obstacles, by a fie
 leading to that entrance itself (not the nearest open one: a tunnel defender may go
 down only the entrance it defends). Since **#371 (simVersion V62)** tunnel defenders after
 invaders spread over them — each goes for the nearest invader by path whose tile no
-friend already holds the duel on (the #364 rule invaders use) — instead of stacking on
-the nearest one; and the rule-based AI rallies on its own entrance when enemy fighters
-are in its nest or gathering at its door, and clears the rally when they are gone.
+fellow fighter already holds the duel on (the #364 rule invaders use; the colony's
+queen, brood and workers do not count) — instead of stacking on the nearest one; and
+the rule-based AI rallies on its own entrance when enemy fighters are in its nest or
+a force at least as big as its own fighters is at its door, and clears the rally when
+they are gone.
 _Avoid_: **guard**, **garrison**.
 
 **Nurse**:

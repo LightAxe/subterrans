@@ -1030,15 +1030,16 @@ export function tickAntMovement(
         // toward the invader or post step 10c chose.
         if (ants.targetPosX[id] !== -1) {
           // #371 (V62): after an invader, hunt like an invader does (#364): the
-          // nearest invader by path whose tile no friend already holds the duel
-          // on, so a pack of defenders spreads over the raiders instead of
-          // stacking behind one duel. None reachable: step at 10c's target.
+          // nearest invader by path whose tile no fellow FIGHTER already holds the
+          // duel on (the queen, brood and workers of its own nest do not count),
+          // so a pack of defenders spreads over the raiders instead of stacking
+          // behind one duel. No invader reachable: step at 10c's target.
           let step = NO_FREE_HOSTILE;
           if (
             world.simVersion >= SIM_VERSION_V62_AI_NEST_DEFENCE &&
             defenderChasesInvader(world, id)
           ) {
-            step = invaderHuntStep(world, id, ants.colonyId[id]!, claimsNoTile);
+            step = invaderHuntStep(world, id, ants.colonyId[id]!, claimsNoTile, true);
           }
           if (step === NO_FREE_HOSTILE) step = defenderUndergroundStep(world, id);
           rawDx = unpackStepDx(step) * FP_ONE;
