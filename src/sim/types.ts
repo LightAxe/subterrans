@@ -1329,7 +1329,31 @@ export const SIM_VERSION_V59_INVADER_RETARGET = 59 as const;
  * MIN_ACCEPTED is UNCHANGED (V50).
  */
 export const SIM_VERSION_V60_RAID_ORDERS = 60 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V60_RAID_ORDERS;
+
+/**
+ * #370 (V61) — the rule-based AI places its first FoodStorage chamber without
+ * waiting for a Queen chamber.
+ *
+ * Up to V60 the controller (`aiChamberPlacement`, src/render/ai-controller.ts) held
+ * its first FoodStorage until a Queen chamber was pending (the #33 build order),
+ * and the Queen waits for the bootstrap shaft to reach AI_QUEEN_CHAMBER_DEPTH. A
+ * colony with no FoodStorage has no forage backpressure (V27 is scoped to colonies
+ * that own one), so once its entrance pool filled (~tick 750) every forager parked
+ * holding food (the #27 carrier wait) and none went Idle; auto-dig takes only Idle
+ * workers (D-02), so the shaft was dug only when the queen ate a little headroom
+ * into the pool — the Queen chamber landed ~tick 4 500 and the colony sat on its
+ * three starting workers for ~5 minutes. From V61 the first FoodStorage goes in as
+ * soon as the stores reach AI_FOOD_STORAGE_THRESHOLD, so carriers keep depositing
+ * and a full store idles workers (V27) instead of parking them. The #33 hazard the
+ * Queen-first order guarded against — a shallow first chamber ending the bootstrap
+ * dig — is gone: the bootstrap runs until a Queen chamber is COMPLETED.
+ * Render-side policy: the sim is unchanged; the gate keeps the AI command stream of
+ * a pre-V61 world as it was recorded. No new serialized field, command,
+ * world.rngState draw, entity-ID advance or tick-order change. A V60 save replays
+ * byte-identically. MIN_ACCEPTED is UNCHANGED (V50).
+ */
+export const SIM_VERSION_V61_AI_EARLY_STORAGE = 61 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V61_AI_EARLY_STORAGE;
 
 /**
  * S2 — AI colony state machine states.

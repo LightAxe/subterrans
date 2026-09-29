@@ -5,7 +5,10 @@
 // (GameScene's onBeforeTick calls runAIController only for non-player colonyIds).
 
 import type { WorldState } from '../sim/types.js';
-import { SIM_VERSION_V53_NO_LOOT_WHEN_FULL } from '../sim/types.js';
+import {
+  SIM_VERSION_V53_NO_LOOT_WHEN_FULL,
+  SIM_VERSION_V61_AI_EARLY_STORAGE,
+} from '../sim/types.js';
 import type { ColonyId, ColonyRecord } from '../sim/colony/colony-store.js';
 import type {
   CancelDigMarkCommand,
@@ -569,7 +572,7 @@ export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): voi
   // chamberless fallback bucket, so the AI gate would never fire once the first
   // chamber filled.
   //
-  // Issue #33 — also gate on Queen-completed-or-pending. Pre-fix the FS
+  // Issue #33 (pre-V61 only; see #370 below) — also gate on Queen-completed-or-pending. Pre-fix the FS
   // gate fired on tick 0 (starting food 1280 ≫ threshold=8) and the
   // FS chamber landed at the entrance shaft floor (Y≈1). That single
   // shallow chamber preempted the bootstrap dig (which only ran while
@@ -577,8 +580,8 @@ export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): voi
   // anchor. The Queen-first ordering mirrors a human player's natural
   // build sequence and lets the bootstrap finish digging the entrance
   // shaft before the FS lands on it.
-  // FS uniqueness check: a duplicate-issuance window opens once Queen-pending
-  // exists (the FS gate above is now satisfied) and persists until the
+  // FS uniqueness check: a duplicate-issuance window opens once the gate is
+  // satisfied (Queen-pending before V61; tick 0 from V61) and persists until the
   // first FS PendingChamber transitions to a ChamberRecord. tick.ts dedupes
   // by exact (anchorTileX, anchorTileY) so a second FS at the SAME spot is
   // rejected, but if the BFS picks a DIFFERENT valid anchor on a later
@@ -588,8 +591,17 @@ export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): voi
   // this widened-window race already existed; widening hasChamberOrPending
   // here closes it. This rule places only the FIRST FoodStorage; more come
   // from the #290 D14 rule after the Nursery block below.
+  //
+  // #370 (V61) — the first FoodStorage no longer waits for the Queen. While it
+  // did, a chamberless colony's pool filled (~tick 750), every forager parked
+  // holding food (no V27 backpressure without a FoodStorage, so none went Idle),
+  // auto-dig had no Idle worker, and the bootstrap shaft to the Queen depth crawled
+  // until ~tick 4 500. The #33 reason for the order is gone: the bootstrap above
+  // runs until a Queen chamber is COMPLETED, so a shallow FoodStorage cannot end it.
+  // Pre-V61 worlds keep the Queen-first order (their recorded command stream).
   if (
-    hasChamberOrPending(world, colony, ChamberType.Queen) &&
+    (world.simVersion >= SIM_VERSION_V61_AI_EARLY_STORAGE ||
+      hasChamberOrPending(world, colony, ChamberType.Queen)) &&
     colonyFoodTotal(world, colony) >= AI_FOOD_STORAGE_THRESHOLD &&
     !hasChamberOrPending(world, colony, ChamberType.FoodStorage)
   ) {
@@ -1023,7 +1035,7 @@ function _emitSetRallyPoint(
 /**
  * True when the colony has a chamber of `chamberType`, or a PendingChamber
  * of that type. Used to gate AI placement decisions that need to wait for
- * a specific chamber to be in flight (e.g. issue #33 — FoodStorage waits
+ * a specific chamber to be in flight (e.g. issue #33 — before V61 FoodStorage waits
  * for Queen so the bootstrap dig can finish reaching the deeper Queen
  * preferredDepth before a shallow FS lands and stalls the dig).
  */
@@ -1446,8 +1458,9 @@ function findOpenChamberSpot(
   //
   // Codex P2 follow-up: restrict the gate to Queen. FoodStorage and
   // Nursery use shallower preferredDepth (5 / 7) and don't suffer from
-  // the early-shallow-anchor problem (Queen-first ordering already
-  // ensures the deep dig happens before they're considered). Applying
+  // the early-shallow-anchor problem (a shallow FS/Nursery cannot end the
+  // bootstrap dig, which runs until a Queen chamber is COMPLETED — and from
+  // V61 the first FS is placed at the shaft floor on purpose, #370). Applying
   // the gate to FS/Nursery introduces a hard-fail mode: if valid anchors
   // exist only outside ±tolerance (e.g. the dig has gone deeper than
   // preferredDepth before the gate fires), the chamber would be silently
