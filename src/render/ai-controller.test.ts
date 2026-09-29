@@ -16,8 +16,11 @@ import {
   aiChamberPlacement,
   aiEntranceDesignation,
   AI_DIG_INTERVAL,
+  AI_CHAMBER_INTERVAL,
   AI_DIG_MARK_BUDGET,
   AI_QUEEN_CHAMBER_DEPTH,
+  AI_PLACEMENT_DEPTH_TOLERANCE,
+  aiQueenMinAnchorRow,
   AI_FOOD_STORAGE_THRESHOLD,
   AI_NURSERY_THRESHOLD,
   AI_BEHAVIOR_RATIO,
@@ -50,12 +53,14 @@ import {
   SIM_VERSION_V60_RAID_ORDERS,
   SIM_VERSION_V61_AI_EARLY_STORAGE,
   SIM_VERSION_V62_AI_NEST_DEFENCE,
+  SIM_VERSION_V63_AI_DEEP_QUEEN,
 } from '../sim/types.js';
 import { initAnt } from '../sim/ant/ant-store.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
 import { createUndergroundGrid, ugSet, UndergroundTileState, Zone } from '../sim/terrain.js';
 import { FP_SHIFT } from '../sim/fixed.js';
+import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 import { AntTask, ChamberType } from '../sim/enums.js';
 import type { AIStateRecord, WorldState } from '../sim/types.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
@@ -88,6 +93,8 @@ import {
 
 const GRID_W = 64;
 const GRID_H = 64;
+/** #374 (V63) — the AI's Queen anchor row on the test grid (a third of the way down). */
+const QUEEN_ROW = aiQueenMinAnchorRow(GRID_H, CHAMBER_DIMENSIONS[ChamberType.Queen].height);
 
 /**
  * Build a minimal WorldState with the given tick.
@@ -382,6 +389,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
   describe('aiChamberPlacement', () => {
     it('issues PlaceChamber Queen when no queen chamber exists, using anchorTileX/anchorTileY', () => {
       const world = makeWorld(0);
+      world.simVersion = SIM_VERSION_V62_AI_NEST_DEFENCE; // pre-V63 Queen depth (#374)
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       setQueenPos(world, 0, 10, 10);
@@ -472,19 +480,20 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
     });
 
     it('every PlaceChamber command uses anchorTileX/anchorTileY and issuedAtTick', () => {
-      const world = makeWorld(5);
+      // A chamber-cadence tick (off-cadence ticks return early and issue nothing).
+      const world = makeWorld(AI_CHAMBER_INTERVAL);
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       setQueenPos(world, 0, 10, 10);
       const grid = world.undergroundGrids[2 as ColonyId]!;
-      ugSet(grid, 10, AI_QUEEN_CHAMBER_DEPTH, UndergroundTileState.Open);
+      ugSet(grid, 10, QUEEN_ROW, UndergroundTileState.Open);
       aiChamberPlacement(world, colony);
-      for (const cmd of world.commandQueue) {
-        if (cmd.type === 'PlaceChamber') {
-          expect('anchorTileX' in cmd).toBe(true);
-          expect('anchorTileY' in cmd).toBe(true);
-          expect(cmd.issuedAtTick).toBe(5);
-        }
+      const placed = world.commandQueue.filter((c) => c.type === 'PlaceChamber');
+      expect(placed.length).toBeGreaterThan(0);
+      for (const cmd of placed) {
+        expect('anchorTileX' in cmd).toBe(true);
+        expect('anchorTileY' in cmd).toBe(true);
+        expect(cmd.issuedAtTick).toBe(AI_CHAMBER_INTERVAL);
       }
     });
   });
@@ -841,6 +850,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
 
     it('returns the Open tile nearest to preferredDepth', () => {
       const world = makeWorld(0);
+      world.simVersion = SIM_VERSION_V62_AI_NEST_DEFENCE; // pre-V63 Queen depth (#374)
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       setQueenPos(world, 0, 10, 10);
@@ -867,24 +877,19 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       setQueenPos(world, 0, 10, 10);
       const grid = world.undergroundGrids[2 as ColonyId]!;
       // Open tile at exact preferred depth, but occupied by existing chamber
-      ugSet(grid, 10, AI_QUEEN_CHAMBER_DEPTH, UndergroundTileState.Open);
-      addChamberForTest(
-        world,
-        colony,
-        makeChamber(ChamberType.Nursery, 10, AI_QUEEN_CHAMBER_DEPTH, 1, 1),
-      );
+      ugSet(grid, 10, QUEEN_ROW, UndergroundTileState.Open);
+      addChamberForTest(world, colony, makeChamber(ChamberType.Nursery, 10, QUEEN_ROW, 1, 1));
       // Also provide an alternative open tile
-      ugSet(grid, 12, AI_QUEEN_CHAMBER_DEPTH, UndergroundTileState.Open);
+      ugSet(grid, 12, QUEEN_ROW, UndergroundTileState.Open);
       aiChamberPlacement(world, colony);
       const queenCmd = world.commandQueue.find(
         (c) =>
           c.type === 'PlaceChamber' &&
           (c as { chamberType: number }).chamberType === ChamberType.Queen,
       );
-      // Should NOT place at (10, AI_QUEEN_CHAMBER_DEPTH) — that's occupied
-      if (queenCmd !== undefined) {
-        expect((queenCmd as { anchorTileX: number }).anchorTileX).not.toBe(10);
-      }
+      // Should NOT place at (10, QUEEN_ROW) — that's occupied
+      expect(queenCmd).toBeDefined();
+      expect((queenCmd as { anchorTileX: number }).anchorTileX).not.toBe(10);
     });
 
     it('deterministic: same world + same preferredDepth → same tile', () => {
@@ -895,9 +900,9 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
         setQueenPos(world, 0, 10, 10);
         const grid = world.undergroundGrids[2 as ColonyId]!;
         // Multiple open tiles — tiebreak should be deterministic
-        ugSet(grid, 8, AI_QUEEN_CHAMBER_DEPTH, UndergroundTileState.Open);
-        ugSet(grid, 10, AI_QUEEN_CHAMBER_DEPTH, UndergroundTileState.Open);
-        ugSet(grid, 12, AI_QUEEN_CHAMBER_DEPTH, UndergroundTileState.Open);
+        ugSet(grid, 8, QUEEN_ROW, UndergroundTileState.Open);
+        ugSet(grid, 10, QUEEN_ROW, UndergroundTileState.Open);
+        ugSet(grid, 12, QUEEN_ROW, UndergroundTileState.Open);
         aiChamberPlacement(world, colony);
         const queenCmd = world.commandQueue.find(
           (c) =>
@@ -912,6 +917,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       }
       const run1 = runAndGetQueenAnchor();
       const run2 = runAndGetQueenAnchor();
+      expect(run1).toBeDefined();
       expect(run1).toEqual(run2);
     });
   });
@@ -920,6 +926,143 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
   // Issue #33 — anti-cluster spatial diversity
   // ---------------------------------------------------------------------------
 
+  describe('#374 (V63) — the Queen chamber is at least a third of the way down', () => {
+    /** Queen PlaceChamber anchor issued for `colony`, or undefined. */
+    function queenAnchor(
+      world: WorldState,
+    ): { anchorTileX: number; anchorTileY: number } | undefined {
+      return world.commandQueue.find(
+        (c) =>
+          c.type === 'PlaceChamber' &&
+          (c as { chamberType: number }).chamberType === ChamberType.Queen,
+      ) as { anchorTileX: number; anchorTileY: number } | undefined;
+    }
+    const QUEEN_H = CHAMBER_DIMENSIONS[ChamberType.Queen].height;
+    // The first row at least a third of the way down the 64-row test grid.
+    const THIRD = 22;
+
+    it('aiQueenMinAnchorRow: the first row with 3 × row >= height', () => {
+      expect(aiQueenMinAnchorRow(64, QUEEN_H)).toBe(THIRD); // 21·3 = 63 < 64, 22·3 = 66
+      expect(aiQueenMinAnchorRow(63, QUEEN_H)).toBe(21); // exact third
+      expect(aiQueenMinAnchorRow(65, QUEEN_H)).toBe(22);
+      expect(aiQueenMinAnchorRow(66, QUEEN_H)).toBe(22);
+      expect(aiQueenMinAnchorRow(67, QUEEN_H)).toBe(23);
+      expect(aiQueenMinAnchorRow(128, QUEEN_H)).toBe(43);
+    });
+
+    it('aiQueenMinAnchorRow fallback: a grid too shallow for the footprint below a third uses the deepest row it fits', () => {
+      // height 4: a third is row 2, but a 3-row footprint fits only from row 1.
+      expect(aiQueenMinAnchorRow(4, QUEEN_H)).toBe(1);
+      // (Grids of 3 rows or fewer cannot hold a Queen at all — row 0 is the ceiling.)
+      // height 5: a third is row 2 and 2 + 3 = 5 still fits — no fallback.
+      expect(aiQueenMinAnchorRow(5, QUEEN_H)).toBe(2);
+    });
+
+    it('the V62 anchor band (rows 14..21) no longer places the Queen', () => {
+      for (let y = AI_QUEEN_CHAMBER_DEPTH - AI_PLACEMENT_DEPTH_TOLERANCE; y < THIRD; y++) {
+        const world = makeWorld(0);
+        expect(world.simVersion).toBe(SIM_VERSION_V63_AI_DEEP_QUEEN);
+        const colony = addColony(world, 2 as ColonyId, 0);
+        addUndergroundGrid(world, 2 as ColonyId);
+        setQueenPos(world, 0, 10, 64);
+        ugSet(world.undergroundGrids[2 as ColonyId]!, 10, y, UndergroundTileState.Open);
+        aiChamberPlacement(world, colony);
+        expect(queenAnchor(world), `row ${y}`).toBeUndefined();
+      }
+    });
+
+    it('the same world at V62 places the Queen at row 14 (the gate is what moved it)', () => {
+      const world = makeWorld(0);
+      world.simVersion = SIM_VERSION_V62_AI_NEST_DEFENCE;
+      const colony = addColony(world, 2 as ColonyId, 0);
+      addUndergroundGrid(world, 2 as ColonyId);
+      setQueenPos(world, 0, 10, 64);
+      ugSet(world.undergroundGrids[2 as ColonyId]!, 10, 14, UndergroundTileState.Open);
+      aiChamberPlacement(world, colony);
+      expect(queenAnchor(world)?.anchorTileY).toBe(14);
+    });
+
+    it('a bootstrap shaft reaching a third of the way down places the Queen on that row, not a shallower one', () => {
+      const world = makeWorld(0);
+      const colony = addColony(world, 2 as ColonyId, 0);
+      addUndergroundGrid(world, 2 as ColonyId);
+      setQueenPos(world, 0, 10, 64); // surface queen (pre-descent), as in a real match
+      const grid = world.undergroundGrids[2 as ColonyId]!;
+      for (let y = 0; y <= THIRD; y++) ugSet(grid, 10, y, UndergroundTileState.Open);
+      aiChamberPlacement(world, colony);
+      expect(queenAnchor(world)).toMatchObject({ anchorTileX: 10, anchorTileY: THIRD });
+    });
+
+    it('prefers the third row over deeper candidates, and accepts a deeper one within tolerance when it is all there is', () => {
+      const world = makeWorld(0);
+      const colony = addColony(world, 2 as ColonyId, 0);
+      addUndergroundGrid(world, 2 as ColonyId);
+      setQueenPos(world, 0, 10, 64);
+      const grid = world.undergroundGrids[2 as ColonyId]!;
+      ugSet(grid, 10, THIRD + 3, UndergroundTileState.Open);
+      ugSet(grid, 20, THIRD, UndergroundTileState.Open);
+      aiChamberPlacement(world, colony);
+      expect(queenAnchor(world)?.anchorTileY).toBe(THIRD);
+
+      const world2 = makeWorld(0);
+      const colony2 = addColony(world2, 2 as ColonyId, 0);
+      addUndergroundGrid(world2, 2 as ColonyId);
+      setQueenPos(world2, 0, 10, 64);
+      ugSet(
+        world2.undergroundGrids[2 as ColonyId]!,
+        10,
+        THIRD + AI_PLACEMENT_DEPTH_TOLERANCE,
+        UndergroundTileState.Open,
+      );
+      aiChamberPlacement(world2, colony2);
+      expect(queenAnchor(world2)?.anchorTileY).toBe(THIRD + AI_PLACEMENT_DEPTH_TOLERANCE);
+    });
+
+    it('the FoodStorage (larder) still goes shallow while the Queen waits for the deep row', () => {
+      const world = makeWorld(0);
+      const colony = addColony(world, 2 as ColonyId, 0);
+      addUndergroundGrid(world, 2 as ColonyId);
+      setQueenPos(world, 0, 10, 64);
+      setPoolFoodForTest(world, colony, AI_FOOD_STORAGE_THRESHOLD);
+      const grid = world.undergroundGrids[2 as ColonyId]!;
+      for (let y = 0; y <= 16; y++) ugSet(grid, 10, y, UndergroundTileState.Open);
+      aiChamberPlacement(world, colony);
+      expect(queenAnchor(world)).toBeUndefined();
+      const fs = world.commandQueue.find(
+        (c) =>
+          c.type === 'PlaceChamber' &&
+          (c as { chamberType: number }).chamberType === ChamberType.FoodStorage,
+      ) as { anchorTileY: number } | undefined;
+      expect(fs?.anchorTileY).toBe(5);
+    });
+
+    it('fallback: on a grid too shallow for the footprint below a third, the Queen goes on the deepest row it fits', () => {
+      const world = makeWorld(0);
+      const colony = addColony(world, 2 as ColonyId, 0);
+      // 4 rows: a third is row 2, but a 3-row footprint fits only from row 1.
+      world.undergroundGrids[2 as ColonyId] = createUndergroundGrid(GRID_W, 4);
+      setQueenPos(world, 0, 10, 64);
+      const grid = world.undergroundGrids[2 as ColonyId]!;
+      ugSet(grid, 10, 0, UndergroundTileState.Open);
+      ugSet(grid, 10, 1, UndergroundTileState.Open);
+      aiChamberPlacement(world, colony);
+      expect(queenAnchor(world)?.anchorTileY).toBe(1);
+    });
+
+    it('CLNY-08: the rule is the same for whichever colony the controller drives', () => {
+      for (const cid of [PLAYER_COLONY_ID, ENEMY_COLONY_ID] as ColonyId[]) {
+        const world = makeWorld(0);
+        const colony = addColony(world, cid, 0);
+        addUndergroundGrid(world, cid);
+        setQueenPos(world, 0, 10, 64);
+        const grid = world.undergroundGrids[cid]!;
+        for (let y = 0; y <= THIRD; y++) ugSet(grid, 10, y, UndergroundTileState.Open);
+        aiChamberPlacement(world, colony);
+        expect(queenAnchor(world)?.anchorTileY).toBe(THIRD);
+      }
+    });
+  });
+
   describe('issue #33 — depth gate + spread bias', () => {
     it('depth gate: Queen does NOT place when only shallow Y candidates exist (Δy > tolerance)', () => {
       const world = makeWorld(0);
@@ -927,7 +1070,8 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       addUndergroundGrid(world, 2 as ColonyId);
       setQueenPos(world, 0, 10, 10);
       const grid = world.undergroundGrids[2 as ColonyId]!;
-      // Only shallow tile available (Y=2). |2 - 18| = 16, way outside tolerance=4.
+      // Only shallow tile available (Y=2): above the V63 Queen floor (row 22), and
+      // |2 - 18| = 16 is outside tolerance=4 for the pre-V63 rule too.
       // Pre-issue-#33 the AI placed Queen at the entrance shaft floor; with
       // the gate it must defer until the bootstrap dig has progressed.
       ugSet(grid, 10, 2, UndergroundTileState.Open);
@@ -942,6 +1086,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
 
     it('depth gate: Queen DOES place when a candidate exists within ±tolerance of preferredDepth', () => {
       const world = makeWorld(0);
+      world.simVersion = SIM_VERSION_V62_AI_NEST_DEFENCE; // pre-V63 Queen depth (#374)
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       setQueenPos(world, 0, 10, 10);
@@ -1198,7 +1343,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       setQueenPos(world, 1, 10, 5);
       addUndergroundGrid(world, AI_COLONY_ID);
       const grid = world.undergroundGrids[AI_COLONY_ID]!;
-      ugSet(grid, 10, AI_QUEEN_CHAMBER_DEPTH, UndergroundTileState.Open);
+      ugSet(grid, 10, QUEEN_ROW, UndergroundTileState.Open);
       setPoolFoodForTest(world, aiColony, AI_FOOD_STORAGE_THRESHOLD);
       aiColony.eggCount = AI_NURSERY_THRESHOLD;
       runAIController(world, AI_COLONY_ID);
@@ -1217,7 +1362,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       setQueenPos(world, 0, 10, 5);
       addUndergroundGrid(world, 2 as ColonyId);
       const grid = world.undergroundGrids[2 as ColonyId]!;
-      ugSet(grid, 10, AI_QUEEN_CHAMBER_DEPTH, UndergroundTileState.Open);
+      ugSet(grid, 10, QUEEN_ROW, UndergroundTileState.Open);
 
       // Take snapshot of sim state (excluding commandQueue)
       const beforeTick = world.tick;

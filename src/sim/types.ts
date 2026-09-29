@@ -1386,7 +1386,29 @@ export const SIM_VERSION_V61_AI_EARLY_STORAGE = 61 as const;
  * MIN_ACCEPTED is UNCHANGED (V50).
  */
 export const SIM_VERSION_V62_AI_NEST_DEFENCE = 62 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V62_AI_NEST_DEFENCE;
+
+/**
+ * #374 (V63) — the rule-based AI digs its Queen chamber at least a third of the way
+ * down the underground grid; its first FoodStorage (the larder) stays shallow.
+ *
+ * Up to V62 the controller (`aiChamberPlacement`, src/render/ai-controller.ts)
+ * anchored the Queen chamber near AI_QUEEN_CHAMBER_DEPTH (18) and accepted any
+ * anchor within AI_PLACEMENT_DEPTH_TOLERANCE (4) rows, so it landed as soon as the
+ * bootstrap shaft reached row 14 — a few rows under the larder. A raid that came
+ * for food met the queen first: she is a hostile in reach, so Loot / Deny / Spoil
+ * fought her before taking anything and played like an Assault. From V63 the
+ * Queen anchor row must satisfy `3 × row >= grid height` (row 22 of 64); the
+ * bootstrap shaft simply digs further before the Queen goes in. On a grid too
+ * shallow for the Queen footprint below that row, the floor falls back to the
+ * deepest row the footprint fits (`aiQueenMinAnchorRow`). The policy is the AI
+ * controller's for whatever colony it drives (CLNY-08); a player places their own.
+ * Render-side policy: the sim is unchanged; the gate keeps the AI command stream of
+ * a pre-V63 world as it was recorded. No new serialized field, command,
+ * world.rngState draw, entity-ID advance or tick-order change. A V62 save replays
+ * byte-identically. MIN_ACCEPTED is UNCHANGED (V50).
+ */
+export const SIM_VERSION_V63_AI_DEEP_QUEEN = 63 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V63_AI_DEEP_QUEEN;
 
 /**
  * S2 — AI colony state machine states.
