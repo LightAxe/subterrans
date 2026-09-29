@@ -171,6 +171,24 @@ export function runAIController(world: WorldState, aiColonyId: ColonyId): void {
     if (curState === 'Probing' && !holdOperations) {
       aiProbeTick(world, aiColonyId);
     }
+    // #371 (V62): raiders at the door but no defence rally (the sentries are to
+    // fight them up top): a probe in flight is called home, as a defence calls it.
+    // Clearing its rally makes its fighters sentries again; once the door is clear
+    // aiProbeTick re-emits the probe's rally, and the probe's own timeout still ends
+    // it. (With a defence on, aiNestDefence has already moved the rally home.)
+    if (
+      defended === null &&
+      atDoor &&
+      aiStateRecord.operationKind === 'Probe' &&
+      colony.rallyPoint !== null &&
+      rallyOnOwnEntrance(colony) === null
+    ) {
+      pushCommand(
+        world,
+        { type: 'ClearRallyPoint', colonyId: aiColonyId, issuedAtTick: world.tick },
+        'ai',
+      );
+    }
   }
   // Survival policy (see aiSurvivalMode), decided once per call so the ratio sync
   // and the dig branch below agree. (Shipped at V40; its sticky-version gate was

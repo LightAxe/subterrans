@@ -2021,6 +2021,52 @@ describe('#371 (V62) — the AI defends its own nest', () => {
     ]);
   });
 
+  it('raiders at the door (no defence) call a probe in flight home, and it resumes after', () => {
+    const { world, colony } = setup();
+    const rec = createDefaultAIStateRecord(AI);
+    rec.state = 'Probing';
+    rec.operationKind = 'Probe';
+    rec.invasionRallyTileX = 9;
+    rec.invasionRallyTileY = 4;
+    world.aiState.push(rec);
+    colony.rallyPoint = { tileX: 9, tileY: 4 }; // the probe's rally, far away
+    for (let i = 0; i < 4; i++) ant(world, AI, 12, 4); // its fighters, out on the probe
+    const a = ant(world, FOE, DOOR_X + 2, 1);
+    const b = ant(world, FOE, DOOR_X - 2, 1);
+    // 2 raiders vs 4 fighters: no defence (2 < 4), but at the door (2 * 2 >= 4).
+    expect(aiThreatenedEntrance(world, colony)).toBeNull();
+    expect(aiRaidersAtDoor(world, colony)).toBe(true);
+    runAIController(world, AI);
+    expect(rallies(world)).toEqual([expect.objectContaining({ type: 'ClearRallyPoint' })]);
+    // The clear lands: the fighters are sentries; nothing re-sends them meanwhile.
+    colony.rallyPoint = null;
+    world.commandQueue.length = 0;
+    runAIController(world, AI);
+    expect(rallies(world)).toHaveLength(0);
+    // The raiders are gone: the probe gets its rally back.
+    world.ants.alive[a] = 0;
+    world.ants.alive[b] = 0;
+    runAIController(world, AI);
+    expect(rallies(world)).toEqual([
+      expect.objectContaining({ type: 'SetRallyPoint', tileX: 9, tileY: 4 }),
+    ]);
+  });
+
+  it('a committed invasion is not called home by raiders at the door', () => {
+    const { world, colony } = setup();
+    const rec = createDefaultAIStateRecord(AI);
+    rec.state = 'Invading';
+    rec.operationKind = 'Invasion';
+    world.aiState.push(rec);
+    colony.rallyPoint = { tileX: 5, tileY: 0 };
+    for (let i = 0; i < 4; i++) ant(world, AI, 12, 4);
+    ant(world, FOE, DOOR_X + 2, 1);
+    ant(world, FOE, DOOR_X - 2, 1);
+    expect(aiRaidersAtDoor(world, colony)).toBe(true);
+    runAIController(world, AI);
+    expect(rallies(world)).toHaveLength(0);
+  });
+
   it('a probe whose rally is gone gets it back only once the raid is over', () => {
     const { world, colony } = setup();
     const rec = createDefaultAIStateRecord(AI);
