@@ -666,6 +666,12 @@ export function isOccupancyExempt(
  * With `block` and `claimsNoTile` it also stamps `block` where a LOWER-id friend
  * claims its tile in the occupancy pass (the invader hunt's "cannot pass"). Then
  * tileSaturated answers the rule for any window cell in O(1). Allocation-free.
+ * #371 (V62) — `defenderRule`, for a tunnel defender hunting in its OWN nest, where
+ * the queen, brood, nurses and foragers are its colony's too: a nestmate counts only
+ * if it is a fighter, or has a LOWER id than `id` (it, not `id`, would be paired
+ * there whatever its task — the queen, her colony's lowest id, always is). A
+ * higher-id worker or brood holds no duel `id` could not take over. Its callers
+ * pass it only for a defender, never for an invader.
  */
 export function stampFriendTiles(
   world: WorldState,
@@ -679,6 +685,7 @@ export function stampFriendTiles(
   stamp: number,
   block: Int32Array | null = null,
   claimsNoTile: ((world: WorldState, id: number) => boolean) | null = null,
+  defenderRule = false,
 ): boolean {
   const ants = world.ants;
   const self = ants.colonyId[id]!;
@@ -690,6 +697,7 @@ export function stampFriendTiles(
     if (ants.zone[o] !== Zone.Underground || ants.currentGridColonyId[o] !== gridColonyId) {
       continue;
     }
+    if (defenderRule && o > id && ants.task[o] !== AntTask.Fighting) continue;
     const ox = ants.posX[o]! >> FP_SHIFT;
     const oy = ants.posY[o]! >> FP_SHIFT;
     if (o < id && ox === selfX && oy === selfY) ownHeld = true;

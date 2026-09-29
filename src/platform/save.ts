@@ -778,6 +778,9 @@ interface SerializedAIStateRecord {
   operationStartFighterCount: number;
   operationAttackerDeaths: number;
   operationDefenderDeaths: number;
+  // #371 (V62) — written only when set (a V61-or-older world never sets it, so its
+  // snapshot is unchanged); absent → -1 (no raid).
+  raidSinceTick?: number;
 }
 
 /**
@@ -1274,6 +1277,7 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
       operationStartFighterCount: rec.operationStartFighterCount,
       operationAttackerDeaths: rec.operationAttackerDeaths,
       operationDefenderDeaths: rec.operationDefenderDeaths,
+      ...(rec.raidSinceTick !== -1 ? { raidSinceTick: rec.raidSinceTick } : {}),
     })),
   };
 }
@@ -1629,6 +1633,12 @@ function deserializeAIStateArray(s: SerializedWorldState): AIStateRecord[] {
         typeof r.operationAttackerDeaths === 'number' ? r.operationAttackerDeaths : 0,
       operationDefenderDeaths:
         typeof r.operationDefenderDeaths === 'number' ? r.operationDefenderDeaths : 0,
+      raidSinceTick:
+        typeof r.raidSinceTick === 'number' &&
+        Number.isInteger(r.raidSinceTick) &&
+        r.raidSinceTick >= 0
+          ? r.raidSinceTick
+          : -1,
     });
   }
   return result;

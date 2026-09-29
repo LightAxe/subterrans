@@ -1353,7 +1353,40 @@ export const SIM_VERSION_V60_RAID_ORDERS = 60 as const;
  * byte-identically. MIN_ACCEPTED is UNCHANGED (V50).
  */
 export const SIM_VERSION_V61_AI_EARLY_STORAGE = 61 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V61_AI_EARLY_STORAGE;
+
+/**
+ * #371 (V62) — the rule-based AI defends its own nest, and tunnel defenders spread
+ * over the invaders.
+ *
+ * Up to V61 the controller never rallied on its own entrance, so its fighters
+ * stayed sentries on the surface while raiders walked past them, down the shaft
+ * and to the queen (a 6-fighter Assault won ~240 ticks after the rally). From V62:
+ *   - AI policy (src/render/ai-controller.ts, on the existing SetRallyPoint /
+ *     ClearRallyPoint / SetBehaviorRatio commands, plus the new SetAIRaidClock): a RAID — an enemy fighter in
+ *     the nest, or at least two on the surface near an own open entrance — lasts
+ *     exactly as long as the raiders do (the colony's own numbers never end it).
+ *     Throughout, the colony drafts fighters (AI_DEFENCE_RATIO), starts no probe,
+ *     commits no invasion cohort and calls a probe in flight home (a committed
+ *     invasion keeps its rally) — with no enemy inside, for at most
+ *     AI_DEFENCE_OPS_HOLD_LIMIT_TICKS, timed by AIStateRecord.raidSinceTick. Its rally goes on the threatened entrance (tunnel
+ *     defenders, V44) while raiders are inside or it is not stronger AT HOME
+ *     (fighters in its nest or near its entrances; a probe's fighters away do not
+ *     count), else on the nearest surface raider (a sally). When the raid is over
+ *     the rally is cleared (`aiNestDefence`) and a probe gets its own back.
+ *   - Sim (both colonies alike, CLNY-08): a tunnel defender after an invader moves
+ *     by the #364 saturation-aware hunt (`invaderHuntStep`, where in the
+ *     defender's own nest only a fighter or a lower-id nestmate holds a duel) instead of
+ *     straight at the nearest invader, so a pack of defenders spreads over the
+ *     raiders instead of stacking on one tile, where combat pairs only one of them.
+ *   - Sim: AIStateRecord.raidSinceTick (-1 = none) and the SetAIRaidClock command
+ *     that sets/clears it (no-op below V62). The field is serialized only when set,
+ *     so a V61 world's snapshot is unchanged; an older save loads it as -1.
+ * No world.rngState draw, entity-ID advance or tick-order change (the hunt's buffers
+ * are derived, unserialized scratch). A V61 save replays byte-identically.
+ * MIN_ACCEPTED is UNCHANGED (V50).
+ */
+export const SIM_VERSION_V62_AI_NEST_DEFENCE = 62 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V62_AI_NEST_DEFENCE;
 
 /**
  * S2 — AI colony state machine states.
@@ -1435,6 +1468,14 @@ export interface AIStateRecord {
   operationStartFighterCount: number;
   operationAttackerDeaths: number;
   operationDefenderDeaths: number;
+  /**
+   * #371 (V62) — the tick the current raid on this colony began, -1 when none. Set and
+   * cleared only by the SetAIRaidClock command (the render AI controller's raid
+   * detection), so a tick()-only replay reproduces it; the controller stops holding
+   * operations for a raid with no enemy inside once it has lasted
+   * AI_DEFENCE_OPS_HOLD_LIMIT_TICKS. Serialized only when set (never below V62).
+   */
+  raidSinceTick: number;
 }
 
 export interface WorldState {
@@ -1808,6 +1849,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
       d.operationStartFighterCount = s.operationStartFighterCount;
       d.operationAttackerDeaths = s.operationAttackerDeaths;
       d.operationDefenderDeaths = s.operationDefenderDeaths;
+      d.raidSinceTick = s.raidSinceTick;
     } else {
       // Grow: push a new deep copy.
       dst.aiState.push({
@@ -1829,6 +1871,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
         operationStartFighterCount: s.operationStartFighterCount,
         operationAttackerDeaths: s.operationAttackerDeaths,
         operationDefenderDeaths: s.operationDefenderDeaths,
+        raidSinceTick: s.raidSinceTick,
       });
     }
   }

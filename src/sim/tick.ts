@@ -1,6 +1,11 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V60_RAID_ORDERS } from './types.js';
+import {
+  allocateEntityId,
+  INVALID_ENTITY_ID,
+  SIM_VERSION_V60_RAID_ORDERS,
+  SIM_VERSION_V62_AI_NEST_DEFENCE,
+} from './types.js';
 import { tickSpider } from './spider.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath, checkTiebreaks } from './game-over.js';
@@ -837,6 +842,17 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         if (world.simVersion >= SIM_VERSION_V60_RAID_ORDERS) colony.raidType = RaidType.Loot;
         break;
       }
+      case 'SetAIRaidClock': {
+        // #371 (V62): the AI raid clock (AIStateRecord.raidSinceTick). `raiding` is
+        // validated as a boolean: replayed/saved commands are not schema-checked.
+        if (world.simVersion < SIM_VERSION_V62_AI_NEST_DEFENCE) break;
+        if (typeof cmd.raiding !== 'boolean') break;
+        const raidRec = getAIStateForColony(world, cmd.colonyId);
+        if (raidRec === null) break;
+        if (!cmd.raiding) raidRec.raidSinceTick = -1;
+        else if (raidRec.raidSinceTick === -1) raidRec.raidSinceTick = world.tick;
+        break;
+      }
       case 'StartAIOperation': {
         if (!isTileCoord(cmd.rallyTileX, SURFACE_GRID_WIDTH)) break;
         if (!isTileCoord(cmd.rallyTileY, SURFACE_GRID_HEIGHT)) break;
@@ -892,7 +908,7 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         break;
       }
       default: {
-        // Exhaustive narrowing — SimCommand is a 13-variant union (C1 adds SetColonyAlarm).
+        // Exhaustive narrowing — SimCommand is a 14-variant union (C1 adds SetColonyAlarm, #371 SetAIRaidClock).
         // Silent-drop unknowns per PRD §5. Do NOT throw, do NOT log (wall-clock-adjacent).
         const _exhaustive: never = cmd;
         void _exhaustive;

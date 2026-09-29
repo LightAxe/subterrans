@@ -39,7 +39,11 @@ import {
   surfaceGoalDistance,
 } from '../surface-routing.js';
 import { UndergroundTileState, Zone, ugGet, type UndergroundGrid } from '../terrain.js';
-import { SIM_VERSION_V52_RAIDING, type WorldState } from '../types.js';
+import {
+  SIM_VERSION_V52_RAIDING,
+  SIM_VERSION_V62_AI_NEST_DEFENCE,
+  type WorldState,
+} from '../types.js';
 import {
   pickInvaderUndergroundStep,
   pickNearestHostileUnderground,
@@ -56,6 +60,7 @@ import {
   defenderPassesThroughFriends,
   sentryWalksHome,
   defenderUndergroundStep,
+  defenderChasesInvader,
 } from './ant-combat-targeting.js';
 import {
   chooseExcursionDirection,
@@ -1024,7 +1029,20 @@ export function tickAntMovement(
         // V44 (#325) — a tunnel defender steps through its own tunnels (BFS)
         // toward the invader or post step 10c chose.
         if (ants.targetPosX[id] !== -1) {
-          const step = defenderUndergroundStep(world, id);
+          // #371 (V62): after an invader, hunt like an invader does (#364): the
+          // nearest invader by path whose tile no nestmate already holds the duel on
+          // (a fighter, or any lower-id ant: the queen always pairs first; brood and
+          // higher-id workers do not count), so a pack of defenders spreads over
+          // the raiders instead of stacking behind one duel. No invader reachable:
+          // step at 10c's target.
+          let step = NO_FREE_HOSTILE;
+          if (
+            world.simVersion >= SIM_VERSION_V62_AI_NEST_DEFENCE &&
+            defenderChasesInvader(world, id)
+          ) {
+            step = invaderHuntStep(world, id, ants.colonyId[id]!, claimsNoTile, true);
+          }
+          if (step === NO_FREE_HOSTILE) step = defenderUndergroundStep(world, id);
           rawDx = unpackStepDx(step) * FP_ONE;
           rawDy = unpackStepDy(step) * FP_ONE;
           haveTarget = true;

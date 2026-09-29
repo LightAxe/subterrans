@@ -571,7 +571,16 @@ export function fighterDefendsTunnels(world: WorldState, id: number): boolean {
  * is bumped like any ant.)
  */
 export function defenderPassesThroughFriends(world: WorldState, id: number): boolean {
-  if (!fighterDefendsTunnels(world, id)) return false;
+  return fighterDefendsTunnels(world, id) && defenderOnPostDuty(world, id);
+}
+
+/**
+ * Tunnel defender `id` is about its post this tick: holding it (no target) or
+ * walking to it (`moving` 1, set by routeTunnelDefender). Otherwise step 10c gave it
+ * an invader to chase. The one split behind defenderPassesThroughFriends (post
+ * duty) and defenderChasesInvader (not). Meaningful only when fighterDefendsTunnels.
+ */
+function defenderOnPostDuty(world: WorldState, id: number): boolean {
   if (world.ants.targetPosX[id] === -1) return true;
   const moving = getScratch(world).antTargeting.sentryMoving;
   return id < moving.length && moving[id] === 1;
@@ -588,6 +597,19 @@ export function sentryWalksHome(world: WorldState, id: number): boolean {
   if (!isSentry(world, id)) return false;
   const moving = getScratch(world).antTargeting.sentryMoving;
   return id < moving.length && moving[id] === SENTRY_MOVING_HOME;
+}
+
+/**
+ * #371 (V62) — tunnel defender `id` is after an invader this tick: step 10c gave
+ * it a target (routeTunnelDefender) and it is not walking to its tunnel post
+ * (`moving` 1). Read by step 16, which from V62 moves such a defender by the
+ * saturation-aware hunt (invader-retarget.ts) instead of straight at the nearest
+ * invader, so a pack of defenders spreads over the invaders rather than stacking
+ * on one (combat fights one pair per tile per tick). Same-tick scratch, rebuilt by
+ * every 10c pass.
+ */
+export function defenderChasesInvader(world: WorldState, id: number): boolean {
+  return fighterDefendsTunnels(world, id) && !defenderOnPostDuty(world, id);
 }
 
 /**

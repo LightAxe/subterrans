@@ -234,6 +234,8 @@ describe('SimCommand', () => {
             return `spiderpriority:${cmd.colonyId}:${cmd.isPriority}`;
           case 'SetColonyAlarm':
             return `alarm:${cmd.colonyId}:${cmd.active}`;
+          case 'SetAIRaidClock':
+            return `raidclock:${cmd.colonyId}:${cmd.raiding}`;
           default: {
             // Exhaustive check — TypeScript will error here if a variant is unhandled
             const _exhaustive: never = cmd;

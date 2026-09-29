@@ -28,7 +28,13 @@ import { UndergroundTileState, ugGet } from '../sim/terrain.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
 import type { WorldState } from '../sim/types.js';
-import { SIM_VERSION_V60_RAID_ORDERS, SIM_VERSION_V61_AI_EARLY_STORAGE } from '../sim/types.js';
+import {
+  SIM_VERSION_V60_RAID_ORDERS,
+  SIM_VERSION_V61_AI_EARLY_STORAGE,
+  SIM_VERSION_V62_AI_NEST_DEFENCE,
+} from '../sim/types.js';
+import type { SimCommand } from '../sim/commands.js';
+import { RaidType } from '../sim/enums.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
 import { colonyFoodTotal } from '../sim/food/food-api.js';
 
@@ -408,4 +414,85 @@ describe('#370 — AI opening with a full entrance pool (seed 404 Normal)', () =
     expect(v60.storageAt, JSON.stringify(v60)).toBeNull();
     expect(v60.parkedCarrierTicks, JSON.stringify(v60)).toBeGreaterThan(1000);
   }, 60_000);
+});
+
+// -----------------------------------------------------------------------------
+// #371 (V62) — the playtest's rush: a standard player opening, ratio 4:6 at 5200
+// and an Assault rally on the enemy's entrance at 5800 (repro R2, seed 303). Up to
+// V61 the enemy queen died ~240 ticks later; from V62 the AI defends its nest.
+// -----------------------------------------------------------------------------
+
+function rushCommands(world: WorldState, t: number): SimCommand[] {
+  const P = PLAYER_COLONY_ID;
+  const out: SimCommand[] = [];
+  const at = world.tick;
+  const dig = (x: number, y: number): void => {
+    out.push({ type: 'MarkDigTile', colonyId: P, tileX: x, tileY: y, issuedAtTick: at });
+  };
+  const place = (chamberType: ChamberType, x: number, y: number): void => {
+    out.push({
+      type: 'PlaceChamber',
+      colonyId: P,
+      chamberType,
+      anchorTileX: x,
+      anchorTileY: y,
+      issuedAtTick: at,
+    });
+  };
+  if (t === 0) {
+    for (let y = 2; y <= 8; y++) dig(24, y);
+    place(ChamberType.Queen, 22, 9);
+  }
+  if (t === 300) {
+    for (let x = 25; x <= 30; x++) dig(x, 5);
+    place(ChamberType.Nursery, 31, 4);
+    for (let x = 21; x <= 23; x++) dig(x, 5);
+    place(ChamberType.FoodStorage, 17, 4);
+  }
+  if (t === 1500) place(ChamberType.FoodStorage, 27, 6);
+  if (t === 5200) {
+    out.push({
+      type: 'SetBehaviorRatio',
+      colonyId: P,
+      ratio: { forage: 4, fight: 6 },
+      issuedAtTick: at,
+    });
+  }
+  if (t === 5800) {
+    const door = world.colonies[ENEMY_COLONY_ID]!.entrances.find((e) => e.isOpen)!;
+    out.push({
+      type: 'SetRallyPoint',
+      colonyId: P,
+      tileX: door.surfaceTileX,
+      tileY: door.surfaceTileY,
+      raidType: RaidType.Assault,
+      issuedAtTick: at,
+    });
+  }
+  return out;
+}
+
+/** The tick the enemy queen died (null = alive at `ticks`). */
+function rushTrial(simVersion: number, ticks: number): number | null {
+  const world = createScenario(303, 'Normal');
+  world.simVersion = simVersion;
+  const enemy = world.colonies[ENEMY_COLONY_ID]!;
+  for (let t = 0; t < ticks; t++) {
+    runAIController(world, ENEMY_COLONY_ID);
+    tick(world, [...rushCommands(world, t), ...world.commandQueue.splice(0)]);
+    if (world.ants.alive[enemy.queenEntityId] !== 1) return world.tick;
+  }
+  return null;
+}
+
+describe('#371 — a 6-fighter Assault rush on the AI (seed 303 Normal)', () => {
+  it('V62: the AI defends its nest; the queen outlives the first wave', () => {
+    expect(rushTrial(SIM_VERSION_V62_AI_NEST_DEFENCE, 6600)).toBeNull();
+  }, 90_000);
+
+  it('V61 (pinned): the rush kills the queen within ~300 ticks', () => {
+    const died = rushTrial(SIM_VERSION_V61_AI_EARLY_STORAGE, 6600);
+    expect(died).not.toBeNull();
+    expect(died!).toBeLessThan(6100);
+  }, 90_000);
 });

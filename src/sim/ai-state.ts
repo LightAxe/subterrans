@@ -74,6 +74,7 @@ export function createDefaultAIStateRecord(colonyId: ColonyId): AIStateRecord {
     operationStartFighterCount: 0,
     operationAttackerDeaths: 0,
     operationDefenderDeaths: 0,
+    raidSinceTick: -1,
   };
 }
 
