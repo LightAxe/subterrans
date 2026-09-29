@@ -10,7 +10,9 @@ import {
   recurringCaptionMayEnter,
   captionHoldMs,
   captionTotalMs,
+  yieldedHoldMs,
   CAPTION_HOLD_MS,
+  CAPTION_YIELD_FLOOR_MS,
   type CaptionRequest,
 } from './caption-queue.js';
 
@@ -23,6 +25,19 @@ describe('#372 caption hold', () => {
     const long: CaptionRequest = { ...plain, holdMs: 4000 };
     expect(captionHoldMs(long)).toBe(4000);
     expect(captionTotalMs(long)).toBe(4700);
+  });
+
+  it('a long hold yields to what the readable floor would have left; a default hold never yields', () => {
+    const plain: CaptionRequest = { text: 'a', x: 0, y: 0, source: 'event' };
+    const long: CaptionRequest = { ...plain, holdMs: 4000 };
+    expect(CAPTION_YIELD_FLOOR_MS).toBe(2000);
+    expect(yieldedHoldMs(plain, 0)).toBeNull();
+    expect(yieldedHoldMs({ ...plain, holdMs: CAPTION_HOLD_MS }, 0)).toBeNull();
+    expect(yieldedHoldMs(long, 0)).toBe(CAPTION_YIELD_FLOOR_MS);
+    expect(yieldedHoldMs(long, 300)).toBe(CAPTION_YIELD_FLOOR_MS - 300);
+    expect(yieldedHoldMs(long, 2500)).toBe(0);
+    // A hold between the default and the floor keeps its own length.
+    expect(yieldedHoldMs({ ...plain, holdMs: 1200 }, 0)).toBe(1200);
   });
 });
 

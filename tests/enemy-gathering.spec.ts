@@ -23,6 +23,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { clickCanvasRect, settleToPlaying, waitForUiHook } from './helpers/boot.js';
 import { MINIMAP_RECT, SAVE_PROMPT_CONTINUE_RECT } from './helpers/geometry.js';
 
+const RALLY_TEXT = 'Fighters will converge here.';
 const WARNING =
   'An enemy army is gathering near your east entrance. Train fighters and rally them there.';
 
@@ -36,6 +37,8 @@ const RALLY = { tileX: 37, tileY: 64 };
 
 interface TestHook {
   getCaptionsShown?: () => string[];
+  rallyPlayerAt?: (x: number, y: number) => boolean;
+  getActiveCaption?: () => { text: string; alpha: number } | null;
   isPaused?: () => boolean;
   getTick?: () => number;
   sampleArea?: (x: number, y: number, w: number, h: number) => Promise<number[]>;
@@ -132,28 +135,46 @@ async function seedGatheringSave(page: Page): Promise<void> {
   );
 }
 
+async function bootGatheringSave(page: Page): Promise<void> {
+  await page.goto('/');
+  await waitForUiHook(page);
+  await page.evaluate(() => localStorage.clear());
+  await seedGatheringSave(page);
+  await page.reload();
+  await waitForUiHook(page);
+  await expect
+    .poll(async () => {
+      const ui = await page.evaluate(
+        () => (window as { __phase9_ui?: { bootScreen?: string } }).__phase9_ui?.bootScreen,
+      );
+      return ui ?? '<undefined>';
+    })
+    .toBe('save-prompt');
+  await clickCanvasRect(page, SAVE_PROMPT_CONTINUE_RECT);
+  await settleToPlaying(page);
+}
+
 test.describe('#372 — enemy army gathering', () => {
   test('the minimap shows the army and the warning names the entrance, once', async ({ page }) => {
     test.setTimeout(60_000);
-    await page.goto('/');
-    await waitForUiHook(page);
-    await page.evaluate(() => localStorage.clear());
-    await seedGatheringSave(page);
-    await page.reload();
-    await waitForUiHook(page);
-    await expect
-      .poll(async () => {
-        const ui = await page.evaluate(
-          () => (window as { __phase9_ui?: { bootScreen?: string } }).__phase9_ui?.bootScreen,
-        );
-        return ui ?? '<undefined>';
-      })
-      .toBe('save-prompt');
-    await clickCanvasRect(page, SAVE_PROMPT_CONTINUE_RECT);
-    await settleToPlaying(page);
+    await bootGatheringSave(page);
 
     // The warning shows (after the 2 s dwell) and names the east entrance.
-    await expect.poll(() => captions(page), { timeout: 15_000 }).toContain(WARNING);
+    await expect
+      .poll(() => captions(page), { timeout: 15_000, intervals: [50] })
+      .toContain(WARNING);
+    // It holds long enough to read: still fully shown ~2.8-3.4 s in (the poll
+    // round-trip can lag its start by a few hundred ms). A default caption starts
+    // fading 1.1 s in and a yielded one 2.3 s in; this one holds until 4.3 s.
+    // Nothing else is queued behind it here to cut it short.
+    await page.waitForTimeout(2800);
+    expect(
+      await page.evaluate(
+        () =>
+          (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.getActiveCaption?.() ??
+          null,
+      ),
+    ).toEqual({ text: WARNING, alpha: 1 });
     const box = await page.locator('canvas').first().boundingBox();
     if (!box) throw new Error('no canvas');
     await page.screenshot({
@@ -192,8 +213,9 @@ test.describe('#372 — enemy army gathering', () => {
       clip: { x: box.x + MM.x - 8, y: box.y + MM.y - 8, width: MM.w + 16, height: MM.h + 16 },
     });
 
-    // Once per gathering: the army is still there 4 s later and the warning has
-    // not repeated.
+    // Once per gathering: the army is still there 10 s later — the warning long
+    // since faded and the queue idle, so a re-offered warning would have shown —
+    // and the warning has not repeated.
     const t0 = await page.evaluate(
       () => (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.getTick?.() ?? -1,
     );
@@ -204,10 +226,36 @@ test.describe('#372 — enemy army gathering', () => {
             () =>
               (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.getTick?.() ?? -1,
           ),
-        { timeout: 15_000 },
+        { timeout: 25_000 },
       )
-      .toBeGreaterThan(t0 + 80);
+      .toBeGreaterThan(t0 + 200);
     expect(await armyRed()).toBeGreaterThanOrEqual(9);
     expect((await captions(page)).filter((c) => c === WARNING)).toHaveLength(1);
+  });
+
+  test('the long warning gives way to a caption queued behind it', async ({ page }) => {
+    test.setTimeout(60_000);
+    await bootGatheringSave(page);
+    await expect
+      .poll(() => captions(page), { timeout: 15_000, intervals: [50] })
+      .toContain(WARNING);
+    // A player rally raises the one-shot rally caption, queued behind the warning.
+    // Held back by the full hold it would begin ~4.7 s after the warning did; the
+    // warning gives way (yieldLongCaption) to its 2 s readable floor, so the rally
+    // caption begins ~2.7 s after the warning at the latest (plus a tick drain
+    // and poll latency).
+    const accepted = await page.evaluate(
+      () =>
+        (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.rallyPlayerAt?.(
+          30,
+          70,
+        ) ?? false,
+    );
+    expect(accepted).toBe(true);
+    const t0 = Date.now();
+    await expect
+      .poll(() => captions(page), { timeout: 10_000, intervals: [50] })
+      .toContain(RALLY_TEXT);
+    expect(Date.now() - t0).toBeLessThan(3800);
   });
 });

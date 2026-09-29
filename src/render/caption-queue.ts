@@ -54,6 +54,26 @@ export function captionHoldMs(req: CaptionRequest): number {
   return req.holdMs ?? CAPTION_HOLD_MS;
 }
 
+/**
+ * #372 — the least full-opacity hold (ms) a long-hold caption keeps when it
+ * gives way: enough to read two lines, which the default 800 ms is not.
+ */
+export const CAPTION_YIELD_FLOOR_MS = 2000;
+
+/**
+ * #372 — a long-hold caption (hold > CAPTION_HOLD_MS) gives way once another
+ * caption waits behind it: it keeps only what CAPTION_YIELD_FLOOR_MS would have
+ * left after `heldMs` at full opacity, so what waits (a one-shot, or owed raid
+ * news / the rampage warning, whose owed windows assume short captions) is held
+ * back ~1.2 s longer than behind a default caption, not ~3.2 s. Returns that
+ * remaining hold (ms, >= 0), or null when `req` is not long-hold (never yields).
+ */
+export function yieldedHoldMs(req: CaptionRequest, heldMs: number): number | null {
+  const hold = captionHoldMs(req);
+  if (hold <= CAPTION_HOLD_MS) return null;
+  return Math.max(0, Math.min(hold, CAPTION_YIELD_FLOOR_MS) - heldMs);
+}
+
 /** Total visible lifetime (ms) of `req`: fade-in + hold + fade-out. */
 export function captionTotalMs(req: CaptionRequest): number {
   return CAPTION_FADE_IN_MS + captionHoldMs(req) + CAPTION_FADE_OUT_MS;

@@ -201,6 +201,7 @@ import {
   createRampageCaptionState,
   offerOwedRampageCaption,
   offerRecurringCaption,
+  recurringCaptionStillOwed,
   resetRampageCaptionState,
   routeEventCaption,
 } from './recurring-captions.js';
@@ -316,6 +317,11 @@ interface UIScenePhase9 {
   // recurring captions (raid news, the spider-rampage warning) may enter without
   // taking the slot a one-shot caption would need.
   captionQueueIdle?(): boolean;
+  /** #372 — a long-hold caption (the gathering warning) shortens its hold so a
+   *  caption waiting behind it is not held back (UIScene.yieldLongCaption). */
+  yieldLongCaption?(): void;
+  /** #372 — Dev/E2E-only: the caption on screen and its alpha. */
+  activeCaption?(): { text: string; alpha: number } | null;
 }
 
 // Re-export GamePhase for Plan 07 and other consumers
@@ -379,9 +385,11 @@ declare global {
        *  button deterministically. No-op unless Playing. Dev-build only. */
       forceGameOver(): void;
       /** #290 PR 6 — the text of every caption that began displaying this round,
-       *  oldest first (UIScene.captionsShown). A caption is up for 1.5 s, so a
-       *  spec asserts on the log rather than racing the live Text. Dev-build only. */
+       *  oldest first (UIScene.captionsShown). A caption is up for 1.5 s (a
+       *  long-hold one longer), so a spec asserts on the log rather than racing the live Text. Dev-build only. */
       getCaptionsShown?(): string[];
+      /** #372 — the caption on screen now and its alpha (null: none). Dev-build only. */
+      getActiveCaption?(): { text: string; alpha: number } | null;
       /** #290 PR 6 — issue a player rally on (tileX, tileY) through the exact
        *  enqueue the surface Command tap uses (handleSetRallyPoint): a command, not
        *  a state write, so the drain, the caption hook and the sim all run as for
@@ -672,6 +680,7 @@ export class GameScene extends Phaser.Scene {
       alarmHotkeyAccepts: (): number => this.alarmHotkeyAccepts,
       getTick: (): number => this.world?.tick ?? -1,
       getCaptionsShown: (): string[] => this.getUIScene()?.captionsShown?.() ?? [],
+      getActiveCaption: () => this.getUIScene()?.activeCaption?.() ?? null,
       rallyPlayerAt: (tileX: number, tileY: number): boolean =>
         this.world !== undefined &&
         !handleSetRallyPoint(
@@ -1700,7 +1709,9 @@ export class GameScene extends Phaser.Scene {
     }
 
     // #350 — the spider-rampage warning, owed from its spider_rampage_start until
-    // it shows or goes stale. Offered after the gathering warning: it outranks raid news.
+    // it shows or goes stale. Offered after the gathering warning: it outranks raid
+    // news. (Owed news behind the long gathering warning shortens that warning to
+    // a readable floor, below.)
     if (uiScene) {
       offerOwedRampageCaption(this.rampageCaption, this.world, uiScene, this.layout.w / 2, 60);
     }
@@ -1721,6 +1732,10 @@ export class GameScene extends Phaser.Scene {
       )
     ) {
       markRaidCaptionShown(this.raidCaptions, this.world, raidCaption);
+    } else if (recurringCaptionStillOwed(this.rampageCaption, raidCaption)) {
+      // #372 — news still owed behind a busy queue: a long-hold caption (the
+      // gathering warning) gives way, keeping CAPTION_YIELD_FLOOR_MS to be read.
+      uiScene?.yieldLongCaption?.();
     }
   }
 

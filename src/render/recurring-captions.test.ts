@@ -17,6 +17,7 @@ import {
   noteRampageStart,
   offerOwedRampageCaption,
   offerRecurringCaption,
+  recurringCaptionStillOwed,
   resetRampageCaptionState,
   routeEventCaption,
   type RecurringCaptionSink,
@@ -61,6 +62,16 @@ const at = (
   hungerTicks: number = H0 + Math.max(0, tick - T0),
 ): RampageWorld =>
   ({ tick, spider: state === null ? null : { state, hungerTicks } }) as unknown as RampageWorld;
+
+describe('recurringCaptionStillOwed (#372)', () => {
+  it('true while the rampage warning or an untaken raid caption is owed', () => {
+    const r = createRampageCaptionState();
+    expect(recurringCaptionStillOwed(r, null)).toBe(false);
+    expect(recurringCaptionStillOwed(r, 'raided')).toBe(true);
+    noteRampageStart(r, 10, 100);
+    expect(recurringCaptionStillOwed(r, null)).toBe(true);
+  });
+});
 
 describe('offerRecurringCaption (#350)', () => {
   it('enters an idle queue at once', () => {
