@@ -97,10 +97,13 @@ fighters **tunnel defenders** instead.
 **Automatic defence / breached entrance** (simVersion V64, #372):
 While an enemy ant is below ground in a colony's nest, in the part one of its open
 entrances' shafts reaches, the nest is **breached**; the **breached entrance** is,
-of those entrances, the one nearest an intruder (the way it came in; lower
-entranceId on a tie). Every fighter of the colony with **no orders** — its sentries,
-at any entrance — then defends the breached entrance exactly as a **tunnel defender**
-of it would: it walks there, goes down and hunts the intruders. Fighters with orders
+of those entrances, the one whose reach already holds the most of the colony's
+fighters below (so the breach stays with the defenders already in), then the one
+nearest an intruder (the way it came in), then the lower entranceId. Every fighter
+of the colony with **no orders** — its sentries, at any entrance — then defends the
+breached entrance exactly as a **tunnel defender** of it would: it walks there (not
+stopping for enemies on the surface or taking cover from the spider, as a tunnel
+defender does not), goes down and hunts the intruders. Fighters with orders
 (a rally, a raid, a probe's cohort, the spider order) keep them. Once no intruder is
 left the defenders are sentries again and go back to their posts. The same for
 every colony (CLNY-08), the player's and the AI's alike.
