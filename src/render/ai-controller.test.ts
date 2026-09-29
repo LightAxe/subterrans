@@ -61,7 +61,7 @@ import type { AIStateRecord, WorldState } from '../sim/types.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import { createScenario } from '../sim/scenario.js';
 import { createDefaultAIStateRecord } from '../sim/ai-state.js';
-import { tick } from '../sim/tick.js';
+import { tick, applyCommands } from '../sim/tick.js';
 import { serializeWorldState, deserializeWorldState } from '../platform/save.js';
 import {
   BASE_FOOD_STORAGE_CAPACITY,
@@ -2466,6 +2466,211 @@ describe('#371 (V62) — the AI defends its own nest', () => {
     expect(rallies(world)).toEqual([
       setAt(world.ants.posX[a]! >> FP_SHIFT, world.ants.posY[a]! >> FP_SHIFT),
     ]);
+  });
+
+  // -------------------------------------------------------------------------
+  // Rally-classification audit (Codex, 8 edge cases on #380): every combination
+  // of rally location × AI state × raid, checked against the INTENDED rules, which
+  // are written out here in their own terms (not the implementation's):
+  //   - An operation's own rally — a running probe's target, or the target of a probe
+  //     that has just ended (the sim's clear queued) — is never the defence's: never
+  //     cleared by it, never kept by it, even on an own entrance (corpse food).
+  //   - On the tick after an invasion ends (its clear queued), its rally on the foe's
+  //     entrance is not the defence's. Any other rally on a foreign entrance near home
+  //     (a tile that became an entrance under a sally rally) is, and is cleared; the
+  //     defence never keeps or sends one (a raid order, #352).
+  //   - Any other rally on an own entrance or within the hold radius of one is the
+  //     defence's: cleared when no raid is on (unless a clear is already queued).
+  //   - A committed invasion: no defence at all; a running raid clock is cleared.
+  //   - A raid (fresh, stale, or with an enemy inside): the threat is the entrance;
+  //     operations are held unless the raid is stale with nobody inside. The rally
+  //     goes "below" on the entrance (no fighters at home, or an enemy inside), or,
+  //     sallying (stronger at home), stays on a defence rally off the entrance that a
+  //     raider is by, else goes on the raider nearest the entrance. It is sent only if
+  //     the rally the queue will leave differs — except that a running probe in a
+  //     stale raid keeps (gets back) its own target instead.
+  // -------------------------------------------------------------------------
+  it('Codex P2 on d7c3c95: a probe whose target is on the own entrance keeps its rally over successive controller calls (commands applied), no clear/restore loop', () => {
+    const { world, colony } = setup(5000);
+    const rec = probing(world, colony);
+    rec.invasionRallyTileX = DOOR_X; // corpse food on the entrance tile
+    rec.invasionRallyTileY = 0;
+    colony.rallyPoint = { tileX: DOOR_X, tileY: 0 };
+    for (let t = 0; t < 3; t++) {
+      runAIController(world, AI);
+      expect(rallies(world)).toEqual([]);
+      applyCommands(world, world.commandQueue.splice(0));
+      expect(colony.rallyPoint).toEqual({ tileX: DOOR_X, tileY: 0 });
+    }
+  });
+
+  it('a defence rally left on a tile that became a foreign entrance is never kept by a sally, even with a raider by it', () => {
+    const { world, colony, foe } = setup(5000);
+    foe.entrances = [{ entranceId: 3, surfaceTileX: DOOR_X + 20, surfaceTileY: 0, isOpen: true }];
+    const rec = createDefaultAIStateRecord(AI);
+    rec.state = 'WarFooting';
+    rec.raidSinceTick = 4990;
+    world.aiState.push(rec);
+    colony.rallyPoint = { tileX: DOOR_X + 20, tileY: 0 }; // ours (nothing queued), on FE
+    for (let i = 0; i < 4; i++) ant(world, AI, DOOR_X + 1, 1);
+    ant(world, FOE, DOOR_X + 5, 2); // nearest the entrance
+    ant(world, FOE, DOOR_X - 5, 2);
+    ant(world, FOE, DOOR_X + 21, 1); // by the rally on FE
+    expect(aiNestDefence(world, colony, rec)?.entranceId).toBe(7);
+    expect(rallies(world)).toEqual([setAt(DOOR_X + 5, 2)]);
+  });
+
+  describe('rally classification audit (location × AI state × raid)', () => {
+    type Loc = 'none' | 'ownEntrance' | 'nearOwn' | 'probeTarget' | 'foreignEntrance' | 'far';
+    type St = 'noOp' | 'probe' | 'probeEnded' | 'probeLongEnded' | 'invasion' | 'invasionEnded';
+    type Raid = 'none' | 'fresh' | 'stale' | 'inside';
+    const LOCS: Loc[] = ['none', 'ownEntrance', 'nearOwn', 'probeTarget', 'foreignEntrance', 'far'];
+    const STATES: St[] = [
+      'noOp',
+      'probe',
+      'probeEnded',
+      'probeLongEnded',
+      'invasion',
+      'invasionEnded',
+    ];
+    const RAIDS: Raid[] = ['none', 'fresh', 'stale', 'inside'];
+    const T = 5000;
+    const FE = { tileX: DOOR_X + 20, tileY: 0 }; // the foe's entrance, near the AI's
+    // With the target on the own entrance, `probeTarget` and `ownEntrance` are the
+    // same tile — deliberately, that is the corpse-food case.
+    const TARGETS = {
+      nearHome: { tileX: DOOR_X + 12, tileY: 4 },
+      onOwnEntrance: { tileX: DOOR_X, tileY: 0 }, // Codex P2 on d7c3c95 (corpse food)
+    } as const;
+    type Tile = { tileX: number; tileY: number };
+    const same = (a: Tile | null, b: Tile | null): boolean =>
+      a !== null && b !== null && a.tileX === b.tileX && a.tileY === b.tileY;
+
+    for (const [ptName, PT] of Object.entries(TARGETS)) {
+      const locTile = (loc: Loc): Tile | null =>
+        ({
+          none: null,
+          ownEntrance: { tileX: DOOR_X, tileY: 0 },
+          nearOwn: { tileX: DOOR_X + 10, tileY: 3 },
+          probeTarget: PT,
+          foreignEntrance: FE,
+          far: { tileX: DOOR_X + 60, tileY: 10 },
+        })[loc];
+      for (const st of STATES) {
+        for (const loc of LOCS) {
+          for (const raid of RAIDS) {
+            for (const sally of raid === 'none' ? [false] : [false, true]) {
+              it(`target ${ptName} · ${st} · rally ${loc} · raid ${raid}${sally ? ' · sallying' : ''}`, () => {
+                const { world, colony, foe } = setup(T);
+                foe.entrances = [
+                  { entranceId: 3, surfaceTileX: FE.tileX, surfaceTileY: FE.tileY, isOpen: true },
+                ];
+                const rec = createDefaultAIStateRecord(AI);
+                world.aiState.push(rec);
+                const rally = locTile(loc);
+                colony.rallyPoint = rally === null ? null : { ...rally };
+                let clearQueued = false;
+                if (st === 'probe') {
+                  rec.state = 'Probing';
+                  rec.operationKind = 'Probe';
+                  rec.invasionRallyTileX = PT.tileX;
+                  rec.invasionRallyTileY = PT.tileY;
+                } else if (st === 'probeEnded') {
+                  rec.state = 'WarFooting'; // target kept, the sim's clear queued
+                  rec.invasionRallyTileX = PT.tileX;
+                  rec.invasionRallyTileY = PT.tileY;
+                  clearQueued = true;
+                } else if (st === 'probeLongEnded') {
+                  rec.state = 'WarFooting'; // target still recorded, nothing queued
+                  rec.invasionRallyTileX = PT.tileX;
+                  rec.invasionRallyTileY = PT.tileY;
+                } else if (st === 'invasion') {
+                  rec.state = 'Invading';
+                  rec.operationKind = 'Invasion';
+                  rec.invasionRallyTileX = FE.tileX;
+                  rec.invasionRallyTileY = FE.tileY;
+                } else if (st === 'invasionEnded') {
+                  rec.state = 'Recovery'; // target reset to -1, the sim's clear queued
+                  clearQueued = true;
+                } else {
+                  rec.state = 'WarFooting';
+                }
+                if (clearQueued) {
+                  world.commandQueue.push({
+                    type: 'ClearRallyPoint',
+                    colonyId: AI,
+                    issuedAtTick: T,
+                    origin: 'sim',
+                  });
+                }
+                if (raid !== 'none') {
+                  ant(world, FOE, DOOR_X + 5, 2);
+                  ant(world, FOE, DOOR_X - 5, 2);
+                  rec.raidSinceTick =
+                    raid === 'fresh' ? T - 10 : T - AI_DEFENCE_OPS_HOLD_LIMIT_TICKS;
+                }
+                if (raid === 'inside') ant(world, FOE, DOOR_X, 8, AI);
+                // Sallying: four at home against three surface raiders, one of them by
+                // the near-home rally tiles.
+                const byRally = { tileX: DOOR_X + 10, tileY: 4 };
+                if (sally && raid !== 'none') {
+                  ant(world, FOE, byRally.tileX, byRally.tileY);
+                  for (let i = 0; i < 4; i++) ant(world, AI, DOOR_X + 1, 1);
+                }
+
+                const out = { holdOperations: true };
+                const got = aiNestDefence(world, colony, rec, out);
+                const cmds = world.commandQueue.slice(clearQueued ? 1 : 0);
+
+                // The intended rules.
+                const opRally = (st === 'probe' || st === 'probeEnded') && same(rally, PT);
+                const foreignEntrance = same(rally, FE) && clearQueued;
+                const nearHome =
+                  rally !== null &&
+                  Math.abs(rally.tileX - DOOR_X) + Math.abs(rally.tileY) <=
+                    AI_DEFENCE_HOLD_RADIUS_TILES;
+                const defence = rally !== null && !opRally && !foreignEntrance && nearHome;
+                const after = clearQueued ? null : rally; // the rally the queue will leave
+                if (st === 'invasion') {
+                  expect(got).toBeNull();
+                  expect(out.holdOperations).toBe(false);
+                  expect(cmds).toEqual(
+                    raid === 'none'
+                      ? []
+                      : [expect.objectContaining({ type: 'SetAIRaidClock', raiding: false })],
+                  );
+                  return;
+                }
+                if (raid === 'none') {
+                  expect(got).toBeNull();
+                  expect(out.holdOperations).toBe(false);
+                  expect(cmds).toEqual(defence && !clearQueued ? [clear()] : []);
+                  return;
+                }
+                expect(got?.entranceId).toBe(7);
+                const stale = raid === 'stale';
+                expect(out.holdOperations).toBe(!stale);
+                const entrance = { tileX: DOOR_X, tileY: 0 };
+                const raiderByRally =
+                  rally !== null &&
+                  Math.abs(rally.tileX - byRally.tileX) + Math.abs(rally.tileY - byRally.tileY) <=
+                    AI_DEFENCE_SALLY_KEEP_TILES;
+                const keep = defence && !same(rally, entrance) && !same(rally, FE) && raiderByRally;
+                const want: Tile =
+                  stale && st === 'probe'
+                    ? PT
+                    : sally && raid !== 'inside'
+                      ? keep
+                        ? rally
+                        : { tileX: DOOR_X + 5, tileY: 2 } // nearest the entrance, lowest id
+                      : entrance;
+                expect(cmds).toEqual(same(after, want) ? [] : [setAt(want.tileX, want.tileY)]);
+              });
+            }
+          }
+        }
+      }
+    }
   });
 
   it('a raided colony starts no probe and commits no invasion cohort', () => {

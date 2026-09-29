@@ -740,14 +740,15 @@ export function aiEntranceDesignation(world: WorldState, colony: ColonyRecord): 
 //     and fight (a surface rally chases enemies in sight). So a pair parked by the
 //     door, or a blockade ring, is driven off rather than waited out.
 // Drafting only moves the colony from the first response to the second, never ends
-// the raid. When the raid is over the rally is cleared, and a probe in flight gets
-// its own rally back from aiProbeTick.
+// the raid. When the raid is over the rally is cleared (unless it is already the
+// probe's own, e.g. a target on the entrance), and a probe in flight gets its own
+// rally back from aiProbeTick.
 //
 // Constraints and accepted exposure:
 //   - The AI controller owns its colony's rally: any rally on an own entrance, or
-//     within AI_DEFENCE_HOLD_RADIUS_TILES of one (bar, while a probe runs or on the
-//     tick after an operation ends, the operation's target and any entrance tile),
-//     is read as a defence rally and cleared when no raid is on.
+//     within AI_DEFENCE_HOLD_RADIUS_TILES of one (bar a live or just-ended
+//     operation's own rally; see isDefenceRally), is read as a defence rally and
+//     cleared when no raid is on.
 //     A driver that mixes human or scripted rallies into a runAIController colony
 //     would have them cleared.
 //   - Enemy fighters parked within the threat radius (sentries at an entrance opened
@@ -786,8 +787,8 @@ export const AI_DEFENCE_HOME_RADIUS_TILES = 40 as const;
  * ~900 ticks after the rally — and shorter than AI_INVADING_TIMEOUT_TICKS (1800), so
  * a colony that enters Invading as parked raiders arrive still commits its cohort
  * (600 ticks of its shared pre-cohort + invasion budget left if the raid began as it
- * entered Invading, more if earlier, less if later; one that runs out goes to Recovery, and the next Invading, the clock still running, commits
- * at once). After it, two enemy fighters parked by the door no longer stop probes and
+ * entered Invading, more if earlier, less if later; one that runs out goes to
+ * Recovery, and the next Invading, the clock still running, commits at once). After it, two enemy fighters parked by the door no longer stop probes and
  * invasions; the colony keeps defending (ratio 2:8 included). An enemy inside always
  * holds.
  */
@@ -1034,15 +1035,22 @@ function rallyOnOwnEntrance(colony: ColonyRecord): NestEntrance | null {
 }
 
 /**
- * The colony's rally is a DEFENCE rally (one this policy set): on one of its own
- * entrances, or a sally rally — on the surface within the hold radius of an own
- * entrance — that is not an operation's rally: while a probe runs, or on the tick
- * after an operation ends (its rally still up, the sim's clear queued), a rally on
- * the operation's target (aiState.invasionRallyTile, kept after a probe ends) or on
- * any entrance tile (an ended invasion's is on the enemy's entrance) is not ours, so
- * it is not re-sent as a defence rally. The AI puts a rally there for nothing else,
- * so no memory is needed; the queue and aiState are WorldState, so a save loads to
- * the same decision.
+ * The colony's rally is a DEFENCE rally (one this policy set). In order:
+ *   1. An operation's own rally is never the defence's: the target
+ *      (aiState.invasionRallyTile) of a running probe, or of an operation that has
+ *      just ended (the sim's clear still queued) — even on an own entrance (a probe
+ *      may target food there).
+ *   2. A rally on an own entrance is (the "below" rally).
+ *   3. On the tick after an operation ends (its clear queued), a rally on another
+ *      colony's entrance is not: it is an ended invasion's (its target already
+ *      reset). Any other rally on one — a tile that became an entrance under a sally
+ *      rally — falls to rule 4 and is cleared; the defence never keeps or sends one
+ *      there (it would be a raid on that nest, #352).
+ *   4. Otherwise a rally within the hold radius of an own entrance is (a sally
+ *      rally); anything farther is not.
+ * The AI puts a rally near home for nothing else, so no memory is needed; the queue
+ * and aiState are WorldState, so a save loads to the same decision. The
+ * table-driven audit in ai-controller.test.ts pins every rally × state × raid case.
  */
 function isDefenceRally(
   world: WorldState,
@@ -1051,19 +1059,16 @@ function isDefenceRally(
 ): boolean {
   const rp = colony.rallyPoint;
   if (rp === null) return false;
-  if (rallyOnOwnEntrance(colony) !== null) return true;
-  // An operation's rally: while a probe runs, or on the tick after an operation ends
-  // (its rally still up, the sim's clear queued behind it). Otherwise a rally on the
-  // kept stale target is the AI's own, and gets cleared.
-  const opRally =
-    aiState !== undefined &&
-    (aiState.operationKind === 'Probe' || queuedRally(world, colony) === null);
-  if (opRally && isEntranceTileOfAnyColony(world, rp.tileX, rp.tileY)) return false;
   if (
-    opRally &&
+    aiState !== undefined &&
+    (aiState.operationKind === 'Probe' || queuedRally(world, colony) === null) &&
     aiState.invasionRallyTileX === rp.tileX &&
     aiState.invasionRallyTileY === rp.tileY
   ) {
+    return false;
+  }
+  if (rallyOnOwnEntrance(colony) !== null) return true;
+  if (queuedRally(world, colony) === null && isEntranceTileOfAnyColony(world, rp.tileX, rp.tileY)) {
     return false;
   }
   for (const ent of colony.entrances) {
@@ -1079,9 +1084,9 @@ function isDefenceRally(
  * operations (a raid does, until AI_DEFENCE_OPS_HOLD_LIMIT_TICKS with no enemy inside).
  * A committed INVASION keeps the rally: this does nothing while one runs (the whole
  * army is racing for the enemy queen). A probe in flight is called home: its rally
- * is replaced by the defence rally, and when the raid is over this clears the
- * defence rally and aiProbeTick re-emits the probe's (a tick later: it waits for the
- * clear to land, so the probe's fighters have no rally for that tick — the raid is
+ * is replaced by the defence rally (unless it already is the probe's target), and
+ * when the raid is over this clears the defence rally and aiProbeTick re-emits the
+ * probe's (a tick later: it waits for the clear to land, so the probe's fighters have no rally for that tick — the raid is
  * over, so nothing is left undefended). A probe that ends meanwhile
  * queues its own ClearRallyPoint (advanceAIState, applied next tick ahead of this
  * call's commands): the decision still reads the colony's CURRENT rally, so the raid
