@@ -20,7 +20,12 @@
 // pheromone grids, ant positions, and `fleeShelterUntilTick`. The mill wander is
 // a hash of (tick-bucket ^ antId) — no world.rngState draw.
 
-import { SIM_VERSION_V55_ROUTED_HOMING, type WorldState } from '../types.js';
+import {
+  SIM_VERSION_V55_ROUTED_HOMING,
+  SIM_VERSION_V65_ALARM_INVASION,
+  type WorldState,
+} from '../types.js';
+import { computeNestRetreat, shelterRetreatDir } from '../nest-retreat.js';
 import { isInChamberFootprint, type ColonyId, type ColonyRecord } from '../colony/colony-store.js';
 import { AntTask, ForagingSubState, PheromoneType } from '../enums.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
@@ -495,6 +500,10 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
     // behaviour — see the V42 note in types.ts).
     // #322 (V49) — the alarm musters civilians home instead of freezing them.
     const alarmed = colony.alarmActive === true;
+    // #373 (V65) — an enemy ant is below ground in this colony's nest and it has a
+    // shelterer below: build this tick's retreat field (read here and by step 16).
+    // Always false below V65.
+    const invaded = computeNestRetreat(world, colony);
     const workers = colony.workers;
 
     for (let w = 0; w < workers.length; w++) {
@@ -731,6 +740,29 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
             ants.fleeShelterUntilTick[id] = tick + 1;
           }
         }
+      } else if (invaded && (tileY !== 0 || shelterRetreatDir(world, id) >= 0)) {
+        // #373 (V65) — phase > 0 UNDERGROUND while invaders are in the nest, and
+        // this shelterer is retreating (step 16 walks it to the chamber farthest
+        // from them, nest-retreat.ts shelterRetreatDir) or has retreated below the
+        // shaft-top row: no poke-out, it keeps sheltering until the nest is clear.
+        // A shelterer at the shaft top with nowhere to retreat to keeps the V34
+        // poke-out below (the alarm, if on, still holds it there).
+        if (tick >= phase) ants.fleeShelterUntilTick[id] = tick + SHELTER_COOLDOWN_TICKS;
+      } else if (
+        tick >= phase &&
+        world.simVersion >= SIM_VERSION_V65_ALARM_INVASION &&
+        tileY !== 0
+      ) {
+        // #373 (V65) — the invasion is over and this shelterer retreated: it is
+        // below the shaft-top row (row 0), where a shelterer otherwise always is —
+        // the descent and the alarm's hold both put it there, the shaft top is
+        // occupancy-exempt so nothing shifts it, and row 0 is never dug. The poke-out
+        // below could not let it out (only an ant on row 0 ascends, and it re-arms a
+        // shelterer with no open entrance at its column indefinitely), so it stops
+        // sheltering where it stands, as a worker already deep.
+        ants.fleeShelterUntilTick[id] = -1;
+        ants.targetPosX[id] = -1;
+        ants.targetPosY[id] = -1;
       } else {
         // phase > 0 UNDERGROUND — sheltering at the shaft. "Poke head out" once
         // the cooldown elapses.

@@ -95,6 +95,7 @@ import {
   idleWalksHome,
 } from './idle-reserve.js';
 import { clearRecentTiles, isRecentTile, pushRecentTile } from './ant-store.js';
+import { shelterPassesThroughFriends, shelterRetreatDir } from '../nest-retreat.js';
 import { fighterIsHauling, fighterIsLooting, looterStepDir } from './ant-raid.js';
 import {
   blockaderBarredFromShaft,
@@ -232,7 +233,13 @@ export function tickAntMovement(
     // step 15b clears it (all-clear / safe route) or re-arms it. Sheltering ants
     // hold at the shaft they dove into; held homebound foragers hold on the
     // surface at the danger boundary.
-    if (fleePhase > 0) continue;
+    // #373 (V65): except a shelterer retreating from invaders in its nest, which
+    // takes its retreat step (and nothing else: no dispatch, no zone transition).
+    if (fleePhase > 0) {
+      const retreat = shelterRetreatDir(world, id);
+      if (retreat >= 0) stepShelterRetreat(world, id, retreat);
+      continue;
+    }
 
     // Issue #27 — carrier wait state holds the ant in place until the wake
     // check in tickForagerActions clears the flag (a chamber became
@@ -1906,6 +1913,34 @@ export function tickAntMovement(
   resolveSameColonyOccupancy(world);
 }
 
+/**
+ * #373 (V65) — move shelterer `id` one step of `speed` along retreat direction `d`
+ * (nest-retreat.ts shelterRetreatDir) through its own nest. A cardinal step, so
+ * the underground passability guard reduces to the tile it crosses into: blocked
+ * (a tile dug or marked since the field was built this tick cannot be, but the
+ * guard keeps the step honest) → it stays where it is.
+ */
+function stepShelterRetreat(world: WorldState, id: number, d: number): void {
+  const ants = world.ants;
+  const grid = world.undergroundGrids[ants.currentGridColonyId[id]!];
+  if (grid === undefined) return;
+  const speed = ants.speed[id]!;
+  const prevX = ants.posX[id]!;
+  const prevY = ants.posY[id]!;
+  const posX = prevX + DIR_DX[d]! * speed;
+  const posY = prevY + DIR_DY[d]! * speed;
+  const nx = posX >> FP_SHIFT;
+  const ny = posY >> FP_SHIFT;
+  if (
+    (nx !== prevX >> FP_SHIFT || ny !== prevY >> FP_SHIFT) &&
+    !canEnterUndergroundTile(grid, nx, ny, ants.task[id]! as AntTask)
+  ) {
+    return;
+  }
+  ants.posX[id] = posX;
+  ants.posY[id] = posY;
+}
+
 // ---------------------------------------------------------------------------
 // resolveSameColonyOccupancy — enforce "no two same-colony mobile ants end a
 // tick on the same (zone, tile)" invariant.
@@ -2022,6 +2057,10 @@ function claimsNoTile(world: WorldState, id: number): boolean {
   }
   // #322 (V49): nor does an idle worker mustering home under the alarm.
   if (idleMusterPassesThroughFriends(world, id)) return true;
+  // #373 (V65): nor does a shelterer below ground while its nest is invaded. Bumped
+  // like any ant, one filing down a one-wide shaft or tunnel past a friend standing
+  // still there was pushed back off its tile every tick and never got by.
+  if (shelterPassesThroughFriends(world, id)) return true;
   // V51 (#290 PR 4, D11): nor does a hungry fighter walking home to eat. Bumped
   // like any ant, one leaving a crowded rally stepped onto a tile a fed friend
   // held and was pushed back every tick, until it starved a tile from open ground.

@@ -5,6 +5,7 @@ import {
   INVALID_ENTITY_ID,
   SIM_VERSION_V60_RAID_ORDERS,
   SIM_VERSION_V62_AI_NEST_DEFENCE,
+  SIM_VERSION_V65_ALARM_INVASION,
 } from './types.js';
 import { tickSpider } from './spider.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
@@ -110,7 +111,7 @@ import {
   QUEEN_CHAMBER_TYPES,
 } from './chamber-flow.js';
 import type { ChamberFlowFields } from './chamber-flow.js';
-import { ugGet, ugSet, UndergroundTileState } from './terrain.js';
+import { ugGet, ugSet, UndergroundTileState, Zone } from './terrain.js';
 import { CHAMBER_DIMENSIONS } from './colony/chamber.js';
 import type { PendingChamber } from './colony/chamber.js';
 import type { ColonyId, ColonyRecord } from './colony/colony-store.js';
@@ -1280,6 +1281,13 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // 0 and allocation self-corrects. Accepted: a stricter gate would
     // need to introspect Mark/BeingDug grid state, and the drift is one
     // tick / one slot per dig job.
+    // C1 (V42) — read once: while the alarm sounds this colony reassigns nobody.
+    const alarmRecallActive = colony.alarmActive === true;
+    // #373 (V65) — the ratio always wins: under the alarm this colony still
+    // recruits Idle workers into FIGHTING (sheltering ones too), and into nothing
+    // else. See SIM_VERSION_V65_ALARM_INVASION.
+    const alarmRecruitsFighters =
+      alarmRecallActive && world.simVersion >= SIM_VERSION_V65_ALARM_INVASION;
     const undergroundGrid10a = world.undergroundGrids[colony.colonyId];
     const rawDigDemand =
       undergroundGrid10a !== undefined
@@ -1331,6 +1339,9 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       // scarcity case.
     }
     colony.computedAllocation.dig = digDemand;
+    // #373 (V65) — under the alarm no digger is recruited, so a Mark with no digger
+    // at work must not cost the ratio a fighter (the carve from fight above).
+    if (alarmRecruitsFighters && actualDig === 0) carvedFight = colony.computedAllocation.fight;
     // WR-02: the carve is LOCAL to the eligibles loop. We do NOT mutate
     // `colony.computedAllocation.forage` or `.fight`. The persisted fields
     // remain the step-8 / SetBehaviorRatio result (= targetRatio × worker
@@ -1345,14 +1356,27 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     //     post-excavation for Digging, post-feed for Nursing) describe the action-system transitions
     //     that PUT an ant into AntTask.Idle — NOT sub-state predicates against the current task.
     //     AntTask.Fighting not eligible in Phase 6 — no combat resolution yet (Phase 9 scope).
-    // C1 (V42) — read once: while the alarm sounds this colony reassigns nobody.
-    const alarmRecallActive = colony.alarmActive === true;
     const eligible = getScratch(world).tickIdle;
     eligible.length = 0;
     for (let i = 0; i < colony.workers.length; i++) {
       const id = colony.workers[i]!;
       if (world.ants.alive[id] !== 1) continue;
-      if (world.ants.task[id] !== AntTask.Idle) continue;
+      if (world.ants.task[id] !== AntTask.Idle) {
+        // #373 (V65) — under the alarm an EMPTY forager sheltering below (the
+        // alarm recalls searchers home and holds them at the shaft top) is
+        // recruited like any other worker too: the alarm has stopped its foraging,
+        // so it is a sheltering worker, and only the fighters' demand is met
+        // below. A carrier keeps its load (it banks it and turns Idle first).
+        if (
+          !alarmRecruitsFighters ||
+          world.ants.task[id] !== AntTask.Foraging ||
+          world.ants.foodCarrying[id] !== 0 ||
+          world.ants.fleeShelterUntilTick[id]! <= 0 ||
+          world.ants.zone[id] !== Zone.Underground
+        ) {
+          continue;
+        }
+      }
       // #209 (V34) — skip a reserve worker on a timed flee HOLD
       // (fleeShelterUntilTick > 0). For the Idle workers this step collects that
       // is always an underground shelterer (the surface hold is homebound
@@ -1361,7 +1385,9 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       // resets the timer), so reassigning it to fight/nurse/dig would count it as
       // an active worker that never moves for the whole threat window. Leave it
       // in reserve; it resumes on the all-clear.
-      if (world.ants.fleeShelterUntilTick[id]! > 0) continue;
+      // #373 (V65): under the alarm a shelterer is recruited like any other worker
+      // (only into fighting — below); step 15b ends its shelter the same tick.
+      if (world.ants.fleeShelterUntilTick[id]! > 0 && !alarmRecruitsFighters) continue;
       // C1 (V42) — an alarmed colony recruits NOBODY. The timer check above only
       // covers workers that are ALREADY sheltering, and this step runs at 10a,
       // five steps before tickIdleReserveAndFlee (15b) gets to start them
@@ -1370,7 +1396,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       // never sheltered at all — sounding the alarm with unmet fight demand sent
       // workers OUT instead of pulling them in, and nothing ever recalled them
       // (Codex P1). The alarm is the colony-wide override, so it wins here.
-      if (alarmRecallActive) continue;
+      if (alarmRecallActive && !alarmRecruitsFighters) continue;
       eligible.push(id);
     }
     // Sort ascending by EntityId — "lowest-EntityId first" per PRD §7c (deterministic per SCEN-06).
@@ -1402,6 +1428,13 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // #247 — V27 forage-backpressure unconditional (MIN=V30)
     if (needForage > 0 && colonyForageBackpressure(world, colony)) {
       needForage = 0;
+    }
+    // #373 (V65) — under the alarm only the fighters' demand is met; the civilian
+    // roles wait for the all-clear (the alarm governs the civilians left).
+    if (alarmRecruitsFighters) {
+      needForage = 0;
+      needDig = 0;
+      needNurse = 0;
     }
 
     for (let i = 0; i < eligible.length; i++) {
@@ -1435,6 +1468,12 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       else if (oldTask === AntTask.Nursing) actualNurse -= 1;
       else actualIdle -= 1;
 
+      // #373 (V65): a recruited forager's leash wave, parked by the alarm recall
+      // (#322, -(wave + 1)), is restored as the recall itself would on reaching
+      // home, so a later search starts from it.
+      if (oldTask === AntTask.Foraging && world.ants.searchWave[id]! < 0) {
+        world.ants.searchWave[id] = -world.ants.searchWave[id]! - 1;
+      }
       world.ants.task[id] = newTask;
       world.ants.subTask[id] = newSubTask;
 
