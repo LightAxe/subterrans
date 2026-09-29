@@ -292,9 +292,9 @@ describe('#372 (V64) — state-space audit: fighter orders × invasion × entran
         it(`${o} / ${inv} / ${where}`, () => {
           const v63 = runCase(V63, o, inv, where);
           const v64 = runCase(V64, o, inv, where);
-          // The breached entrance: the open one nearest an intruder (A for nearA and
-          // for nearAandB, whose A-side intruder is the nearer; B for nearB).
-          const breachedIsA = inv !== 'nearB';
+          // The breached entrance: the nest is one connected part, so its first open
+          // entrance, A, wherever the intruders are.
+          const breachedIsA = true; // one connected nest: its first open entrance
           if (autoApplies(o, inv) && where === 'foreign') {
             // In the enemy's nest it climbs out first, as at V63 (recalled: no rally
             // holds it there); once out it may go down the breached shaft.
@@ -474,21 +474,41 @@ describe('#372 (V64) — which entrance is breached', () => {
   const breached = (world: WorldState): number | undefined =>
     getScratch(world).antTargeting.breachedEntrance.get(P);
 
-  it('the open entrance nearest an intruder', () => {
-    const { world, a, b } = nest(V64, true);
-    spawn(world, E, b.x + 1, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
-    updateFightAntTargets(world);
-    expect(breached(world)).toBe(b.id);
-    const w2 = nest(V64, true);
-    spawn(w2.world, E, w2.a.x + 1, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
-    updateFightAntTargets(w2.world);
-    expect(breached(w2.world)).toBe(a.id);
+  it('within one connected nest, its first open entrance, wherever the intruder is', () => {
+    for (const x of [-2, 3, B_OFFSET >> 1, B_OFFSET - 1, B_OFFSET + 3]) {
+      const { world, a } = nest(V64, true);
+      spawn(world, E, a.x + x, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
+      updateFightAntTargets(world);
+      expect(breached(world), `intruder at +${x}`).toBe(a.id);
+    }
+  });
+
+  it('an intruder walking between the two shafts does not move the breach', () => {
+    const { world, a } = nest(V64, true);
+    const inv = spawn(world, E, a.x, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
+    for (let x = a.x - 2; x <= a.x + B_OFFSET + 3; x++) {
+      world.ants.posX[inv] = (x << FP_SHIFT) + (FP_ONE >> 1);
+      updateFightAntTargets(world);
+      expect(breached(world), `intruder at ${x}`).toBe(a.id);
+    }
+  });
+
+  it('between unconnected parts, the one whose shaft is nearest an intruder', () => {
+    for (const nearB of [true, false]) {
+      const { world, a, b } = nest(V64, true);
+      ugSet(world.undergroundGrids[P]!, b.x - 3, TUNNEL_Y, UndergroundTileState.Solid);
+      spawn(world, E, a.x - (nearB ? 8 : 1), TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
+      spawn(world, E, b.x + (nearB ? 1 : 8), TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
+      updateFightAntTargets(world);
+      expect(breached(world)).toBe(nearB ? b.id : a.id);
+    }
   });
 
   it('measured from each intruder, whatever their ids', () => {
-    const { world, a } = nest(V64, true);
-    // The lower-id intruder is by B but farther from its shaft (6) than the other is
-    // from A's (5): A is breached.
+    const { world, a, b } = nest(V64, true);
+    ugSet(world.undergroundGrids[P]!, b.x - 3, TUNNEL_Y, UndergroundTileState.Solid);
+    // Two unconnected parts. The lower-id intruder is in B's part but farther from
+    // its shaft (6) than the other is from A's (5): A is breached.
     spawn(world, E, a.x + B_OFFSET + 3, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
     spawn(world, E, a.x - 2, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
     updateFightAntTargets(world);
@@ -524,9 +544,11 @@ describe('#372 (V64) — which entrance is breached', () => {
   });
 
   it('on a tie, the lower entranceId', () => {
-    const { world, a } = nest(V64, true);
-    // Halfway between the shafts: equally near both.
-    spawn(world, E, a.x + (B_OFFSET >> 1), TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
+    const { world, a, b } = nest(V64, true);
+    ugSet(world.undergroundGrids[P]!, b.x - 3, TUNNEL_Y, UndergroundTileState.Solid);
+    // Unconnected parts, an intruder in each, equally near its own shaft.
+    spawn(world, E, b.x + 2, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
+    spawn(world, E, a.x - 2, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
     updateFightAntTargets(world);
     expect(breached(world)).toBe(a.id); // A's id is below B's (B was allocated later)
   });
@@ -661,22 +683,23 @@ describe('#372 (V64) — automatic defence through tick()', () => {
 
   it('sentries at the other entrance walk over and go down the breached one', () => {
     const { world, a, b, atA, atB } = garrison(V64, 2, true);
-    // An intruder just below B: B is breached; A's sentries come round to it.
+    // One connected nest: A is breached even with the intruder just below B, so
+    // B's sentries come round to A.
     const invaders = invade(world, a, [b.x + 3]);
     world.ants.hp[invaders[0]!] = 100_000; // outlasts the walk: we watch where they go in
     const entered = new Map<number, number>();
     for (let t = 0; t < 250; t++) {
-      const before = atA.map((id) => world.ants.zone[id]);
+      const before = atB.map((id) => world.ants.zone[id]);
       tick(world, []);
-      atA.forEach((id, k) => {
+      atB.forEach((id, k) => {
         if (before[k] === Zone.Surface && world.ants.zone[id] === Zone.Underground) {
           entered.set(id, world.ants.posX[id]! >> FP_SHIFT);
         }
       });
     }
-    expect([...entered.keys()].sort()).toEqual([...atA].sort());
-    expect([...entered.values()].every((x) => x === b.x)).toBe(true);
-    expect(atB.every((id) => world.ants.zone[id] === Zone.Underground)).toBe(true);
+    expect([...entered.keys()].sort()).toEqual([...atB].sort());
+    expect([...entered.values()].every((x) => x === a.x)).toBe(true);
+    expect(atA.every((id) => world.ants.zone[id] === Zone.Underground)).toBe(true);
   }, 30_000);
 
   it('a colony-wide rally elsewhere keeps its fighters there: no automatic defence', () => {

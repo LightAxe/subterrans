@@ -623,11 +623,12 @@ function fighterAutoDefendedEntrance(world: WorldState, id: number): FighterEntr
  * BREACHED entrance, the entrance its fighters with no orders defend. A colony has
  * one while an enemy ant is below ground in its nest, in the part of the nest one
  * of its open entrances' shafts reaches (the reach a tunnel defender of that
- * entrance hunts in). Of those entrances, the breached one is the one whose reach
- * holds the most of the colony's own fighters below (so the breach stays with the
- * defenders already in), then the nearest a reached intruder (Manhattan from the
- * intruder to the top of the shaft: the way it came in), then the lower
- * entranceId. Not a colony whose rally is on an own open entrance (it defends by
+ * entrance hunts in). Within one connected part of the nest the breached entrance
+ * is that part's first open entrance (colony.entrances order), so it does not move
+ * as intruders wander; between unconnected parts with intruders, the one holding
+ * the most of the colony's own fighters below (so the breach stays with the
+ * defenders already in), then the one whose shaft is nearest a reached intruder
+ * (Manhattan to the top of the shaft), then the lower entranceId. Not a colony whose rally is on an own open entrance (it defends by
  * that rally). Only colonies whose rally is not every
  * fighter's order are surveyed: no rally, or an AI probe's (fighter-orders.ts),
  * and not one sent at the spider. Cleared first, so a colony no longer invaded
@@ -665,18 +666,28 @@ function findBreachedEntrances(world: WorldState): void {
       at.breachReachStamp = 0;
     }
     const ents = col.entrances;
-    // Every open entrance whose shaft reaches an intruder is a candidate. Prefer
-    // the one whose reach already holds the most of the colony's own fighters
-    // below (the defenders already in: once they are down after an intruder the
-    // breach stays with them rather than flipping to a nearer intruder in a part
-    // of the nest they cannot get to), then the one nearest a reached intruder,
-    // then the lower entranceId. A handful of entrances, one BFS each.
+    // Every part of the nest (below) with an intruder in it is a candidate, through
+    // its first open entrance. Prefer the part that already holds the most of the
+    // colony's own fighters below (the defenders already in: once they are down
+    // after an intruder the breach stays with them rather than flipping to a
+    // nearer intruder in a part they cannot get to), then the one whose shaft is
+    // nearest a reached intruder, then the lower entranceId. A handful of
+    // entrances, at most one BFS each.
     let bestId = -1;
     let bestOwn = 0;
     let bestDist = 0;
+    // Stamps above this one are this colony's surveys in this pass.
+    const firstStamp = at.breachReachStamp + 1;
     for (let e = 0; e < ents.length; e++) {
       const ent = ents[e]!;
       if (!ent.isOpen) continue;
+      // A shaft whose top an earlier entrance's survey reached opens into the same
+      // part of the nest: that earlier entrance already stands for it. So within
+      // one connected nest the breach is its lowest-id open entrance (by list
+      // order), wherever the intruders wander, and the choice between entrances
+      // only ever moves between unconnected parts.
+      const x0 = ent.surfaceTileX;
+      if (x0 >= 0 && x0 < grid.width && at.breachReach[x0]! >= firstStamp) continue;
       at.breachReachStamp += 1;
       const stamp = at.breachReachStamp;
       surveyDefendedNest(world, grid, ent, ents, 0, at.breachNoPosts, at.breachReach, stamp);

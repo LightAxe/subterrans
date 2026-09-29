@@ -1414,8 +1414,10 @@ export const SIM_VERSION_V63_AI_DEEP_QUEEN = 63 as const;
  *
  *   - Automatic defence (sim, every colony alike — CLNY-08): while an enemy ant is
  *     below ground in a colony's nest, in the part joined to one of its open
- *     entrances (the **breached entrance**: of the entrances whose shaft reaches an
- *     intruder, the one nearest an intruder), that colony's fighters with NO orders — the
+ *     entrances (the **breached entrance**: the first open entrance of the part of
+ *     the nest the intruders are in; between unconnected parts, the one holding the
+ *     most own fighters below, then the one nearest an intruder; none while the
+ *     colony's rally is on an own open entrance), that colony's fighters with NO orders — the
  *     sentries — defend it as tunnel defenders do (V44): they go down the breached
  *     entrance and hunt the intruders (the V62 spread). Fighters with orders keep
  *     them. Once no intruder is left they are sentries again and go back to their
