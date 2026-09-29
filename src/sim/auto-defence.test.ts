@@ -294,18 +294,15 @@ describe('#372 (V64) — state-space audit: fighter orders × invasion × entran
           const v64 = runCase(V64, o, inv, where);
           // The breached entrance: the nest is one connected part, so its first open
           // entrance, A, wherever the intruders are.
-          const breachedIsA = true; // one connected nest: its first open entrance
           if (autoApplies(o, inv) && where === 'foreign') {
             // In the enemy's nest it climbs out first, as at V63 (recalled: no rally
             // holds it there); once out it may go down the breached shaft.
             const expected = { ...(o === 'probeOut' ? runCase(V63, 'none', inv, where) : v63) };
-            if (breachedIsA) expected.barredA = false;
-            else expected.barredB = false;
+            expected.barredA = false;
             expect(v64).toEqual(expected);
             expect(v64.recalled).toBe(true);
           } else if (autoApplies(o, inv)) {
             const { a, b } = nest(V64, true);
-            const door = breachedIsA ? a : b;
             if (where === 'below') {
               // Below in the nest: a tunnel defender, after the nearest intruder.
               expect(v64.defends).toBe(true);
@@ -315,12 +312,12 @@ describe('#372 (V64) — state-space audit: fighter orders × invasion × entran
             } else {
               // On the surface: to the breached entrance, by the routed walk (V57).
               expect(v64.defends).toBe(false);
-              expect(v64.target).toBe(`${door.x},${door.y}`);
+              expect(v64.target).toBe(`${a.x},${a.y}`);
               expect(v64.moving).toBe(4); // DEFENDER_MOVING_TO_ENTRANCE
             }
             // It may go down the breached shaft, and no other.
-            expect(breachedIsA ? v64.barredA : v64.barredB).toBe(false);
-            expect(breachedIsA ? v64.barredB : v64.barredA).toBe(true);
+            expect(v64.barredA).toBe(false);
+            expect(v64.barredB).toBe(true);
             expect(v64.recalled).toBe(o === 'none' || o === 'probeOut');
             // And at V63 it did not: a sentry (or the probe's follower).
             expect(v63.defends).toBe(false);
@@ -507,12 +504,14 @@ describe('#372 (V64) — which entrance is breached', () => {
   it('measured from each intruder, whatever their ids', () => {
     const { world, a, b } = nest(V64, true);
     ugSet(world.undergroundGrids[P]!, b.x - 3, TUNNEL_Y, UndergroundTileState.Solid);
-    // Two unconnected parts. The lower-id intruder is in B's part but farther from
-    // its shaft (6) than the other is from A's (5): A is breached.
-    spawn(world, E, a.x + B_OFFSET + 3, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
+    // Two unconnected parts. In B's part the lower-id intruder is far from its
+    // shaft (9) and a higher-id one near (4); in A's part one at 5. B's nearest (4)
+    // wins, so B is breached — read from its first intruder alone, A would be.
+    spawn(world, E, b.x + 6, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
     spawn(world, E, a.x - 2, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
+    spawn(world, E, b.x + 1, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
     updateFightAntTargets(world);
-    expect(breached(world)).toBe(a.id);
+    expect(breached(world)).toBe(b.id);
   });
 
   it('stays with the defenders already in: a part of the nest with own fighters below beats a nearer intruder elsewhere', () => {

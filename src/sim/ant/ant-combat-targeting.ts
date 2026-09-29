@@ -778,13 +778,22 @@ function ownFightersReached(
  * reach step 10c's survey stamped this tick (surveyDefendedNests).
  */
 export function fighterDefendsTunnels(world: WorldState, id: number): boolean {
+  return defendsTunnelsAt(world, id, fighterDefendedEntrance(world, id));
+}
+
+/** fighterDefendsTunnels with fighter `id`'s defended entrance already in hand
+ *  (`defended` = fighterDefendedEntrance(world, id)), so step 10c computes it once. */
+function defendsTunnelsAt(
+  world: WorldState,
+  id: number,
+  defended: FighterEntrance | null,
+): boolean {
   const ants = world.ants;
   if (ants.task[id] !== AntTask.Fighting || ants.zone[id] !== Zone.Underground) return false;
   // V52 (#290 PR 5): a raider hauling loot home goes on to deposit it.
   if (ants.subTask[id] === FightingSubState.Hauling) return false;
   const colonyId = ants.colonyId[id]!;
   if (ants.currentGridColonyId[id] !== colonyId) return false;
-  const defended = fighterDefendedEntrance(world, id);
   if (defended === null) return false;
   // Only where the defended shaft reaches (this tick's survey, step 10c): a
   // fighter in a part of the nest not joined to it climbs out and walks round.
@@ -1768,6 +1777,8 @@ export function updateFightAntTargets(world: WorldState): void {
     // rally on that own entrance), else none (a sentry). Below V64 the colony's rally.
     const answersRally = fighterAnswersRally(world, id);
     const autoDefended = answersRally ? null : fighterAutoDefendedEntrance(world, id);
+    // The entrance it defends as a tunnel defender (fighterDefendedEntrance), once.
+    const defended = answersRally ? rallyDefendedEntrance(world, colony) : autoDefended;
     const hasRally = answersRally || autoDefended !== null;
     const rallyX =
       autoDefended !== null
@@ -1808,15 +1819,8 @@ export function updateFightAntTargets(world: WorldState): void {
     // V44 (#325) — below ground in its own nest, where its rally entrance's shaft
     // reaches: a tunnel defender. (On the surface, or cut off below, it walks to
     // that entrance and goes down, by the routing below.)
-    if (fighterDefendsTunnels(world, id)) {
-      routeTunnelDefender(
-        world,
-        id,
-        fighterDefendedEntrance(world, id)!,
-        sentrySlot[id]!,
-        postsByEntrance,
-        sentryMoving,
-      );
+    if (defendsTunnelsAt(world, id, defended)) {
+      routeTunnelDefender(world, id, defended!, sentrySlot[id]!, postsByEntrance, sentryMoving);
       continue;
     }
 
@@ -1851,7 +1855,7 @@ export function updateFightAntTargets(world: WorldState): void {
         fighterIsHungry(world, id))
     ) {
       const away = starvingAway || !antIsAtHome(world, id);
-      if (away || (hasRally && fighterDefendedEntrance(world, id) === null)) {
+      if (away || (hasRally && defended === null)) {
         if (
           !starvingAway &&
           targetNearestHostileInSight(
@@ -2063,7 +2067,7 @@ export function updateFightAntTargets(world: WorldState): void {
     if (
       world.simVersion >= SIM_VERSION_V57_ROUTED_TO_ENTRANCE &&
       ants.zone[id] === Zone.Surface &&
-      fighterDefendedEntrance(world, id) !== null
+      defended !== null
     ) {
       sentryMoving[id] = DEFENDER_MOVING_TO_ENTRANCE;
     }
