@@ -80,7 +80,8 @@ A worker on the `Fighting` task. Since **#299 (simVersion V40)** a colony below
 _Avoid_: soldier, warrior.
 
 **Sentry** (simVersion V43, #323):
-A fighter with no orders — its colony has no rally point. It guards its colony's
+A fighter with no orders — its colony has no rally point (from V64, #372, also a
+fighter outside an AI probe's cohort: see **Probe / invasion**). It guards its colony's
 nearest open entrance: it holds a post on the surface a few tiles from the entrance,
 within sight of it, chases any enemy ant it sees near the entrance, and ducks down its
 own shaft when the spider comes, climbing back out once the spider is well away
@@ -88,9 +89,28 @@ from the entrance (unless its colony has sent its fighters at the spider). Far f
 the entrance, it walks home. With no orders it never goes down another colony's
 entrance. From V47, when the colony has two or more fighters beyond what its ratio
 asks for, sentries quietly holding their posts stand down and go back to work,
-keeping one spare.
+keeping one spare. From V64 (#372), while its nest is **breached** it defends it
+(**automatic defence**, below), and surplus sentries do not stand down.
 _Avoid_: **defender** for this; a rally on the colony's own entrance makes
 fighters **tunnel defenders** instead.
+
+**Automatic defence / breached entrance** (simVersion V64, #372):
+While an enemy ant is below ground in a colony's nest, in the part one of its open
+entrances' shafts reaches, the nest is **breached**. The **breached entrance** is
+the first open entrance of the part of the nest the intruders are in (so it does not
+move as they wander); if intruders are in unconnected parts, the part already holding
+the most of the colony's fighters below (the defenders stay with their fight), then
+the one nearest an intruder, then the lower entranceId. Every fighter
+of the colony with **no orders** — its sentries, at any entrance — then defends the
+breached entrance exactly as a **tunnel defender** of it would: it walks there (not
+stopping for enemies on the surface or taking cover from the spider, nor going down
+any other shaft, as a tunnel defender does not), goes down and hunts the intruders. (One cut off below in a part
+the breached shaft does not reach climbs out and walks round, and, having no orders,
+still waits below while the spider is near its door, as a sentry does.) Fighters with orders
+(a rally, a raid, a probe's cohort, the spider order) keep them. Once no intruder is
+left the defenders are sentries again and go back to their posts. The same for
+every colony (CLNY-08), the player's and the AI's alike.
+_Avoid_: **alarm** (the colony alarm is the player's recall stance), **garrison**.
 
 **Tunnel defender** (simVersion V44, #325):
 A fighter whose colony's rally point is on one of the colony's own open
@@ -345,7 +365,8 @@ Site a chamber for excavation.
 _Avoid_: build, construct.
 
 **Rally point** (`SetRallyPoint`):
-A surface location fighters converge on. A rally on an enemy's open entrance sends
+A surface location fighters converge on — every fighter of the colony, except that
+an AI probe's rally applies only to the probe's cohort (V64, #372). A rally on an enemy's open entrance sends
 them into that nest, where they fight and **raid** (see **Raid**); since V60 it
 carries a **raid type**. Clearing the rally
 **recalls** them; since **#346 (simVersion V55)** a recalled invader walks out of the
@@ -392,7 +413,10 @@ committed attack); while one runs, the colony is in the corresponding AI state
 `Probing` / `Invading`. A probe rallies its fighters on a surface food pile (the
 player's marked pile, or one near a player entrance); an invasion rallies them on
 the player's entrance, so from V52 only an invasion **raids** the player's
-FoodStorage chambers (see **Raid**).
+FoodStorage chambers (see **Raid**). The AI records the fighters it sends (the
+operation's **cohort**); from V64 (#372) a probe's rally applies only to its cohort
+(up to V63 every fighter of the colony answered it), while an invasion's rally is
+every fighter's order.
 _Avoid_: "attack" used alone (ambiguous); don't conflate the operation kind
 (`Probe`/`Invasion`) with the AI state (`Probing`/`Invading`).
 

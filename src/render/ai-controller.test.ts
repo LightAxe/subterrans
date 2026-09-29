@@ -961,7 +961,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
     it('the V62 anchor band (rows 14..21) no longer places the Queen', () => {
       for (let y = AI_QUEEN_CHAMBER_DEPTH - AI_PLACEMENT_DEPTH_TOLERANCE; y < THIRD; y++) {
         const world = makeWorld(0);
-        expect(world.simVersion).toBe(SIM_VERSION_V63_AI_DEEP_QUEEN);
+        expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V63_AI_DEEP_QUEEN);
         const colony = addColony(world, 2 as ColonyId, 0);
         addUndergroundGrid(world, 2 as ColonyId);
         setQueenPos(world, 0, 10, 64);

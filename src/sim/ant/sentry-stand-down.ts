@@ -5,7 +5,7 @@ import { FIGHT_AGGRO_RADIUS, SURFACE_GRID_HEIGHT, SURFACE_GRID_WIDTH } from '../
 import { AntTask, FightingSubState } from '../enums.js';
 import { FP_SHIFT } from '../fixed.js';
 import { Zone } from '../terrain.js';
-import type { WorldState } from '../types.js';
+import { SIM_VERSION_V64_AUTO_DEFENCE, type WorldState } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
 import { getScratch } from '../scratch.js';
 
@@ -35,6 +35,9 @@ const STAND_DOWN_SPIDER_RADIUS = FIGHT_AGGRO_RADIUS * 3;
  * A released ant is Idle for step 10a THIS tick.
  */
 export function standDownSurplusSentries(world: WorldState, colony: ColonyRecord): void {
+  // (Any rally, an AI probe's included: from V64 the fighters outside a probe's
+  // cohort are sentries, but none stands down while the probe runs — kept as it
+  // was, so the probe's cohort-only rule changes nothing here.)
   if (colony.rallyPoint != null) return;
   if (colony.alarmActive === true) return;
   if (world.spiderPriorityColonyId === colony.colonyId) return;
@@ -45,6 +48,19 @@ export function standDownSurplusSentries(world: WorldState, colony: ColonyRecord
     if (ants.alive[id] === 1 && ants.task[id] === AntTask.Fighting) surplus += 1;
   }
   if (surplus <= 0) return;
+  // #372 (V64): nor while an enemy ant is below ground in its nest: its sentries
+  // are about to defend it (automatic defence, step 10c). A live scan, not step
+  // 10c's breach (step 8 runs first and the scratch must not be read before it is
+  // rebuilt), so an intruder no shaft reaches also holds the stand-down: rare, and
+  // keeping a fighter too many is the safe side.
+  if (world.simVersion >= SIM_VERSION_V64_AUTO_DEFENCE) {
+    for (let o = 0; o < ants.alive.length; o++) {
+      if (ants.alive[o] !== 1 || ants.zone[o] !== Zone.Underground) continue;
+      if (ants.currentGridColonyId[o] === colony.colonyId && ants.colonyId[o] !== colony.colonyId) {
+        return;
+      }
+    }
+  }
 
   // Stamp every surface tile within STAND_DOWN_ENEMY_RADIUS of an enemy ant, once
   // per enemy tile, so each candidate below is one lookup, never a hostile rescan.

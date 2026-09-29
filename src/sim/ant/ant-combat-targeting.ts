@@ -9,6 +9,7 @@ import { Zone, type UndergroundGrid } from '../terrain.js';
 import {
   SIM_VERSION_V55_ROUTED_HOMING,
   SIM_VERSION_V57_ROUTED_TO_ENTRANCE,
+  SIM_VERSION_V64_AUTO_DEFENCE,
   type WorldState,
 } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
@@ -22,6 +23,11 @@ import {
 import { isSurfaceTileInComponent } from '../surface-features.js';
 import { BLOCKADE_MARK_HELD, BLOCKADE_MARK_WALKING, getScratch } from '../scratch.js';
 import { blockadedEntrance } from '../raid-order.js';
+import {
+  colonyRallyIsProbe,
+  fighterAnswersRally,
+  fighterOutsideProbeCohort,
+} from '../fighter-orders.js';
 import { DIR_DX, DIR_DY, canEnterUndergroundTile, packStep } from './ant-motion.js';
 import type { AntComponents } from './ant-store.js';
 import type { ScratchArena } from '../scratch.js';
@@ -212,11 +218,13 @@ function spiderDistance(world: WorldState, tileX: number, tileY: number): number
   );
 }
 
-/** V43 (#323) — `id` is a Fighter whose colony has no rally point: it has no orders. */
+/** V43 (#323) — `id` is a Fighter whose colony has no rally point: it has no orders.
+ *  From V64 (#372) also a fighter outside its AI colony's probe cohort while the
+ *  rally is the probe's (fighter-orders.ts): that rally is not its order. */
 function hasNoOrders(world: WorldState, id: number): boolean {
   if (world.ants.task[id] !== AntTask.Fighting) return false;
   const colony = world.colonies[world.ants.colonyId[id]!];
-  return colony !== undefined && colony.rallyPoint == null;
+  return colony !== undefined && !fighterAnswersRally(world, id);
 }
 
 /**
@@ -286,7 +294,9 @@ export function sentryTakesCover(
  * within SENTRY_ALL_CLEAR_RADIUS of the door it would climb out of: two tiles past
  * the radius that sends sentries at the door down, so it comes back out only once
  * the spider could not send it straight back in. Called from the ascent block in
- * tickAntMovement; true means skip this ascent.
+ * tickAntMovement; true means skip this ascent. (#372, V64: an automatic defender
+ * cut off below in a part the breached shaft does not reach waits here too — it has
+ * no orders — where a rally tunnel defender would climb out. Deliberate: CONTEXT.md.)
  */
 export function sentryHoldsBelow(
   world: WorldState,
@@ -316,7 +326,19 @@ export function fighterBarredFromOwnShaft(
 ): boolean {
   if (world.ants.task[id] !== AntTask.Fighting) return false;
   const rp = ownColony.rallyPoint;
-  if (rp != null && rp.tileX === entranceX && rp.tileY === entranceY) return false;
+  if (
+    rp != null &&
+    rp.tileX === entranceX &&
+    rp.tileY === entranceY &&
+    !fighterOutsideProbeCohort(world, id)
+  ) {
+    return false;
+  }
+  // #372 (V64): a fighter with no orders goes down the breached entrance.
+  // Bound for it, it goes down no other: not even to take cover from the spider
+  // (as a rally tunnel defender does not).
+  const auto = fighterAutoDefendedEntrance(world, id);
+  if (auto !== null) return auto.surfaceTileX !== entranceX || auto.surfaceTileY !== entranceY;
   return !sentryTakesCover(world, id, entranceX, entranceY);
 }
 
@@ -394,6 +416,21 @@ export function colonyRecalledItsFighters(world: WorldState, colonyId: number): 
 }
 
 /**
+ * #372 — fighter `id` is recalled: its colony recalled its fighters
+ * (colonyRecalledItsFighters) or, from V64, its colony's rally is an AI probe's and
+ * `id` is outside the probe's cohort (fighter-orders.ts), so no rally holds it in a
+ * foreign nest. Exactly colonyRecalledItsFighters below V64. The predicate behind
+ * tickAntMovement's underground recall navigation and ascent, and
+ * invaderIsRecalledV55, so they stay in lockstep.
+ */
+export function fighterIsRecalled(world: WorldState, id: number): boolean {
+  return (
+    colonyRecalledItsFighters(world, world.ants.colonyId[id]!) ||
+    fighterOutsideProbeCohort(world, id)
+  );
+}
+
+/**
  * #346 (V55) — invader `id` (a fighter below ground in a FOREIGN nest) has been
  * recalled: its own colony's rally point is cleared (colonyRecalledItsFighters).
  * Always false below V55.
@@ -405,7 +442,7 @@ export function invaderIsRecalledV55(world: WorldState, id: number): boolean {
   if (ants.zone[id] !== Zone.Underground || ants.currentGridColonyId[id] === ownColonyId) {
     return false;
   }
-  return colonyRecalledItsFighters(world, ownColonyId);
+  return fighterIsRecalled(world, id);
 }
 
 /**
@@ -516,7 +553,7 @@ type FighterEntrance = {
  * its fighters at the spider (MarkSpiderPriority), which overrides it, as it does
  * for sentries.
  */
-function defendedEntrance(world: WorldState, colony: ColonyRecord): FighterEntrance | null {
+function rallyDefendedEntrance(world: WorldState, colony: ColonyRecord): FighterEntrance | null {
   // Sent at the spider (step 10d), its fighters come out to fight it instead.
   if (world.spiderPriorityColonyId === colony.colonyId) return null;
   const rp = colony.rallyPoint;
@@ -530,6 +567,210 @@ function defendedEntrance(world: WorldState, colony: ColonyRecord): FighterEntra
 }
 
 /**
+ * #372 (V64) — colony `colonyId`'s BREACHED entrance this tick, or null: step 10c's
+ * pass (findBreachedEntrances) found an enemy ant below ground in the colony's nest
+ * and this is the open entrance its fighters with no orders defend (automatic
+ * defence). Null below V64 and while the colony has sent its fighters at the spider
+ * (the pass records none then). Read only from step 10c on (the pass recomputes it
+ * before anything reads it; nothing between step 10c and step 16 changes the rally
+ * or the spider order, and step 12 only ever opens entrances, never closes one).
+ */
+function autoDefendedEntrance(world: WorldState, colonyId: number): FighterEntrance | null {
+  const entranceId = getScratch(world).antTargeting.breachedEntrance.get(colonyId);
+  if (entranceId === undefined) return null;
+  const ents = world.colonies[colonyId]?.entrances;
+  if (ents == null) return null;
+  for (let e = 0; e < ents.length; e++) {
+    const ent = ents[e]!;
+    if (ent.entranceId === entranceId) return ent.isOpen ? ent : null;
+  }
+  return null;
+}
+
+/**
+ * The entrance `colony`'s tunnel defenders defend this tick: the one its rally is
+ * on (V44), else, from V64 (#372), its breached entrance, which only its fighters
+ * with no orders defend (fighterDefendedEntrance). Null if neither.
+ */
+function defendedEntrance(world: WorldState, colony: ColonyRecord): FighterEntrance | null {
+  return rallyDefendedEntrance(world, colony) ?? autoDefendedEntrance(world, colony.colonyId);
+}
+
+/**
+ * The entrance fighter `id` defends as a tunnel defender this tick, or null: the
+ * own entrance its colony's rally is on, if it answers the rally (V44); if it has
+ * no orders, from V64 (#372), its colony's breached entrance (automatic defence).
+ * Below V64 exactly defendedEntrance of its colony.
+ */
+function fighterDefendedEntrance(world: WorldState, id: number): FighterEntrance | null {
+  const colony = world.colonies[world.ants.colonyId[id]!];
+  if (colony === undefined) return null;
+  if (fighterAnswersRally(world, id)) return rallyDefendedEntrance(world, colony);
+  return fighterAutoDefendedEntrance(world, id);
+}
+
+/**
+ * #372 (V64) — the breached entrance fighter `id` defends automatically, or null: it
+ * has no orders (hasNoOrders), is not hauling loot home (a hauler deposits first),
+ * and its colony's nest is breached (autoDefendedEntrance). Null below V64.
+ */
+function fighterAutoDefendedEntrance(world: WorldState, id: number): FighterEntrance | null {
+  if (!hasNoOrders(world, id)) return null;
+  if (world.ants.subTask[id] === FightingSubState.Hauling) return null;
+  return autoDefendedEntrance(world, world.ants.colonyId[id]!);
+}
+
+/**
+ * #372 (V64) — step 10c, first thing: record in `breachedEntrance` each colony's
+ * BREACHED entrance, the entrance its fighters with no orders defend. A colony has
+ * one while an enemy ant is below ground in its nest, in the part of the nest one
+ * of its open entrances' shafts reaches (the reach a tunnel defender of that
+ * entrance hunts in). Within one connected part of the nest the breached entrance
+ * is that part's first open entrance (colony.entrances order), so it does not move
+ * as intruders wander; between unconnected parts with intruders, the one holding
+ * the most of the colony's own fighters below (so the breach stays with the
+ * defenders already in), then the one whose shaft is nearest a reached intruder
+ * (Manhattan to the top of the shaft), then the lower entranceId. Not a colony whose rally is on an own open entrance (it defends by
+ * that rally). Only colonies whose rally is not every
+ * fighter's order are surveyed: no rally, or an AI probe's (fighter-orders.ts),
+ * and not one sent at the spider. Cleared first, so a colony no longer invaded
+ * has none. Nothing below V64.
+ */
+function findBreachedEntrances(world: WorldState): void {
+  const at = getScratch(world).antTargeting;
+  const breached = at.breachedEntrance;
+  breached.clear();
+  if (world.simVersion < SIM_VERSION_V64_AUTO_DEFENCE) return;
+  const ants = world.ants;
+  const intruders = at.breachIntruders;
+  for (const cidKey in world.colonies) {
+    if (!Object.hasOwn(world.colonies, cidKey)) continue;
+    const col = world.colonies[cidKey as unknown as keyof typeof world.colonies];
+    if (col === undefined || col.entrances == null) continue;
+    const cid = col.colonyId;
+    if (world.spiderPriorityColonyId === cid) continue;
+    if (col.rallyPoint != null && !colonyRallyIsProbe(world, col)) continue;
+    // A rally on an own open entrance (a probe's, in a test world) already makes
+    // tunnel defence; one defended entrance per colony keeps the survey single.
+    if (rallyDefendedEntrance(world, col) !== null) continue;
+    const grid = world.undergroundGrids[cid];
+    if (grid === undefined) continue;
+    intruders.length = 0;
+    for (let o = 0; o < ants.alive.length; o++) {
+      if (ants.alive[o] !== 1 || ants.zone[o] !== Zone.Underground) continue;
+      if (ants.currentGridColonyId[o] !== cid || ants.colonyId[o] === cid) continue;
+      intruders.push(o);
+    }
+    if (intruders.length === 0) continue;
+    const cells = grid.width * grid.height;
+    if (at.breachReach.length < cells) {
+      at.breachReach = new Int32Array(cells);
+      at.breachReachStamp = 0;
+    }
+    const ents = col.entrances;
+    // Every part of the nest (below) with an intruder in it is a candidate, through
+    // its first open entrance. Prefer the part that already holds the most of the
+    // colony's own fighters below (the defenders already in: once they are down
+    // after an intruder the breach stays with them rather than flipping to a
+    // nearer intruder in a part they cannot get to), then the one whose shaft is
+    // nearest a reached intruder, then the lower entranceId. A handful of
+    // entrances, at most one BFS each.
+    let bestId = -1;
+    let bestOwn = 0;
+    let bestDist = 0;
+    // Stamps from this one on are this colony's surveys in this pass. (Wrapped
+    // long before an Int32 cell could no longer hold one.)
+    if (at.breachReachStamp >= 0x3fffffff) {
+      at.breachReach.fill(0);
+      at.breachReachStamp = 0;
+    }
+    const firstStamp = at.breachReachStamp + 1;
+    for (let e = 0; e < ents.length; e++) {
+      const ent = ents[e]!;
+      if (!ent.isOpen) continue;
+      // A shaft whose top an earlier entrance's survey reached opens into the same
+      // part of the nest: that earlier entrance already stands for it. So within
+      // one connected nest the breach is its lowest-id open entrance (by list
+      // order), wherever the intruders wander, and the choice between entrances
+      // only ever moves between unconnected parts.
+      const x0 = ent.surfaceTileX;
+      if (x0 >= 0 && x0 < grid.width && at.breachReach[x0]! >= firstStamp) continue;
+      at.breachReachStamp += 1;
+      const stamp = at.breachReachStamp;
+      surveyDefendedNest(world, grid, ent, ents, 0, at.breachNoPosts, at.breachReach, stamp);
+      const dist = nearestReachedIntruderDistance(
+        world,
+        grid,
+        intruders,
+        at.breachReach,
+        stamp,
+        ent.surfaceTileX,
+      );
+      if (dist < 0) continue;
+      const own = ownFightersReached(world, cid, grid, at.breachReach, stamp);
+      if (
+        bestId < 0 ||
+        own > bestOwn ||
+        (own === bestOwn && (dist < bestDist || (dist === bestDist && ent.entranceId < bestId)))
+      ) {
+        bestId = ent.entranceId;
+        bestOwn = own;
+        bestDist = dist;
+      }
+    }
+    if (bestId >= 0) breached.set(cid, bestId);
+  }
+}
+
+/** The Manhattan distance from the top of the shaft at column `shaftX` (row 0) to
+ *  the nearest of `intruders` standing on a tile of `grid` stamped `stamp` in
+ *  `reach`, in its nest's coordinates; -1 if none of them does. */
+function nearestReachedIntruderDistance(
+  world: WorldState,
+  grid: UndergroundGrid,
+  intruders: readonly number[],
+  reach: Int32Array,
+  stamp: number,
+  shaftX: number,
+): number {
+  const ants = world.ants;
+  let best = -1;
+  for (let i = 0; i < intruders.length; i++) {
+    const o = intruders[i]!;
+    const tx = ants.posX[o]! >> FP_SHIFT;
+    const ty = ants.posY[o]! >> FP_SHIFT;
+    if (tx < 0 || tx >= grid.width || ty < 0 || ty >= grid.height) continue;
+    if (reach[ty * grid.width + tx] !== stamp) continue;
+    const d = Math.abs(tx - shaftX) + ty;
+    if (best < 0 || d < best) best = d;
+  }
+  return best;
+}
+
+/** How many of colony `colonyId`'s fighters stand below ground in its own nest on a
+ *  tile of `grid` stamped `stamp` in `reach`. */
+function ownFightersReached(
+  world: WorldState,
+  colonyId: number,
+  grid: UndergroundGrid,
+  reach: Int32Array,
+  stamp: number,
+): number {
+  const ants = world.ants;
+  let n = 0;
+  for (let o = 0; o < ants.alive.length; o++) {
+    if (ants.alive[o] !== 1 || ants.task[o] !== AntTask.Fighting) continue;
+    if (ants.colonyId[o] !== colonyId || ants.zone[o] !== Zone.Underground) continue;
+    if (ants.currentGridColonyId[o] !== colonyId) continue;
+    const tx = ants.posX[o]! >> FP_SHIFT;
+    const ty = ants.posY[o]! >> FP_SHIFT;
+    if (tx < 0 || tx >= grid.width || ty < 0 || ty >= grid.height) continue;
+    if (reach[ty * grid.width + tx] === stamp) n += 1;
+  }
+  return n;
+}
+
+/**
  * V44 (#325) — fighter `id` is a TUNNEL DEFENDER below ground in its own nest:
  * its colony's rally point is on one of its own open entrances, and it stands in
  * the part of the nest that entrance's shaft reaches. It stays below (no routing
@@ -537,15 +778,22 @@ function defendedEntrance(world: WorldState, colony: ColonyRecord): FighterEntra
  * reach step 10c's survey stamped this tick (surveyDefendedNests).
  */
 export function fighterDefendsTunnels(world: WorldState, id: number): boolean {
+  return defendsTunnelsAt(world, id, fighterDefendedEntrance(world, id));
+}
+
+/** fighterDefendsTunnels with fighter `id`'s defended entrance already in hand
+ *  (`defended` = fighterDefendedEntrance(world, id)), so step 10c computes it once. */
+function defendsTunnelsAt(
+  world: WorldState,
+  id: number,
+  defended: FighterEntrance | null,
+): boolean {
   const ants = world.ants;
   if (ants.task[id] !== AntTask.Fighting || ants.zone[id] !== Zone.Underground) return false;
   // V52 (#290 PR 5): a raider hauling loot home goes on to deposit it.
   if (ants.subTask[id] === FightingSubState.Hauling) return false;
   const colonyId = ants.colonyId[id]!;
   if (ants.currentGridColonyId[id] !== colonyId) return false;
-  const colony = world.colonies[colonyId];
-  if (colony === undefined) return false;
-  const defended = defendedEntrance(world, colony);
   if (defended === null) return false;
   // Only where the defended shaft reaches (this tick's survey, step 10c): a
   // fighter in a part of the nest not joined to it climbs out and walks round.
@@ -1347,6 +1595,8 @@ export function releaseSurplusFightersBelowFloor(
 
 export function updateFightAntTargets(world: WorldState): void {
   const { ants } = world;
+  // #372 (V64) — this tick's breached entrances, before anything reads them.
+  findBreachedEntrances(world);
 
   // Precompute: for each colony with a rally, does ANY colony have an OPEN
   // entrance at that rally tile? If yes, the hold-radius anti-oscillation
@@ -1457,7 +1707,9 @@ export function updateFightAntTargets(world: WorldState): void {
     if (!col || col.entrances == null) continue;
     // V44 (#325) — tunnel defenders rank at the entrance they defend: every
     // fighter of the colony outside foreign grids, in entity-id order.
-    const defended = defendedEntrance(world, col);
+    // #372 (V64): and, while its nest is invaded, every fighter with no orders at
+    // the breached entrance.
+    const defended = fighterDefendedEntrance(world, wid);
     if (defended !== null) {
       if (ants.zone[wid] === Zone.Underground && ants.currentGridColonyId[wid] !== cid) continue;
       const rank = nextRank.get(defended.entranceId) ?? 0;
@@ -1465,7 +1717,9 @@ export function updateFightAntTargets(world: WorldState): void {
       nextRank.set(defended.entranceId, rank + 1);
       continue;
     }
-    if (col.rallyPoint != null) continue;
+    // #372 (V64): a fighter the rally does not apply to (outside a probe's cohort)
+    // is a sentry and ranks as one.
+    if (fighterAnswersRally(world, wid)) continue;
     const ents = col.entrances;
     if (ents.length === 0) continue;
     const tileX = ants.posX[wid]! >> FP_SHIFT;
@@ -1517,7 +1771,27 @@ export function updateFightAntTargets(world: WorldState): void {
       ants.subTask[id] = FightingSubState.MovingToRally;
     }
 
-    const rp = colony.rallyPoint;
+    // #372 (V64) — the rally this fighter answers (fighter-orders.ts: not a probe's
+    // it is outside the cohort of), else, with no orders, the breached entrance it
+    // defends while its nest is invaded (automatic defence: routed exactly as for a
+    // rally on that own entrance), else none (a sentry). Below V64 the colony's rally.
+    const answersRally = fighterAnswersRally(world, id);
+    const autoDefended = answersRally ? null : fighterAutoDefendedEntrance(world, id);
+    // The entrance it defends as a tunnel defender (fighterDefendedEntrance), once.
+    const defended = answersRally ? rallyDefendedEntrance(world, colony) : autoDefended;
+    const hasRally = answersRally || autoDefended !== null;
+    const rallyX =
+      autoDefended !== null
+        ? autoDefended.surfaceTileX
+        : answersRally
+          ? colony.rallyPoint!.tileX
+          : -1;
+    const rallyY =
+      autoDefended !== null
+        ? autoDefended.surfaceTileY
+        : answersRally
+          ? colony.rallyPoint!.tileY
+          : -1;
 
     // createColonyRecord intentionally leaves entrances/rallyPoint uninitialized (colony-store.ts:164);
     // callers set them post-construction. Treat both null and undefined as "no value".
@@ -1545,15 +1819,8 @@ export function updateFightAntTargets(world: WorldState): void {
     // V44 (#325) — below ground in its own nest, where its rally entrance's shaft
     // reaches: a tunnel defender. (On the surface, or cut off below, it walks to
     // that entrance and goes down, by the routing below.)
-    if (fighterDefendsTunnels(world, id)) {
-      routeTunnelDefender(
-        world,
-        id,
-        defendedEntrance(world, colony)!,
-        sentrySlot[id]!,
-        postsByEntrance,
-        sentryMoving,
-      );
+    if (defendsTunnelsAt(world, id, defended)) {
+      routeTunnelDefender(world, id, defended!, sentrySlot[id]!, postsByEntrance, sentryMoving);
       continue;
     }
 
@@ -1588,7 +1855,7 @@ export function updateFightAntTargets(world: WorldState): void {
         fighterIsHungry(world, id))
     ) {
       const away = starvingAway || !antIsAtHome(world, id);
-      if (away || (rp != null && defendedEntrance(world, colony) === null)) {
+      if (away || (hasRally && defended === null)) {
         if (
           !starvingAway &&
           targetNearestHostileInSight(
@@ -1624,7 +1891,7 @@ export function updateFightAntTargets(world: WorldState): void {
     }
 
     // No rally point (null or uninitialized): fall back to first entrance (idle-at-nest).
-    if (rp == null) {
+    if (!hasRally) {
       // V43 (#323) — on the surface, bound for an OPEN entrance: a SENTRY. Take
       // cover from the spider (head for the door), else chase an enemy in sight
       // inside the guard area, else walk home or take the post. It never holds on
@@ -1746,6 +2013,7 @@ export function updateFightAntTargets(world: WorldState): void {
     // entrance holds a post round it and chases what comes near: step 10c2
     // (ant-blockade.ts, updateBlockaders) routes it, reading this mark. (A hungry
     // one away from home was sent to eat above; below ground it climbs out first.)
+    // (Never an automatic defender: a blockade's rally is every fighter's order.)
     if (ants.zone[id] === Zone.Surface && blockadedEntrance(world, colony) !== null) {
       blockadeMark[id] = wasHolding ? BLOCKADE_MARK_HELD : BLOCKADE_MARK_WALKING;
       continue;
@@ -1760,7 +2028,9 @@ export function updateFightAntTargets(world: WorldState): void {
     // enemy) — rallyOnEntrance is colony-agnostic (see precompute above): fighters
     // must walk to the exact tile so the descent trigger fires, whether it's an
     // invasion into an enemy grid or a defensive descent into their own grid.
-    if (ants.zone[id] === Zone.Surface && !rallyOnEntrance[colony.colonyId]) {
+    // (An automatic defender's rally is its own open breached entrance.)
+    const onEntrance = autoDefended !== null || rallyOnEntrance[colony.colonyId] === true;
+    if (ants.zone[id] === Zone.Surface && !onEntrance) {
       if (
         targetNearestHostileInSight(world, id, colonyId, currentGridColonyId, aggroEnemyColonies)
       ) {
@@ -1780,24 +2050,24 @@ export function updateFightAntTargets(world: WorldState): void {
     // Carve-out: if the rally tile IS an open entrance (any colony's), the
     // hold-radius suppression is skipped — fighters must reach the EXACT
     // entrance tile for the descent block in tickAntMovement to fire.
-    if (!rallyOnEntrance[colony.colonyId]) {
+    if (!onEntrance) {
       const antTileX = ants.posX[id]! >> FP_SHIFT;
       const antTileY = ants.posY[id]! >> FP_SHIFT;
-      const d = Math.abs(antTileX - rp.tileX) + Math.abs(antTileY - rp.tileY);
+      const d = Math.abs(antTileX - rallyX) + Math.abs(antTileY - rallyY);
       if (d <= RALLY_HOLD_RADIUS_TILES) {
         ants.targetPosX[id] = -1;
         ants.targetPosY[id] = -1;
         continue;
       }
     }
-    ants.targetPosX[id] = (rp.tileX << FP_SHIFT) + (FP_ONE >> 1);
-    ants.targetPosY[id] = (rp.tileY << FP_SHIFT) + (FP_ONE >> 1);
+    ants.targetPosX[id] = (rallyX << FP_SHIFT) + (FP_ONE >> 1);
+    ants.targetPosY[id] = (rallyY << FP_SHIFT) + (FP_ONE >> 1);
     // #357 (V57): on the surface, bound for the entrance its colony defends (the
     // rally is on it), it routes round obstacles (defenderWalksToEntrance).
     if (
       world.simVersion >= SIM_VERSION_V57_ROUTED_TO_ENTRANCE &&
       ants.zone[id] === Zone.Surface &&
-      defendedEntrance(world, colony) !== null
+      defended !== null
     ) {
       sentryMoving[id] = DEFENDER_MOVING_TO_ENTRANCE;
     }

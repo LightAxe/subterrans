@@ -49,7 +49,7 @@ import {
   pickNearestHostileUnderground,
   fighterBarredFromForeignShaft,
   fighterBarredFromOwnShaft,
-  colonyRecalledItsFighters,
+  fighterIsRecalled,
   fighterWalksHomeToEat,
   invaderExitsByEntranceField,
   invaderTakesReachableExit,
@@ -893,7 +893,7 @@ export function tickAntMovement(
       if (fieldStepped) {
         // Stepped above.
       } else if (isForeignGridUnderground) {
-        // colonyRecalledItsFighters (shared with the isRecallingFromForeign guard in
+        // fighterIsRecalled (shared with the isRecallingFromForeign guard in
         // skipAscent): a null colony is NOT recalled — a defensive fallback.
         // V25 (#174): recall keys on the rally point alone — a cleared rally means
         // "come home". (#247: the pre-V25 fight===0 recall branch was reaped — MIN=V30 —
@@ -903,7 +903,7 @@ export function tickAntMovement(
         // V51 (#290 PR 4, D11): a hungry invader step 10c sent home to eat leaves
         // the same way (fighterWalksHomeToEat is false below V51).
         const isRecalling =
-          colonyRecalledItsFighters(world, ownColonyId) ||
+          fighterIsRecalled(world, id) ||
           fighterWalksHomeToEat(world, id) ||
           hauling ||
           blockaderOut;
@@ -1848,7 +1848,7 @@ export function tickAntMovement(
           // #352 (V60): so must a blockader caught in the enemy nest.
           const isRecallingFromForeign =
             !inOwnGrid &&
-            (colonyRecalledItsFighters(world, ants.colonyId[id]!) ||
+            (fighterIsRecalled(world, id) ||
               fighterWalksHomeToEat(world, id) ||
               blockaderLeavesForeignNest(world, id));
           // V52 (#290 PR 5): a raider hauling loot out of the enemy nest climbs out.
