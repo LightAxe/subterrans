@@ -32,12 +32,13 @@ import {
   aiSelectProbeTarget,
   aiNestDefence,
   aiThreatenedEntrance,
+  aiDefenceSallies,
   AI_DEFENCE_RATIO,
-  AI_DEFENCE_ALERT_RADIUS_TILES,
+  AI_DEFENCE_THREAT_RADIUS_TILES,
   AI_DEFENCE_ALERT_RAIDERS,
   AI_DEFENCE_HOLD_RADIUS_TILES,
-  AI_DEFENCE_DOOR_RADIUS_TILES,
-  aiRaidersAtDoor,
+  AI_DEFENCE_HOME_RADIUS_TILES,
+  AI_DEFENCE_SALLY_KEEP_TILES,
 } from './ai-controller.js';
 
 import {
@@ -51,10 +52,10 @@ import {
 import { initAnt } from '../sim/ant/ant-store.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
-import { createUndergroundGrid, ugSet, UndergroundTileState } from '../sim/terrain.js';
+import { createUndergroundGrid, ugSet, UndergroundTileState, Zone } from '../sim/terrain.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { AntTask, ChamberType } from '../sim/enums.js';
-import type { WorldState } from '../sim/types.js';
+import type { AIStateRecord, WorldState } from '../sim/types.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import { createScenario } from '../sim/scenario.js';
 import { createDefaultAIStateRecord } from '../sim/ai-state.js';
@@ -1840,7 +1841,7 @@ describe('#371 (V62) — the AI defends its own nest', () => {
       subTask: 0,
     });
     if (gridOf !== undefined) {
-      world.ants.zone[id] = 1; // Zone.Underground
+      world.ants.zone[id] = Zone.Underground;
       world.ants.currentGridColonyId[id] = gridOf;
     }
     return id;
@@ -1849,248 +1850,316 @@ describe('#371 (V62) — the AI defends its own nest', () => {
   const rallies = (world: WorldState): unknown[] =>
     world.commandQueue.filter((c) => c.type === 'SetRallyPoint' || c.type === 'ClearRallyPoint');
 
-  it('no enemy inside: no defence, no command', () => {
+  /** A probe in flight towards (9, 4), far from the AI's door. */
+  function probing(world: WorldState, colony: ColonyRecord): AIStateRecord {
+    const rec = createDefaultAIStateRecord(AI);
+    rec.state = 'Probing';
+    rec.operationKind = 'Probe';
+    rec.invasionRallyTileX = 9;
+    rec.invasionRallyTileY = 4;
+    world.aiState.push(rec);
+    colony.rallyPoint = { tileX: 9, tileY: 4 };
+    return rec;
+  }
+
+  const setAt = (x: number, y: number): unknown =>
+    expect.objectContaining({ type: 'SetRallyPoint', colonyId: AI, tileX: x, tileY: y });
+  const clear = (): unknown => expect.objectContaining({ type: 'ClearRallyPoint', colonyId: AI });
+
+  it('no raid: no defence, no command', () => {
     const { world, colony } = setup();
-    expect(aiNestDefence(world, colony, 'None')).toBeNull();
+    ant(world, FOE, DOOR_X + 1, 1); // a lone enemy fighter at the door is no raid
+    expect(aiNestDefence(world, colony, undefined)).toBeNull();
     expect(rallies(world)).toHaveLength(0);
   });
 
   it('one enemy fighter inside the nest: rally (a plain rally, no raid type) on the own entrance', () => {
     const { world, colony } = setup();
+    for (let i = 0; i < 6; i++) ant(world, AI, DOOR_X, 5, AI); // strong at home: still below
     ant(world, FOE, DOOR_X + 20, 15, AI);
-    expect(aiNestDefence(world, colony, 'None')?.entranceId).toBe(7);
-    expect(rallies(world)).toEqual([
-      expect.objectContaining({ type: 'SetRallyPoint', colonyId: AI, tileX: DOOR_X, tileY: 0 }),
-    ]);
+    expect(aiNestDefence(world, colony, undefined)?.entranceId).toBe(7);
+    expect(rallies(world)).toEqual([setAt(DOOR_X, 0)]);
     expect(rallies(world)[0]).not.toHaveProperty('raidType');
   });
 
-  it("a surface force at least as big as the colony's fighters is met below", () => {
+  it('the threat radius is inclusive and Manhattan', () => {
     const { world, colony } = setup();
     expect(AI_DEFENCE_ALERT_RAIDERS).toBe(2);
-    ant(world, AI, DOOR_X + 1, 1); // one own fighter (a sentry)
-    ant(world, FOE, DOOR_X + AI_DEFENCE_ALERT_RADIUS_TILES, 0);
-    ant(world, FOE, DOOR_X - 3, 4);
-    expect(aiNestDefence(world, colony, 'None')?.entranceId).toBe(7);
-    expect(rallies(world)).toEqual([
-      expect.objectContaining({ type: 'SetRallyPoint', tileX: DOOR_X, tileY: 0 }),
-    ]);
-  });
-
-  it('a smaller surface force (a blockade ring, fighters parked by the door) is left to the sentries', () => {
-    const { world, colony } = setup();
-    for (let i = 0; i < 3; i++) ant(world, AI, DOOR_X + 1, 1);
-    ant(world, FOE, DOOR_X + 2, 2);
-    ant(world, FOE, DOOR_X - 2, 2);
-    expect(aiNestDefence(world, colony, 'None')).toBeNull();
-    expect(rallies(world)).toHaveLength(0);
-  });
-
-  it('one enemy fighter at the door, or any beyond the alert radius, starts nothing', () => {
-    const { world, colony } = setup();
-    ant(world, FOE, DOOR_X + 1, 1);
-    expect(aiNestDefence(world, colony, 'None')).toBeNull();
-    ant(world, FOE, DOOR_X + AI_DEFENCE_ALERT_RADIUS_TILES + 1, 0);
-    ant(world, FOE, DOOR_X, AI_DEFENCE_ALERT_RADIUS_TILES + 1);
+    const a = ant(world, FOE, DOOR_X + AI_DEFENCE_THREAT_RADIUS_TILES + 1, 0);
+    ant(world, FOE, DOOR_X, AI_DEFENCE_THREAT_RADIUS_TILES);
     expect(aiThreatenedEntrance(world, colony)).toBeNull();
-    // A second one within reach: a threat.
-    ant(world, FOE, DOOR_X - 1, 1);
+    // Off the axis: Manhattan 33 is out (Chebyshev or Euclidean would count it).
+    world.ants.posX[a] = (DOOR_X + 16) << FP_SHIFT;
+    world.ants.posY[a] = 17 << FP_SHIFT;
+    expect(aiThreatenedEntrance(world, colony)).toBeNull();
+    world.ants.posY[a] = 16 << FP_SHIFT;
     expect(aiThreatenedEntrance(world, colony)?.entranceId).toBe(7);
   });
 
-  it("a defence holds to the wider radius and half the colony's fighters, then stands down", () => {
+  it('hysteresis: once a raid is on (a defence rally is up), raiders count out to the hold radius', () => {
     const { world, colony } = setup();
-    colony.rallyPoint = { tileX: DOOR_X, tileY: 0 };
+    expect(AI_DEFENCE_HOLD_RADIUS_TILES).toBeGreaterThan(AI_DEFENCE_THREAT_RADIUS_TILES);
+    expect(AI_DEFENCE_HOLD_RADIUS_TILES).toBeLessThanOrEqual(AI_DEFENCE_HOME_RADIUS_TILES);
     const a = ant(world, FOE, DOOR_X + AI_DEFENCE_HOLD_RADIUS_TILES, 0);
-    ant(world, FOE, DOOR_X, AI_DEFENCE_HOLD_RADIUS_TILES);
-    for (let i = 0; i < 4; i++) ant(world, AI, DOOR_X, 5, AI);
-    // 2 raiders within the hold radius, 4 own fighters: 2 * 2 >= 4, held.
-    expect(aiNestDefence(world, colony, 'None')?.entranceId).toBe(7);
+    ant(world, FOE, DOOR_X, AI_DEFENCE_THREAT_RADIUS_TILES + 1);
+    // No raid on: beyond the threat radius they start none.
+    expect(aiNestDefence(world, colony, undefined)).toBeNull();
     expect(rallies(world)).toHaveLength(0);
-    // Not a start, though (outside the alert radius, and 2 < 4).
-    expect(aiThreatenedEntrance(world, colony, null)).toBeNull();
-    // A fifth own fighter: 2 * 2 < 5, the defence is over.
-    const fifth = ant(world, AI, DOOR_X, 5, AI);
-    expect(aiNestDefence(world, colony, 'None')).toBeNull();
-    expect(rallies(world)).toEqual([expect.objectContaining({ type: 'ClearRallyPoint' })]);
-    // ...as it is, at four, once one raider leaves the hold radius.
-    world.commandQueue.length = 0;
-    world.ants.alive[fifth] = 0;
-    expect(aiNestDefence(world, colony, 'None')?.entranceId).toBe(7);
+    // A raid on (the rally on the entrance): the same raiders keep it on.
+    colony.rallyPoint = { tileX: DOOR_X, tileY: 0 };
+    expect(aiNestDefence(world, colony, undefined)?.entranceId).toBe(7);
+    expect(rallies(world)).toHaveLength(0);
+    // One past the hold radius: the raid is over and the rally cleared.
     world.ants.posX[a] = (DOOR_X + AI_DEFENCE_HOLD_RADIUS_TILES + 1) << FP_SHIFT;
-    expect(aiNestDefence(world, colony, 'None')).toBeNull();
+    expect(aiNestDefence(world, colony, undefined)).toBeNull();
+    expect(rallies(world)).toEqual([clear()]);
   });
 
-  it('raiders at the door draft fighters and hold operations, without a rally when outnumbered', () => {
-    const { world, colony, foe } = setup();
+  it('hysteresis: an Invading colony with no cohort yet commits none while raiders sit between the threat and hold radii', () => {
+    const { world, colony } = setup();
     const rec = createDefaultAIStateRecord(AI);
-    rec.state = 'WarFooting';
-    rec.lastProbeEndTick = -100000;
+    rec.state = 'Invading';
     world.aiState.push(rec);
-    for (let i = 0; i < 4; i++) colony.workers.push(ant(world, AI, DOOR_X + 2, 2));
-    setPilesForTest(world, [
-      { foodPileId: 77, tileX: 8, tileY: 3, pickupsRemaining: 4, pickupsInitial: 4 },
-    ]);
-    foe.priorityFoodPileId = null;
-    ant(world, FOE, DOOR_X + AI_DEFENCE_DOOR_RADIUS_TILES, 0);
-    ant(world, FOE, DOOR_X - 2, 3);
-    expect(aiRaidersAtDoor(world, colony)).toBe(true);
+    for (let i = 0; i < 8; i++) colony.workers.push(ant(world, AI, DOOR_X + 1, 1));
+    ant(world, FOE, DOOR_X + AI_DEFENCE_THREAT_RADIUS_TILES, 0);
+    const b = ant(world, FOE, DOOR_X, AI_DEFENCE_THREAT_RADIUS_TILES);
+    runAIController(world, AI);
+    expect(rec.operationKind).not.toBe('Invasion');
+    const r = rallies(world)[0] as { tileX: number; tileY: number };
+    colony.rallyPoint = { tileX: r.tileX, tileY: r.tileY };
+    // One raider steps just past the threat radius: the raid holds.
+    world.ants.posY[b] = (AI_DEFENCE_THREAT_RADIUS_TILES + 2) << FP_SHIFT;
+    world.commandQueue.length = 0;
     runAIController(world, AI);
     expect(world.commandQueue.some((c) => c.type === 'StartAIOperation')).toBe(false);
-    expect(rallies(world)).toHaveLength(0); // 4 sentries outnumber 2: they fight up top
-    expect(world.commandQueue).toContainEqual(
-      expect.objectContaining({ type: 'SetBehaviorRatio', ratio: { ...AI_DEFENCE_RATIO } }),
-    );
-    // One tile further out, it is not at the door.
-    world.commandQueue.length = 0;
-    const far = world.nextEntityId - 2;
-    world.ants.posX[far] = (DOOR_X + AI_DEFENCE_DOOR_RADIUS_TILES + 1) << FP_SHIFT;
-    expect(aiRaidersAtDoor(world, colony)).toBe(false);
-    world.ants.posX[far] = (DOOR_X + AI_DEFENCE_DOOR_RADIUS_TILES) << FP_SHIFT;
-    expect(aiRaidersAtDoor(world, colony)).toBe(true);
-    // Drafting ends it: a fifth own fighter, and 2 raiders are under half of them.
-    ant(world, AI, DOOR_X + 2, 2);
-    expect(aiRaidersAtDoor(world, colony)).toBe(false);
+    expect(rallies(world)).not.toContainEqual(clear());
   });
 
-  it('only enemy FIGHTERS inside count: enemy workers, own fighters, dead or neutral ants, and enemies in their own nest do not', () => {
+  it('only enemy FIGHTERS count: workers, own fighters, dead or neutral ants, and enemies in their own nest do not', () => {
     const { world, colony } = setup();
     ant(world, FOE, DOOR_X, 10, AI, AntTask.Foraging);
+    ant(world, FOE, DOOR_X, 1, undefined, AntTask.Foraging);
+    ant(world, FOE, DOOR_X + 1, 1, undefined, AntTask.Foraging);
     ant(world, AI, DOOR_X, 10, AI);
     ant(world, FOE, DOOR_X, 10, FOE); // underground, in its own nest
     ant(world, 0 as ColonyId, DOOR_X, 10, AI); // neutral
     const dead = ant(world, FOE, DOOR_X, 10, AI);
     world.ants.alive[dead] = 0;
-    expect(aiNestDefence(world, colony, 'None')).toBeNull();
+    expect(aiNestDefence(world, colony, undefined)).toBeNull();
     expect(rallies(world)).toHaveLength(0);
   });
 
-  it('holds while an enemy fighter is inside, then stands the fighters down', () => {
+  it('outnumbered at home, it goes below; stronger at home, it sallies at the nearest raider', () => {
     const { world, colony } = setup();
+    ant(world, FOE, DOOR_X + 10, 2);
+    ant(world, FOE, DOOR_X + 5, 3);
+    for (let i = 0; i < 2; i++) ant(world, AI, DOOR_X + 1, 1); // 2 at home vs 2: below
+    expect(aiDefenceSallies(world, colony)).toBe(false);
+    expect(aiNestDefence(world, colony, undefined)?.entranceId).toBe(7);
+    expect(rallies(world)).toEqual([setAt(DOOR_X, 0)]);
+    // A third at home: 3 > 2, it comes out at the raider nearest the door.
+    ant(world, AI, DOOR_X, 4, AI);
     colony.rallyPoint = { tileX: DOOR_X, tileY: 0 };
-    const id = ant(world, FOE, DOOR_X, 12, AI);
-    expect(aiNestDefence(world, colony, 'None')?.entranceId).toBe(7);
-    expect(rallies(world)).toHaveLength(0); // already rallied there
-    world.ants.alive[id] = 0;
-    expect(aiNestDefence(world, colony, 'None')).toBeNull();
-    expect(rallies(world)).toEqual([
-      expect.objectContaining({ type: 'ClearRallyPoint', colonyId: AI }),
-    ]);
+    world.commandQueue.length = 0;
+    expect(aiDefenceSallies(world, colony)).toBe(true);
+    expect(aiNestDefence(world, colony, undefined)?.entranceId).toBe(7);
+    expect(rallies(world)).toEqual([setAt(DOOR_X + 5, 3)]);
   });
 
-  it('a rally the AI did not put on its own entrance is left alone', () => {
+  it('a sally rally stays put while a raider is by it, follows them when they move, and goes below when one gets inside', () => {
     const { world, colony } = setup();
-    colony.rallyPoint = { tileX: DOOR_X + 3, tileY: 9 };
-    expect(aiNestDefence(world, colony, 'None')).toBeNull();
-    expect(rallies(world)).toHaveLength(0);
+    const r = ant(world, FOE, DOOR_X + 5, 3);
+    ant(world, FOE, DOOR_X + 12, 3);
+    for (let i = 0; i < 4; i++) ant(world, AI, DOOR_X + 1, 1);
+    colony.rallyPoint = { tileX: DOOR_X + 5, tileY: 3 };
+    world.ants.posX[r] = (DOOR_X + 5 + AI_DEFENCE_SALLY_KEEP_TILES) << FP_SHIFT;
+    expect(aiNestDefence(world, colony, undefined)).not.toBeNull();
+    expect(rallies(world)).toHaveLength(0); // kept: a raider within the keep radius
+    world.ants.posX[r] = (DOOR_X + 5 + AI_DEFENCE_SALLY_KEEP_TILES + 6) << FP_SHIFT; // still in the raid
+    expect(aiNestDefence(world, colony, undefined)).not.toBeNull();
+    expect(rallies(world)).toEqual([setAt(DOOR_X + 12, 3)]);
+    world.commandQueue.length = 0;
+    world.ants.zone[r] = Zone.Underground;
+    world.ants.currentGridColonyId[r] = AI;
+    expect(aiNestDefence(world, colony, undefined)).not.toBeNull();
+    expect(rallies(world)).toEqual([setAt(DOOR_X, 0)]);
   });
 
-  it('a committed invasion owns the rally: no defence while it runs', () => {
+  it('a sally goes for the raider nearest the threatened ENTRANCE, not the one nearest the old rally', () => {
     const { world, colony } = setup();
-    ant(world, FOE, DOOR_X, 10, AI);
-    expect(aiNestDefence(world, colony, 'Invasion')).toBeNull();
-    expect(rallies(world)).toHaveLength(0);
+    for (let i = 0; i < 3; i++) ant(world, AI, DOOR_X + 1, 1);
+    colony.rallyPoint = { tileX: DOOR_X + 20, tileY: 10 }; // an old sally rally, raider gone
+    ant(world, FOE, DOOR_X + 20, 15); // 5 from the old rally, 35 from the door
+    ant(world, FOE, DOOR_X - 10, 5); // 15 from the door
+    expect(aiNestDefence(world, colony, undefined)?.entranceId).toBe(7);
+    expect(rallies(world)).toEqual([setAt(DOOR_X - 10, 5)]);
   });
 
-  it('a probe is called home, and handed its rally back when the nest is clear', () => {
-    const { world, colony } = setup();
-    const rec = createDefaultAIStateRecord(AI);
-    rec.state = 'Probing';
-    rec.operationKind = 'Probe';
-    rec.invasionRallyTileX = 9;
-    rec.invasionRallyTileY = 4;
-    world.aiState.push(rec);
-    colony.rallyPoint = { tileX: 9, tileY: 4 }; // the probe's target
-    const id = ant(world, FOE, DOOR_X, 10, AI);
-    runAIController(world, AI);
-    expect(rallies(world)).toEqual([
-      expect.objectContaining({ type: 'SetRallyPoint', tileX: DOOR_X, tileY: 0 }),
-    ]);
-    // The defence rally lands; the raider dies: the rally is cleared...
+  it("never sallies onto an entrance tile: a raider on another colony's entrance is met at its own entrance", () => {
+    const { world, colony, foe } = setup();
+    foe.entrances = [{ entranceId: 3, surfaceTileX: DOOR_X + 3, surfaceTileY: 0, isOpen: true }];
+    for (let i = 0; i < 3; i++) ant(world, AI, DOOR_X + 1, 1);
+    ant(world, FOE, DOOR_X + 3, 0); // nearest the door, on the foe's entrance
+    ant(world, FOE, DOOR_X + 10, 2);
+    expect(aiDefenceSallies(world, colony)).toBe(true);
+    expect(aiNestDefence(world, colony, undefined)?.entranceId).toBe(7);
+    expect(rallies(world)).toEqual([setAt(DOOR_X, 0)]);
+    // Held there, it is not re-sent.
     colony.rallyPoint = { tileX: DOOR_X, tileY: 0 };
-    world.ants.alive[id] = 0;
     world.commandQueue.length = 0;
-    runAIController(world, AI);
-    expect(rallies(world)).toEqual([expect.objectContaining({ type: 'ClearRallyPoint' })]);
-    // ...and once the clear lands, aiProbeTick re-emits the probe's rally.
-    colony.rallyPoint = null;
-    world.commandQueue.length = 0;
-    runAIController(world, AI);
-    expect(rallies(world)).toEqual([
-      expect.objectContaining({ type: 'SetRallyPoint', tileX: 9, tileY: 4 }),
-    ]);
+    expect(aiNestDefence(world, colony, undefined)?.entranceId).toBe(7);
+    expect(rallies(world)).toHaveLength(0);
   });
 
-  it('raiders at the door (no defence) call a probe in flight home, and it resumes after', () => {
+  it("a sally rally on a probe's own target tile is not re-sent every tick", () => {
     const { world, colony } = setup();
-    const rec = createDefaultAIStateRecord(AI);
-    rec.state = 'Probing';
-    rec.operationKind = 'Probe';
-    rec.invasionRallyTileX = 9;
-    rec.invasionRallyTileY = 4;
-    world.aiState.push(rec);
-    colony.rallyPoint = { tileX: 9, tileY: 4 }; // the probe's rally, far away
-    for (let i = 0; i < 4; i++) ant(world, AI, 12, 4); // its fighters, out on the probe
+    const rec = probing(world, colony);
+    rec.invasionRallyTileX = DOOR_X + 3;
+    rec.invasionRallyTileY = 2;
+    colony.rallyPoint = { tileX: DOOR_X + 3, tileY: 2 };
+    for (let i = 0; i < 3; i++) ant(world, AI, DOOR_X + 1, 1);
+    ant(world, FOE, DOOR_X + 3, 2); // on the probe's target, nearest the door
+    ant(world, FOE, DOOR_X + 12, 2);
+    expect(aiNestDefence(world, colony, rec)?.entranceId).toBe(7);
+    expect(rallies(world)).toHaveLength(0);
+  });
+
+  it('fighters away (on a probe, or in an enemy nest) do not count as at home', () => {
+    const { world, colony } = setup();
+    ant(world, FOE, DOOR_X + 2, 1);
+    ant(world, FOE, DOOR_X - 2, 1);
+    for (let i = 0; i < 4; i++) ant(world, AI, DOOR_X + AI_DEFENCE_HOME_RADIUS_TILES + 1, 0);
+    ant(world, AI, 5, 6, FOE);
+    expect(aiDefenceSallies(world, colony)).toBe(false); // 0 at home vs 2
+    const back = ant(world, AI, DOOR_X + AI_DEFENCE_HOME_RADIUS_TILES, 0);
+    ant(world, AI, DOOR_X, 3, AI);
+    expect(aiDefenceSallies(world, colony)).toBe(false); // 2 at home vs 2
+    world.ants.posX[back] = DOOR_X << FP_SHIFT;
+    ant(world, AI, DOOR_X, 1);
+    expect(aiDefenceSallies(world, colony)).toBe(true); // 3 at home vs 2
+  });
+
+  it('#371 Codex P1: a 5-fighter colony with its probe out calls the probe home against 2 raiders, holds through drafting, and resumes once they leave', () => {
+    const { world, colony } = setup();
+    const rec = probing(world, colony);
+    const fighters: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      const id = ant(world, AI, 0, 30); // out on the probe, far from home
+      fighters.push(id);
+      colony.workers.push(id);
+    }
     const a = ant(world, FOE, DOOR_X + 2, 1);
     const b = ant(world, FOE, DOOR_X - 2, 1);
-    // 2 raiders vs 4 fighters: no defence (2 < 4), but at the door (2 * 2 >= 4).
-    expect(aiThreatenedEntrance(world, colony)).toBeNull();
-    expect(aiRaidersAtDoor(world, colony)).toBe(true);
+    // 1. The raid calls the probe home: its rally is replaced by the entrance's.
     runAIController(world, AI);
-    expect(rallies(world)).toEqual([expect.objectContaining({ type: 'ClearRallyPoint' })]);
-    // The clear lands: the fighters are sentries; nothing re-sends them meanwhile.
+    expect(rallies(world)).toEqual([setAt(DOOR_X, 0)]);
+    colony.rallyPoint = { tileX: DOOR_X, tileY: 0 };
+    // 2. They come home and a sixth is drafted: they sally, and the raid (not the
+    //    count) still holds the probe: no probe rally, however many are home.
+    for (const id of fighters) world.ants.posX[id] = (DOOR_X + 3) << FP_SHIFT;
+    colony.workers.push(ant(world, AI, DOOR_X + 3, 0));
+    for (let t = 0; t < 3; t++) {
+      world.commandQueue.length = 0;
+      runAIController(world, AI);
+      expect(aiThreatenedEntrance(world, colony)).not.toBeNull();
+      expect(rallies(world)).not.toContainEqual(setAt(9, 4));
+      const r = rallies(world)[0] as { tileX: number; tileY: number } | undefined;
+      if (r !== undefined) colony.rallyPoint = { tileX: r.tileX, tileY: r.tileY };
+    }
+    expect(colony.rallyPoint).toEqual({ tileX: DOOR_X + 2, tileY: 1 }); // sallying at the nearest
+    // 3. The raiders go: the defence rally is cleared; once that lands the probe
+    //    gets its own rally back.
+    world.ants.alive[a] = 0;
+    world.ants.alive[b] = 0;
+    world.commandQueue.length = 0;
+    runAIController(world, AI);
+    expect(rallies(world)).toEqual([clear()]);
     colony.rallyPoint = null;
     world.commandQueue.length = 0;
     runAIController(world, AI);
-    expect(rallies(world)).toHaveLength(0);
-    // The raiders are gone: the probe gets its rally back.
-    world.ants.alive[a] = 0;
-    world.ants.alive[b] = 0;
-    runAIController(world, AI);
-    expect(rallies(world)).toEqual([
-      expect.objectContaining({ type: 'SetRallyPoint', tileX: 9, tileY: 4 }),
-    ]);
+    expect(rallies(world)).toEqual([setAt(9, 4)]);
+    expect(rec.operationKind).toBe('Probe');
   });
 
-  it('a committed invasion is not called home by raiders at the door', () => {
+  it('drafting does not end a raid: operations stay held however many fighters are home', () => {
+    const { world, colony, foe } = setup();
+    const rec = createDefaultAIStateRecord(AI);
+    rec.state = 'WarFooting';
+    rec.lastProbeEndTick = -100000;
+    world.aiState.push(rec);
+    setPilesForTest(world, [
+      { foodPileId: 77, tileX: 8, tileY: 3, pickupsRemaining: 4, pickupsInitial: 4 },
+    ]);
+    foe.priorityFoodPileId = null;
+    for (let i = 0; i < 12; i++) colony.workers.push(ant(world, AI, DOOR_X + 1, 1));
+    ant(world, FOE, DOOR_X + 20, 2);
+    ant(world, FOE, DOOR_X - 20, 2);
+    runAIController(world, AI);
+    expect(world.commandQueue.some((c) => c.type === 'StartAIOperation')).toBe(false);
+    expect(world.commandQueue).toContainEqual(
+      expect.objectContaining({ type: 'SetBehaviorRatio', ratio: { ...AI_DEFENCE_RATIO } }),
+    );
+    // Control: the raiders gone, the probe starts.
+    world.commandQueue.length = 0;
+    for (let i = 0; i < world.nextEntityId; i++) {
+      if (world.ants.colonyId[i] === FOE) world.ants.alive[i] = 0;
+    }
+    runAIController(world, AI);
+    expect(world.commandQueue.some((c) => c.type === 'StartAIOperation')).toBe(true);
+  });
+
+  it('when the raid is over it clears its own rallies only', () => {
+    // Its entrance rally, and its sally rally, are cleared.
+    for (const rp of [
+      { tileX: DOOR_X, tileY: 0 },
+      { tileX: DOOR_X + 7, tileY: 5 },
+      { tileX: DOOR_X + AI_DEFENCE_HOLD_RADIUS_TILES, tileY: 0 }, // a sally past the threat radius
+    ]) {
+      const { world, colony } = setup();
+      colony.rallyPoint = rp;
+      expect(aiNestDefence(world, colony, undefined)).toBeNull();
+      expect(rallies(world)).toEqual([clear()]);
+    }
+    // A rally far from its entrances is not its own.
+    const far = setup();
+    far.colony.rallyPoint = { tileX: DOOR_X + AI_DEFENCE_HOLD_RADIUS_TILES + 1, tileY: 0 };
+    expect(aiNestDefence(far.world, far.colony, undefined)).toBeNull();
+    expect(rallies(far.world)).toHaveLength(0);
+    // Nor is a probe's own target, even close to home.
+    const near = setup();
+    const rec = probing(near.world, near.colony);
+    rec.invasionRallyTileX = DOOR_X + 3;
+    near.colony.rallyPoint = { tileX: DOOR_X + 3, tileY: 4 };
+    expect(aiNestDefence(near.world, near.colony, rec)).toBeNull();
+    expect(rallies(near.world)).toHaveLength(0);
+  });
+
+  it('a committed invasion keeps its rally: no defence while it runs', () => {
     const { world, colony } = setup();
     const rec = createDefaultAIStateRecord(AI);
     rec.state = 'Invading';
     rec.operationKind = 'Invasion';
     world.aiState.push(rec);
     colony.rallyPoint = { tileX: 5, tileY: 0 };
-    for (let i = 0; i < 4; i++) ant(world, AI, 12, 4);
+    ant(world, FOE, DOOR_X, 10, AI);
     ant(world, FOE, DOOR_X + 2, 1);
-    ant(world, FOE, DOOR_X - 2, 1);
-    expect(aiRaidersAtDoor(world, colony)).toBe(true);
+    expect(aiNestDefence(world, colony, rec)).toBeNull();
     runAIController(world, AI);
     expect(rallies(world)).toHaveLength(0);
   });
 
   it('a probe whose rally is gone gets it back only once the raid is over', () => {
     const { world, colony } = setup();
-    const rec = createDefaultAIStateRecord(AI);
-    rec.state = 'Probing';
-    rec.operationKind = 'Probe';
-    rec.invasionRallyTileX = 9;
-    rec.invasionRallyTileY = 4;
-    world.aiState.push(rec);
+    probing(world, colony);
     colony.rallyPoint = null; // e.g. the tick after a defence clear landed
     const id = ant(world, FOE, DOOR_X, 10, AI); // ...and the raid is back
     runAIController(world, AI);
     // Only the defence rally: no probe rally queued after it to undo it.
-    expect(rallies(world)).toEqual([
-      expect.objectContaining({ type: 'SetRallyPoint', tileX: DOOR_X, tileY: 0 }),
-    ]);
-    // Raiders at the door, not inside, and fewer than the sentries: no rally at
-    // all (sentries fight up top), and still no probe rally while they are there.
+    expect(rallies(world)).toEqual([setAt(DOOR_X, 0)]);
     world.ants.alive[id] = 0;
-    for (let i = 0; i < 3; i++) ant(world, AI, DOOR_X + 1, 1);
-    ant(world, FOE, DOOR_X + 2, 1);
-    ant(world, FOE, DOOR_X - 2, 1);
     world.commandQueue.length = 0;
     runAIController(world, AI);
-    expect(rallies(world)).toHaveLength(0);
+    expect(rallies(world)).toEqual([setAt(9, 4)]);
   });
 
   it('defends the entrance the raiders are under, and keeps it on a tie', () => {
@@ -2102,30 +2171,26 @@ describe('#371 (V62) — the AI defends its own nest', () => {
       isOpen: true,
     });
     const a = ant(world, FOE, DOOR_X + 28, 8, AI);
-    expect(aiNestDefence(world, colony, 'None')?.entranceId).toBe(9);
+    expect(aiNestDefence(world, colony, undefined)?.entranceId).toBe(9);
     colony.rallyPoint = { tileX: DOOR_X + 30, tileY: 0 };
     world.commandQueue.length = 0;
-    // A second raider under the first entrance: 1 vs 1, the defended one is kept.
-    ant(world, FOE, DOOR_X + 1, 8, AI);
-    expect(aiNestDefence(world, colony, 'None')?.entranceId).toBe(9);
+    ant(world, FOE, DOOR_X + 1, 8, AI); // 1 vs 1: the defended one is kept
+    expect(aiNestDefence(world, colony, undefined)?.entranceId).toBe(9);
     expect(rallies(world)).toHaveLength(0);
-    // The first raider moves over too: 2 vs 0, the rally follows.
-    world.ants.posX[a] = DOOR_X << FP_SHIFT;
-    expect(aiNestDefence(world, colony, 'None')?.entranceId).toBe(7);
-    expect(rallies(world)).toEqual([
-      expect.objectContaining({ type: 'SetRallyPoint', tileX: DOOR_X, tileY: 0 }),
-    ]);
+    world.ants.posX[a] = DOOR_X << FP_SHIFT; // 2 vs 0: the rally follows
+    expect(aiNestDefence(world, colony, undefined)?.entranceId).toBe(7);
+    expect(rallies(world)).toEqual([setAt(DOOR_X, 0)]);
   });
 
   it('never defends a closed entrance, and clears a defence rally left on one', () => {
     const { world, colony } = setup();
     colony.entrances[0]!.isOpen = false;
     ant(world, FOE, DOOR_X, 10, AI);
-    expect(aiNestDefence(world, colony, 'None')).toBeNull();
+    expect(aiNestDefence(world, colony, undefined)).toBeNull();
     expect(rallies(world)).toHaveLength(0);
     colony.rallyPoint = { tileX: DOOR_X, tileY: 0 };
-    expect(aiNestDefence(world, colony, 'None')).toBeNull();
-    expect(rallies(world)).toEqual([expect.objectContaining({ type: 'ClearRallyPoint' })]);
+    expect(aiNestDefence(world, colony, undefined)).toBeNull();
+    expect(rallies(world)).toEqual([clear()]);
   });
 
   it('is off below V62: a V61 world gets no defence command', () => {
@@ -2133,22 +2198,8 @@ describe('#371 (V62) — the AI defends its own nest', () => {
     world.simVersion = SIM_VERSION_V61_AI_EARLY_STORAGE;
     ant(world, FOE, DOOR_X, 10, AI);
     colony.rallyPoint = { tileX: DOOR_X, tileY: 0 };
-    expect(aiNestDefence(world, colony, 'None')).toBeNull();
+    expect(aiNestDefence(world, colony, undefined)).toBeNull();
     expect(rallies(world)).toHaveLength(0);
-  });
-
-  it('while defending, the ratio drafts fighters (AI_DEFENCE_RATIO)', () => {
-    const { world, colony } = setup();
-    world.aiState.push(createDefaultAIStateRecord(AI));
-    for (let i = 0; i < 4; i++) {
-      colony.workers.push(ant(world, AI, DOOR_X + 3, 3, undefined, AntTask.Foraging));
-    }
-    setPoolFoodForTest(world, colony, QUEEN_EGG_FOOD_THRESHOLD * 10);
-    ant(world, FOE, DOOR_X, 10, AI);
-    runAIController(world, AI);
-    expect(world.commandQueue).toContainEqual(
-      expect.objectContaining({ type: 'SetBehaviorRatio', ratio: { ...AI_DEFENCE_RATIO } }),
-    );
   });
 
   it('a raided colony starts no probe and commits no invasion cohort', () => {
@@ -2158,23 +2209,18 @@ describe('#371 (V62) — the AI defends its own nest', () => {
       rec.state = state;
       rec.lastProbeEndTick = -100000;
       world.aiState.push(rec);
-      // Plenty of own fighters and a probe target next to the foe's entrance.
       for (let i = 0; i < 6; i++) ant(world, AI, DOOR_X + 2, 2);
       setPilesForTest(world, [
         { foodPileId: 77, tileX: 8, tileY: 3, pickupsRemaining: 4, pickupsInitial: 4 },
       ]);
       foe.priorityFoodPileId = null;
-      // Control: nobody inside -> the operation starts.
       runAIController(world, AI);
       expect(world.commandQueue.some((c) => c.type === 'StartAIOperation')).toBe(true);
       world.commandQueue.length = 0;
-      // A raider inside the nest -> defence, no operation.
       ant(world, FOE, DOOR_X, 12, AI);
       runAIController(world, AI);
       expect(world.commandQueue.some((c) => c.type === 'StartAIOperation')).toBe(false);
-      expect(world.commandQueue).toContainEqual(
-        expect.objectContaining({ type: 'SetRallyPoint', colonyId: AI, tileX: DOOR_X, tileY: 0 }),
-      );
+      expect(world.commandQueue).toContainEqual(setAt(DOOR_X, 0));
     }
   });
 });

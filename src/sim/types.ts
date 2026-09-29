@@ -1362,14 +1362,16 @@ export const SIM_VERSION_V61_AI_EARLY_STORAGE = 61 as const;
  * stayed sentries on the surface while raiders walked past them, down the shaft
  * and to the queen (a 6-fighter Assault won ~240 ticks after the rally). From V62:
  *   - AI policy (src/render/ai-controller.ts, on the existing SetRallyPoint /
- *     ClearRallyPoint / SetBehaviorRatio commands): an enemy fighter in the nest,
- *     or a surface force at the door at least as big as the colony's own fighters,
- *     makes the colony rally on that entrance (its fighters become tunnel
- *     defenders, V44) and draft fighters (AI_DEFENCE_RATIO); the rally is cleared
- *     when the threat is gone (`aiNestDefence`). A smaller force at the door is left
- *     to the sentries but still drafts fighters and holds operations
- *     (`aiRaidersAtDoor`). While defending no probe starts and no invasion cohort is
- *     committed; a probe in flight is called home, a committed invasion is not.
+ *     ClearRallyPoint / SetBehaviorRatio commands): a RAID — an enemy fighter in
+ *     the nest, or at least two on the surface near an own open entrance — lasts
+ *     exactly as long as the raiders do (the colony's own numbers never end it).
+ *     Throughout, the colony drafts fighters (AI_DEFENCE_RATIO), starts no probe,
+ *     commits no invasion cohort and calls a probe in flight home (a committed
+ *     invasion keeps its rally). Its rally goes on the threatened entrance (tunnel
+ *     defenders, V44) while raiders are inside or it is not stronger AT HOME
+ *     (fighters in its nest or near its entrances; a probe's fighters away do not
+ *     count), else on the nearest surface raider (a sally). When the raid is over
+ *     the rally is cleared (`aiNestDefence`) and a probe gets its own back.
  *   - Sim (both colonies alike, CLNY-08): a tunnel defender after an invader moves
  *     by the #364 saturation-aware hunt (`invaderHuntStep`, where in the
  *     defender's own nest only a fighter or a lower-id nestmate holds a duel) instead of
