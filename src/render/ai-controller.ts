@@ -765,8 +765,8 @@ export const AI_DEFENCE_RATIO = { forage: 2, fight: 8 } as const;
 /** Surface radius (Manhattan tiles from an own open entrance) of a raid. */
 export const AI_DEFENCE_THREAT_RADIUS_TILES = 32 as const;
 /**
- * While the colony's rally is a defence rally (a raid is already on), surface raiders
- * count out to this radius instead — hysteresis, so raiders milling at the threat
+ * While a raid is already on (its raid clock running, or a defence rally up), surface
+ * raiders count out to this radius instead — hysteresis, so raiders milling at the threat
  * radius's edge do not end and restart the raid tick by tick (each gap would let a
  * probe start or an invasion cohort commit). At most AI_DEFENCE_HOME_RADIUS_TILES.
  */
@@ -1104,7 +1104,12 @@ export function aiNestDefence(
     return null;
   }
   const ours = isDefenceRally(world, colony, aiState);
-  const radius = ours ? AI_DEFENCE_HOLD_RADIUS_TILES : AI_DEFENCE_THREAT_RADIUS_TILES;
+  // A raid already on counts its raiders out to the hold radius. "On" is the raid
+  // clock running — which does not depend on where the rally is, so a stale raid
+  // whose probe has its own rally back keeps its hold (#371) — or a defence rally
+  // being up (no AI state, or a state with the rally but no clock).
+  const raidOn = ours || (aiState !== undefined && aiState.raidSinceTick !== -1);
+  const radius = raidOn ? AI_DEFENCE_HOLD_RADIUS_TILES : AI_DEFENCE_THREAT_RADIUS_TILES;
   const scan = scanRaid(world, colony, radius, colony.rallyPoint);
   const threat = raidEntrance(colony, scan, rallyOnOwnEntrance(colony));
   // The raid clock (AIStateRecord.raidSinceTick, kept by the sim): started when a

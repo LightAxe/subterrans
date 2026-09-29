@@ -2402,6 +2402,19 @@ describe('#371 (V62) — the AI defends its own nest', () => {
     expect(starts()).toBe(false);
   });
 
+  it('Codex P2 on 63fb027: a stale raid keeps its hold radius while its probe has its own rally back', () => {
+    const { world, colony } = setup(5000);
+    const rec = probing(world, colony); // rally on the probe's target (9, 4)
+    rec.raidSinceTick = 5000 - AI_DEFENCE_OPS_HOLD_LIMIT_TICKS;
+    // Parked raiders between the threat and hold radii.
+    ant(world, FOE, DOOR_X + AI_DEFENCE_HOLD_RADIUS_TILES - 1, 0);
+    ant(world, FOE, DOOR_X, AI_DEFENCE_HOLD_RADIUS_TILES - 1);
+    const out = { holdOperations: true };
+    expect(aiNestDefence(world, colony, rec, out)?.entranceId).toBe(7);
+    expect(out.holdOperations).toBe(false); // stale: the probe goes on
+    expect(world.commandQueue).toHaveLength(0); // no clock clear, no rally change
+  });
+
   it('past the limit a probe called home by an enemy inside gets its rally back once only parked raiders are left', () => {
     const { world, colony } = setup(5000);
     const rec = probing(world, colony); // target (9, 4)
