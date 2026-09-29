@@ -9,6 +9,7 @@ import {
   SIM_VERSION_V53_NO_LOOT_WHEN_FULL,
   SIM_VERSION_V61_AI_EARLY_STORAGE,
   SIM_VERSION_V62_AI_NEST_DEFENCE,
+  SIM_VERSION_V63_AI_DEEP_QUEEN,
 } from '../sim/types.js';
 import type { NestEntrance } from '../sim/colony/entrance.js';
 import type { ColonyId, ColonyRecord } from '../sim/colony/colony-store.js';
@@ -59,6 +60,7 @@ export const AI_DIG_INTERVAL = 40 as const; // every 2 seconds @ 20Hz
  */
 export const AI_CHAMBER_INTERVAL = AI_DIG_INTERVAL * 4;
 export const AI_DIG_MARK_BUDGET = 5 as const;
+/** Preferred Queen chamber anchor row up to V62; from V63 see `aiQueenMinAnchorRow` (#374). */
 export const AI_QUEEN_CHAMBER_DEPTH = 18 as const;
 export const AI_FOOD_STORAGE_THRESHOLD = 8 as const;
 export const AI_NURSERY_THRESHOLD = 12 as const;
@@ -93,12 +95,36 @@ export const AI_MAX_FOOD_STORAGE_CHAMBERS = 2 as const;
  *
  * Tuning rationale: 4 tiles is wide enough that bootstrap can hit the gate
  * within reasonable tick budget at the v2 scenario's underground grid
- * dimensions, while still putting the Queen near AI_QUEEN_CHAMBER_DEPTH
- * (footprint extends 3 rows below the anchor, so a Queen at delta=4
+ * dimensions, while still putting the Queen near its preferred row
+ * (AI_QUEEN_CHAMBER_DEPTH up to V62; from V63 `aiQueenMinAnchorRow`, a floor, so
+ * the band is [floor, floor + TOLERANCE])
+ * (up to V62: footprint extends 3 rows below the anchor, so a Queen at delta=4
  * lands its bottom row at preferredDepth + 1 — well within the
  * acceptance criterion of "max chamber Y > 15").
  */
 export const AI_PLACEMENT_DEPTH_TOLERANCE = 4 as const;
+
+/**
+ * #374 (V63) — the shallowest row the AI anchors its Queen chamber on: the first
+ * row at least a third of the way down a grid `gridHeight` tall (`3 × row >=
+ * gridHeight`; row 22 of 64), so the larder (the first FoodStorage, which from V61
+ * lands at the shallow shaft floor, preferred row 5) lies between the entrance and
+ * the queen and a raid meets the food first.
+ *
+ * Fallback: on a grid too shallow for a `chamberHeight`-row footprint below that
+ * row, the deepest row the footprint fits (`gridHeight - chamberHeight`). The
+ * bootstrap shaft keeps digging down until a Queen chamber is COMPLETED, so on any
+ * real grid a valid anchor at this row appears shortly after the shaft reaches it
+ * (once the dig marks around it finish — a footprint may not hold a BeingDug tile).
+ * A grid of 3 rows or fewer cannot hold a Queen at all (row 0 is the ceiling).
+ *
+ * The owner's rule, applied to whatever colony the controller drives (CLNY-08).
+ */
+export function aiQueenMinAnchorRow(gridHeight: number, chamberHeight: number): number {
+  let row = 0;
+  while (row * 3 < gridHeight) row += 1;
+  return Math.max(0, Math.min(row, gridHeight - chamberHeight));
+}
 
 /**
  * Issue #33 — outward-extension dig budget (tiles per AI_DIG_INTERVAL).
@@ -564,13 +590,31 @@ export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): voi
   // need 60Hz responsiveness; 4× slower than the dig interval is plenty.
   if (world.tick % AI_CHAMBER_INTERVAL !== 0) return;
 
-  // Queen chamber — if missing, try to place near AI_QUEEN_CHAMBER_DEPTH.
+  // Queen chamber — if missing, try to place near AI_QUEEN_CHAMBER_DEPTH (up to
+  // V62; from V63 at or just below `aiQueenMinAnchorRow`, see #374 below).
   // Includes pending Queen so we don't spam duplicate PlaceChamber commands
   // into the queue between PlaceChamber issuance and Queen completion (the
   // sim layer would reject them, but no point queuing them in the first
   // place). Matches the FS / Nursery uniqueness pattern.
+  //
+  // #374 (V63) — the Queen anchor is at least a third of the way down
+  // (`aiQueenMinAnchorRow`), and that row is also the preferred depth, so the
+  // Queen lands as soon as the bootstrap shaft reaches it. Up to V62 it landed
+  // within AI_PLACEMENT_DEPTH_TOLERANCE of AI_QUEEN_CHAMBER_DEPTH (row 14 at the
+  // earliest), a few rows under the larder, and raids met her before the food.
   if (!hasChamberOrPending(world, colony, ChamberType.Queen)) {
-    const placement = findOpenChamberSpot(world, colony, AI_QUEEN_CHAMBER_DEPTH, ChamberType.Queen);
+    const grid = world.undergroundGrids[colony.colonyId];
+    const deepQueen = world.simVersion >= SIM_VERSION_V63_AI_DEEP_QUEEN && grid !== undefined;
+    const minRow = deepQueen
+      ? aiQueenMinAnchorRow(grid.height, CHAMBER_DIMENSIONS[ChamberType.Queen].height)
+      : 0;
+    const placement = findOpenChamberSpot(
+      world,
+      colony,
+      deepQueen ? minRow : AI_QUEEN_CHAMBER_DEPTH,
+      ChamberType.Queen,
+      minRow,
+    );
     if (placement !== null) {
       const cmd: PlaceChamberCommand = {
         type: 'PlaceChamber',
@@ -1831,6 +1875,7 @@ function isDirtTileUnderground(
  * Selection: BFS radius 32 around the queen's column. Among valid anchors, pick the
  * one minimizing |anchorY - preferredDepth|; deterministic tiebreaker (anchorY,
  * anchorX) ascending. No PRNG. Returns null if no valid anchor exists.
+ * `minAnchorRow` (#374, V63 Queen only; 0 = no floor) rejects anchors above that row.
  *
  * Pre-09.1-01-Task-2 history: this function used to return ANY Open tile not inside
  * an existing chamber's footprint, but didn't verify the new footprint actually fit.
@@ -1844,6 +1889,7 @@ function findOpenChamberSpot(
   colony: ColonyRecord,
   preferredDepth: number,
   chamberType: ChamberType,
+  minAnchorRow = 0,
 ): { tileX: number; tileY: number } | null {
   const grid = world.undergroundGrids[colony.colonyId];
   if (grid === undefined) return null;
@@ -1941,7 +1987,7 @@ function findOpenChamberSpot(
     if (Math.abs(tx - queenTileX) > RADIUS || Math.abs(ty - queenTileY) > RADIUS) continue;
     if (tx < 0 || ty < 0 || tx >= grid.width || ty >= grid.height) continue;
 
-    if (footprintValid(tx, ty)) {
+    if (ty >= minAnchorRow && footprintValid(tx, ty)) {
       candidates.push({ tileX: tx, tileY: ty });
     }
 

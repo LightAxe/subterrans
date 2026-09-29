@@ -176,7 +176,10 @@ _Avoid_: layer, level.
 **Chamber**:
 A colony-placed underground space of a given `ChamberType` — `Queen`, `Nursery`,
 or `FoodStorage` (player **and** AI place chambers via `PlaceChamber`). Note:
-`nurseDeposit` is a Nursery-targeting **flow field**, not a chamber type.
+`nurseDeposit` is a Nursery-targeting **flow field**, not a chamber type. Since
+**#374 (simVersion V63)** the rule-based AI digs its Queen chamber at least a third
+of the way down the underground grid while its first FoodStorage (the larder) stays
+by the entrance, so a raid meets the food before the queen; a player places their own.
 _Avoid_: room.
 
 **Entrance**:

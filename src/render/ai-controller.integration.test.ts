@@ -20,18 +20,20 @@
 
 import { describe, it, expect } from 'vitest';
 
-import { runAIController } from './ai-controller.js';
+import { runAIController, aiQueenMinAnchorRow } from './ai-controller.js';
 import { createScenario } from '../sim/scenario.js';
 import { tick } from '../sim/tick.js';
 import { ChamberType } from '../sim/enums.js';
 import { UndergroundTileState, ugGet } from '../sim/terrain.js';
 import { FP_SHIFT } from '../sim/fixed.js';
+import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 import { PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
 import type { WorldState } from '../sim/types.js';
 import {
   SIM_VERSION_V60_RAID_ORDERS,
   SIM_VERSION_V61_AI_EARLY_STORAGE,
   SIM_VERSION_V62_AI_NEST_DEFENCE,
+  SIM_VERSION_V63_AI_DEEP_QUEEN,
 } from '../sim/types.js';
 import type { SimCommand } from '../sim/commands.js';
 import { RaidType } from '../sim/enums.js';
@@ -44,7 +46,8 @@ import { colonyFoodTotal } from '../sim/food/food-api.js';
 
 const SEED = 42;
 // Issue #33 — extended from 3000 to 6000 ticks. The deeper Queen target
-// (AI_QUEEN_CHAMBER_DEPTH = 18, was 10) lengthens bootstrap dig time before
+// (AI_QUEEN_CHAMBER_DEPTH = 18, was 10; from #374 / V63 row 22, a third of the
+// way down — `aiQueenMinAnchorRow`) lengthens bootstrap dig time before
 // the Queen chamber can land at its acceptable depth band; the OLD shallow
 // target placed the Queen at Y≈1 by tick 100. The new depth gate is the
 // whole point of issue #33 (chambers spread vertically, max chamber Y > 15
@@ -297,7 +300,8 @@ describe('AI-only scenario 6000 ticks', () => {
 // (18000 ticks at 20Hz) with the default scenario, the enemy colony
 // footprint should span at least 30% of the underground grid width OR have
 // at least one chamber at depth y > 15. The current fix achieves the depth
-// criterion via a deeper Queen target (AI_QUEEN_CHAMBER_DEPTH = 18) plus a
+// criterion via a deeper Queen target (AI_QUEEN_CHAMBER_DEPTH = 18; from V63
+// `aiQueenMinAnchorRow`, row 22) plus a
 // depth gate on findOpenChamberSpot.
 // -----------------------------------------------------------------------------
 
@@ -490,9 +494,76 @@ describe('#371 — a 6-fighter Assault rush on the AI (seed 303 Normal)', () => 
     expect(rushTrial(SIM_VERSION_V62_AI_NEST_DEFENCE, 6600)).toBeNull();
   }, 90_000);
 
+  it('V63 (deep Queen, #374): the defence still holds', () => {
+    expect(rushTrial(SIM_VERSION_V63_AI_DEEP_QUEEN, 6600)).toBeNull();
+  }, 90_000);
+
   it('V61 (pinned): the rush kills the queen within ~300 ticks', () => {
     const died = rushTrial(SIM_VERSION_V61_AI_EARLY_STORAGE, 6600);
     expect(died).not.toBeNull();
     expect(died!).toBeLessThan(6100);
+  }, 90_000);
+});
+
+// -----------------------------------------------------------------------------
+// #374 (V63) — the AI digs its Queen chamber at least a third of the way down and
+// keeps its larder (first FoodStorage) shallow, so a raid meets the food before
+// the queen. Seed 404 Normal, rule-based enemy vs a passive player.
+// -----------------------------------------------------------------------------
+
+interface NestLayout {
+  /** Anchor row and completion tick of the first chamber of each type (null = none). */
+  queenRow: number | null;
+  queenAt: number | null;
+  storageRow: number | null;
+  gridHeight: number;
+}
+
+function traceNestLayout(simVersion: number, ticks: number): NestLayout {
+  const world = createScenario(404, 'Normal');
+  world.simVersion = simVersion;
+  const colony = world.colonies[ENEMY_COLONY_ID]!;
+  const out: NestLayout = {
+    queenRow: null,
+    queenAt: null,
+    storageRow: null,
+    gridHeight: world.undergroundGrids[ENEMY_COLONY_ID]!.height,
+  };
+  for (let t = 0; t < ticks && out.queenAt === null; t++) {
+    runAIController(world, ENEMY_COLONY_ID);
+    tick(world, world.commandQueue.splice(0));
+    for (const ch of colony.chambers) {
+      if (ch.chamberType === ChamberType.Queen && out.queenAt === null) {
+        out.queenAt = world.tick;
+        out.queenRow = ch.posY >> FP_SHIFT;
+      }
+      if (ch.chamberType === ChamberType.FoodStorage && out.storageRow === null) {
+        out.storageRow = ch.posY >> FP_SHIFT;
+      }
+    }
+  }
+  return out;
+}
+
+describe('#374 — the AI Queen chamber is deep, its larder shallow (seed 404 Normal)', () => {
+  const TICKS = 4500;
+
+  it('V63: the Queen chamber is at least a third of the way down, below the larder', () => {
+    const v63 = traceNestLayout(SIM_VERSION_V63_AI_DEEP_QUEEN, TICKS);
+    const msg = JSON.stringify(v63);
+    expect(v63.queenAt, msg).not.toBeNull();
+    expect(v63.queenRow! * 3, msg).toBeGreaterThanOrEqual(v63.gridHeight);
+    expect(v63.queenRow, msg).toBe(
+      aiQueenMinAnchorRow(v63.gridHeight, CHAMBER_DIMENSIONS[ChamberType.Queen].height),
+    );
+    expect(v63.storageRow, msg).not.toBeNull();
+    expect(v63.storageRow!, msg).toBeLessThan(v63.queenRow! - 10);
+  }, 90_000);
+
+  it('V62 (pinned): the Queen chamber landed shallower than a third of the way down', () => {
+    const v62 = traceNestLayout(SIM_VERSION_V62_AI_NEST_DEFENCE, TICKS);
+    const msg = JSON.stringify(v62);
+    expect(v62.queenAt, msg).not.toBeNull();
+    expect(v62.queenRow! * 3, msg).toBeLessThan(v62.gridHeight);
   }, 90_000);
 });
