@@ -4,7 +4,7 @@
 // Runs under Node with no Phaser.
 
 import { describe, it, expect } from 'vitest';
-import { TILE_SIZE_PX } from './sprites.js';
+import { COLOR_ENEMY_COLONY, TILE_SIZE_PX } from './sprites.js';
 import { buildHudLayout } from './hud-layout.js';
 import { DEFAULT_LAYOUT } from './layout.js';
 import { COLOR_BARREN_EARTH, COLOR_BARREN_EARTH_DARK } from './terrain-atlas.js';
@@ -505,6 +505,21 @@ describe('#372 drawMinimapEnemyFighters — every enemy surface fighter, always'
       expect(x! + rw!).toBeLessThanOrEqual(mm.x + mm.w);
       expect(y! + rh!).toBeLessThanOrEqual(mm.y + mm.h);
     }
+  });
+
+  it('drawMinimap draws the colony markers after the dots (sentries never bury a nest)', () => {
+    const { world: w } = raidWorld();
+    addFighter(w, ENEMY_COLONY_ID, 104, 64, null);
+    const gfx = new MockGfx();
+    drawMinimap(gfx, w, createViewState(PLAYER_START_X, PLAYER_START_Y), hud);
+    const lastRed = gfx.calls.findIndex(
+      (c) => c.method === 'fillStyle' && c.args[0] === COLOR_MINIMAP_ENEMY_FIGHTER,
+    );
+    const marker = gfx.calls.findIndex(
+      (c) => c.method === 'fillStyle' && c.args[0] === COLOR_ENEMY_COLONY,
+    );
+    expect(lastRed).toBeGreaterThanOrEqual(0);
+    expect(marker).toBeGreaterThan(lastRed);
   });
 
   it('drawMinimap draws the dots after the viewport outline (never hidden by it)', () => {

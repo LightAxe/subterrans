@@ -1907,8 +1907,8 @@ export class UIScene extends Phaser.Scene {
       backgroundColor: '#00000088',
       padding: { x: CAPTION_PAD_X, y: 4 },
       align: 'center',
-      // #372 — wrap so the box clears the tool palette (hud-layout.ts).
-      wordWrap: { width: captionWrapWidth(req.x, this.hud) },
+      // #372 — a caption in the palette's band wraps clear of it (hud-layout.ts).
+      wordWrap: { width: captionWrapWidth(req.x, req.y, this.hud) },
     });
     captionText.setOrigin(0.5, 0.5);
     captionText.setDepth(30);

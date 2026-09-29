@@ -159,21 +159,38 @@ describe('measureEnemyGathering — which fighters count', () => {
     expect(measureEnemyGathering(w, P)?.fighters).toBe(1);
   });
 
-  it('each fighter counts for its nearest entrance; the biggest group wins; ties go to the first', () => {
+  it('a fighter counts for every entrance it is near; the biggest count wins', () => {
     const { world: w, player } = raidWorld();
     const west = addEntrance(w, player, 4, 64);
-    army(w, 2, 8, 66); // nearest the west door (x 4)
-    army(w, 3, 30, 66); // nearest the x-24 door
+    army(w, 2, 8, 66); // within reach of both doors (x 4 and x 24)
+    army(w, 3, 30, 66); // 26+ tiles from x 4: only the x-24 door
     const g = measureEnemyGathering(w, P)!;
     expect(g.entrance.surfaceTileX).toBe(DOOR.x);
-    expect(g.fighters).toBe(3);
-    army(w, 1, 8, 60);
-    expect(measureEnemyGathering(w, P)!.entrance.surfaceTileX).toBe(DOOR.x); // 3 vs 3: first listed
-    army(w, 1, 8, 61);
+    expect(g.fighters).toBe(5);
+    expect([g.minTileX, g.maxTileX]).toEqual([8.5, 32.5]);
+    army(w, 4, 0, 78); // 24+ tiles from x 24: only the west door (2 + 4 = 6)
     expect(measureEnemyGathering(w, P)!.entrance).toBe(west);
+    expect(measureEnemyGathering(w, P)!.fighters).toBe(6);
     // A closed entrance draws nobody.
     west.isOpen = false;
-    expect(measureEnemyGathering(w, P)!.fighters).toBe(7);
+    expect(measureEnemyGathering(w, P)!.fighters).toBe(5);
+  });
+
+  it('an army between two close entrances is counted whole, not split between them', () => {
+    const { world: w, player } = raidWorld();
+    addEntrance(w, player, 30, 64);
+    // 8 fighters at x 26..29 — half nearer each door.
+    army(w, 8, 26, 70);
+    const g = measureEnemyGathering(w, P)!;
+    expect(g.fighters).toBe(8);
+    expect(isEnemyGathering(g)).toBe(true);
+  });
+
+  it('equal counts: the entrance the fighters are nearer to on average', () => {
+    const { world: w, player } = raidWorld();
+    const east = addEntrance(w, player, 28, 64);
+    army(w, 6, 40, 60); // all within 24 of both; nearer the x-28 door
+    expect(measureEnemyGathering(w, P)!.entrance).toBe(east);
   });
 
   it('isEnemyGathering: GATHER_MIN_FIGHTERS makes an army, one fewer does not', () => {
@@ -357,8 +374,16 @@ describe('nextGatheringWarning — once per gathering', () => {
     for (let i = 0; i < INVASION_NEST_MIN_FIGHTERS; i++)
       inNest.push(addFighter(w, E, 30 + i, 5, P));
     expect(run(s, w, 500)).toEqual([]);
-    // One fewer in the nest (a lone raider or two) is no invasion.
-    kill(w, [inNest[0]!]);
+    // Even once the invasion ends and the army still stands there: used up.
+    kill(w, inNest);
+    expect(run(s, w, GATHER_REARM_QUIET_TICKS * 2)).toEqual([]);
+  });
+
+  it('one fewer than INVASION_NEST_MIN_FIGHTERS in the nest (a raider or two) is no invasion', () => {
+    const { world: w } = raidWorld();
+    const s = createGatheringWarningState();
+    army(w, GATHER_MIN_FIGHTERS, 36, 62);
+    for (let i = 0; i < INVASION_NEST_MIN_FIGHTERS - 1; i++) addFighter(w, E, 30 + i, 5, P);
     expect(run(s, w, GATHER_DWELL_TICKS + 1)).toHaveLength(1);
   });
 
@@ -416,15 +441,19 @@ describe('nextGatheringWarning — once per gathering', () => {
     expect(s.armed).toBe(false); // an expired warning does not re-arm
   });
 
-  it('an owed warning goes stale when the army breaks up or invades', () => {
+  it('an owed warning survives a dip under GATHER_MIN_FIGHTERS, goes stale when the army breaks up', () => {
     const a = raidWorld().world;
     const sa = createGatheringWarningState();
     const ids = army(a, GATHER_MIN_FIGHTERS, 36, 62);
     run(sa, a, GATHER_DWELL_TICKS, false);
     expect(run(sa, a, 1, false)).toHaveLength(1);
-    kill(a, [ids[0]!]);
+    kill(a, [ids[0]!]); // 5 left: still owed
+    expect(run(sa, a, 1, false)).toHaveLength(1);
+    kill(a, ids.slice(1, GATHER_MIN_FIGHTERS - GATHER_REARM_MAX_FIGHTERS - 1)); // 3 left
+    expect(run(sa, a, 1, false)).toHaveLength(1);
+    kill(a, [ids[GATHER_MIN_FIGHTERS - GATHER_REARM_MAX_FIGHTERS - 1]!]); // 2 left: broken up
     expect(run(sa, a, 1, false)).toEqual([]);
-    army(a, 1, 36, 66);
+    army(a, 4, 36, 66);
     expect(run(sa, a, 50, false)).toEqual([]); // dropped for good, still disarmed
 
     const b = raidWorld().world;
@@ -433,6 +462,31 @@ describe('nextGatheringWarning — once per gathering', () => {
     expect(run(sb, b, GATHER_DWELL_TICKS + 1, false)).toHaveLength(1);
     for (let i = 0; i < INVASION_NEST_MIN_FIGHTERS; i++) addFighter(b, E, 30 + i, 5, P);
     expect(run(sb, b, 1, false)).toEqual([]);
+  });
+
+  it('an invasion before any warning uses the gathering up: retreating survivors raise none', () => {
+    const { world: w } = raidWorld();
+    const s = createGatheringWarningState();
+    const inNest: number[] = [];
+    for (let i = 0; i < INVASION_NEST_MIN_FIGHTERS; i++)
+      inNest.push(addFighter(w, E, 30 + i, 5, P));
+    run(s, w, 1);
+    expect(s.armed).toBe(false);
+    expect(s.owedSinceTick).toBe(-Infinity);
+    // The invaders come back out and walk off past the door.
+    kill(w, inNest);
+    army(w, GATHER_MIN_FIGHTERS, 36, 62);
+    expect(run(s, w, GATHER_DWELL_TICKS * 5)).toEqual([]);
+  });
+
+  it('an owed warning from a later tick (a clock that ran backwards) is dropped', () => {
+    const { world: w } = raidWorld();
+    const s = createGatheringWarningState();
+    army(w, GATHER_MIN_FIGHTERS, 36, 62);
+    run(s, w, GATHER_DWELL_TICKS + 1, false);
+    expect(s.owedSinceTick).not.toBe(-Infinity);
+    advance(w, -100);
+    expect(run(s, w, 1, false)).toEqual([]);
   });
 
   it('names the entrance the army is near when offered', () => {

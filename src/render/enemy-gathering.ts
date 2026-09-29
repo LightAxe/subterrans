@@ -45,8 +45,10 @@ export const GATHER_RADIUS_TILES = 24;
  */
 export const GATHER_HOME_RADIUS_TILES = 8;
 
-/** How long (ticks, 2 s) a gathering must hold before the warning fires, so an
- *  army that only marches past an entrance does not raise it. */
+/** How long (ticks, 2 s) a gathering must hold before the warning fires, so a
+ *  group that only brushes the edge of the radius does not raise it. (An army
+ *  marching straight through the circle can still meet it: at 0.5 tile/tick it
+ *  covers 20 tiles in 40 ticks. That army is at the door, so the warning is fair.) */
 export const GATHER_DWELL_TICKS = 40;
 
 /** After a warning, the gathering is over (and the warning re-arms) once at most
@@ -67,7 +69,8 @@ export const GATHER_CAPTION_OWED_TICKS = 200;
 export interface EnemyGathering {
   /** The viewer's open entrance with the most enemy fighters near it. */
   entrance: NestEntrance;
-  /** Enemy fighters near it (each fighter counts for its nearest entrance only). */
+  /** Enemy fighters within GATHER_RADIUS_TILES of it (a fighter near two
+   *  entrances counts for both, so an army between two close doors is whole). */
   fighters: number;
   /** Bounding box (tile coordinates, fractional) of those fighters. */
   minTileX: number;
@@ -97,8 +100,10 @@ function nearOwnOpenEntrance(colony: ColonyRecord | undefined, x: number, y: num
  * A fighter counts when it is alive, on the surface, of another colony, doing
  * the Fighting task, within GATHER_RADIUS_TILES of one of the viewer's open
  * entrances, and not within GATHER_HOME_RADIUS_TILES of its own colony's open
- * entrances. It counts for its nearest viewer entrance only. Ties go to the
- * entrance listed first.
+ * entrances. It counts for EVERY viewer entrance it is that near, so an army
+ * standing between two close entrances is not split in two. The entrance
+ * returned is the one with the most such fighters; on a tie, the one they are
+ * nearer to on average (then the one listed first).
  */
 export function measureEnemyGathering(
   world: WorldState,
@@ -110,6 +115,7 @@ export function measureEnemyGathering(
   const n = doors.length;
   if (n === 0) return null;
   const count = new Array<number>(n).fill(0);
+  const sumD = new Array<number>(n).fill(0);
   const minX = new Array<number>(n).fill(Infinity);
   const minY = new Array<number>(n).fill(Infinity);
   const maxX = new Array<number>(n).fill(-Infinity);
@@ -125,27 +131,25 @@ export function measureEnemyGathering(
     if (cid === viewerColonyId) continue;
     const x = ants.posX[id]! / FP_ONE;
     const y = ants.posY[id]! / FP_ONE;
-    let best = -1;
-    let bestD2 = Infinity;
+    if (nearOwnOpenEntrance(world.colonies[cid], x, y, GATHER_HOME_RADIUS_TILES)) continue;
     for (let d = 0; d < n; d++) {
       const dx = x - (doors[d]!.surfaceTileX + 0.5);
       const dy = y - (doors[d]!.surfaceTileY + 0.5);
       const d2 = dx * dx + dy * dy;
-      if (d2 < bestD2) {
-        bestD2 = d2;
-        best = d;
-      }
+      if (d2 > r2) continue;
+      count[d] = count[d]! + 1;
+      sumD[d] = sumD[d]! + Math.sqrt(d2);
+      if (x < minX[d]!) minX[d] = x;
+      if (y < minY[d]!) minY[d] = y;
+      if (x > maxX[d]!) maxX[d] = x;
+      if (y > maxY[d]!) maxY[d] = y;
     }
-    if (bestD2 > r2) continue;
-    if (nearOwnOpenEntrance(world.colonies[cid], x, y, GATHER_HOME_RADIUS_TILES)) continue;
-    count[best] = count[best]! + 1;
-    if (x < minX[best]!) minX[best] = x;
-    if (y < minY[best]!) minY[best] = y;
-    if (x > maxX[best]!) maxX[best] = x;
-    if (y > maxY[best]!) maxY[best] = y;
   }
   let top = 0;
-  for (let d = 1; d < n; d++) if (count[d]! > count[top]!) top = d;
+  for (let d = 1; d < n; d++) {
+    // Equal counts: compare mean distance (sums over the same count).
+    if (count[d]! > count[top]! || (count[d] === count[top] && sumD[d]! < sumD[top]!)) top = d;
+  }
   if (count[top] === 0) return null;
   return {
     entrance: doors[top]!,
@@ -283,15 +287,18 @@ export function resetGatheringWarningState(state: GatheringWarningState): void {
  *   - Armed, a gathering (isEnemyGathering) with no invasion under way
  *     (fewer than INVASION_NEST_MIN_FIGHTERS enemy fighters in the viewer's
  *     tunnels) that holds for GATHER_DWELL_TICKS disarms the warning and makes
- *     it owed.
+ *     it owed. An invasion that begins while armed disarms it with nothing
+ *     owed (the invasion caption covers it), so its survivors walking back
+ *     out do not raise the warning afterwards.
  *   - Disarmed, it re-arms once at most GATHER_REARM_MAX_FIGHTERS enemy
  *     fighters are near any entrance and none invading, continuously for
  *     GATHER_REARM_QUIET_TICKS: the army dispersed, or its invasion ended. An
  *     army still standing near the door, or still inside the nest, keeps it
  *     disarmed however long it takes.
  *   - An owed warning is offered each frame until the queue takes it. It is
- *     dropped unshown once it is stale: the gathering broke up, the invasion
- *     began (its own caption covers that), or GATHER_CAPTION_OWED_TICKS passed.
+ *     dropped unshown once it is stale: the gathering broke up (at most
+ *     GATHER_REARM_MAX_FIGHTERS left near), the invasion began (its own caption
+ *     covers that), or GATHER_CAPTION_OWED_TICKS passed.
  *     A dropped warning does not re-arm; the next one needs a new gathering.
  *
  * Text names the entrance the army is near now (it may have moved since the
@@ -310,7 +317,13 @@ export function nextGatheringWarning(
   const tick = world.tick;
 
   if (state.armed) {
-    if (gathering && !invading) {
+    if (invading) {
+      // An invasion that began before any warning uses the gathering up: its
+      // survivors walking back out past the door must not raise one.
+      state.armed = false;
+      state.gatherSinceTick = -Infinity;
+      state.quietSinceTick = -Infinity;
+    } else if (gathering) {
       if (state.gatherSinceTick === -Infinity || state.gatherSinceTick > tick) {
         state.gatherSinceTick = tick;
       }
@@ -339,7 +352,16 @@ export function nextGatheringWarning(
   }
 
   if (state.owedSinceTick === -Infinity) return null;
-  if (!gathering || invading || tick - state.owedSinceTick > GATHER_CAPTION_OWED_TICKS) {
+  // Broken up by the same test that re-arms (at most GATHER_REARM_MAX_FIGHTERS
+  // near), not by a dip under GATHER_MIN_FIGHTERS: one fighter stepping out of
+  // the radius must not lose the warning for good.
+  if (
+    g === null ||
+    g.fighters <= GATHER_REARM_MAX_FIGHTERS ||
+    invading ||
+    state.owedSinceTick > tick ||
+    tick - state.owedSinceTick > GATHER_CAPTION_OWED_TICKS
+  ) {
     state.owedSinceTick = -Infinity; // stale: drop it
     return null;
   }

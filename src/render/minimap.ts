@@ -153,6 +153,53 @@ export function drawMinimap(
     gfx.fillRect(px - 1, py - 1, 2, 2);
   }
 
+  // Viewport rect — always tracks surfaceCamera (minimap shows surface always per
+  // PRD §7a). Stage 2: the visible window is zoom-dependent, so derive it from the
+  // adapter's world rect (world px → tiles → minimap px).
+  const rect = visibleWorldRect(viewState.surfaceCamera);
+  // Clamp the rect to the minimap frame before drawing. Under zoom the visible
+  // world window can exceed the world/minimap extent (e.g. at MIN_ZOOM the rect
+  // is ~312px wide vs the 160px minimap, and a centered camera pushes its left
+  // edge negative), so the unclamped outline would spill outside the 160×160 box
+  // onto neighboring HUD zones. Clamp each edge to [mm.x .. x+w] / [.y .. y+h].
+  const minX = mm.x;
+  const maxX = mm.x + mm.w;
+  const minY = mm.y;
+  const maxY = mm.y + mm.h;
+  const rx = clamp(mm.x + (rect.left / TILE_SIZE_PX) * sx, minX, maxX);
+  const ry = clamp(mm.y + (rect.top / TILE_SIZE_PX) * sy, minY, maxY);
+  const rRight = clamp(mm.x + (rect.right / TILE_SIZE_PX) * sx, minX, maxX);
+  const rBottom = clamp(mm.y + (rect.bottom / TILE_SIZE_PX) * sy, minY, maxY);
+  const rw = rRight - rx;
+  const rh = rBottom - ry;
+
+  // Four one-pixel fillRects form the viewport outline (GfxLike has no strokeRect)
+  gfx.fillStyle(0xffffff, 0.8);
+  gfx.fillRect(rx, ry, rw, 1); // top edge
+  gfx.fillRect(rx, ry + rh - 1, rw, 1); // bottom edge
+  gfx.fillRect(rx, ry, 1, rh); // left edge
+  gfx.fillRect(rx + rw - 1, ry, 1, rh); // right edge
+
+  // #372 — enemy fighters and the ring round a gathering army, on top of the
+  // viewport outline so neither hides behind it.
+  drawMinimapEnemyFighters(gfx, world, hud, viewerColonyId);
+  // Colony markers after the dots, so an enemy nest's own sentries never bury
+  // its marker (#372).
+  drawMinimapColonyMarkers(gfx, world, mm, sx, sy);
+  drawMinimapGatheringRing(gfx, world, hud, viewerColonyId, frameTimeMs);
+
+  // #372 — the frame, outside the map rect (nothing above draws there).
+  drawMinimapBorder(gfx, hud);
+}
+
+/** Colony markers (#76): live 4×4 in colony colour, or a 2×2 memorial. */
+function drawMinimapColonyMarkers(
+  gfx: GfxLike,
+  world: WorldState,
+  mm: HudLayout['MINIMAP'],
+  sx: number,
+  sy: number,
+): void {
   // Colony markers — live (4×4 colored) or memorial (2×2 dark gray).
   //
   // Issue #76 — fix the queen-status check. Pre-fix used `queenEntityId >= 0`
@@ -214,41 +261,6 @@ export function drawMinimap(
     gfx.fillStyle(color, 1);
     gfx.fillRect(px - halfOffset, py - halfOffset, size, size);
   }
-
-  // Viewport rect — always tracks surfaceCamera (minimap shows surface always per
-  // PRD §7a). Stage 2: the visible window is zoom-dependent, so derive it from the
-  // adapter's world rect (world px → tiles → minimap px).
-  const rect = visibleWorldRect(viewState.surfaceCamera);
-  // Clamp the rect to the minimap frame before drawing. Under zoom the visible
-  // world window can exceed the world/minimap extent (e.g. at MIN_ZOOM the rect
-  // is ~312px wide vs the 160px minimap, and a centered camera pushes its left
-  // edge negative), so the unclamped outline would spill outside the 160×160 box
-  // onto neighboring HUD zones. Clamp each edge to [mm.x .. x+w] / [.y .. y+h].
-  const minX = mm.x;
-  const maxX = mm.x + mm.w;
-  const minY = mm.y;
-  const maxY = mm.y + mm.h;
-  const rx = clamp(mm.x + (rect.left / TILE_SIZE_PX) * sx, minX, maxX);
-  const ry = clamp(mm.y + (rect.top / TILE_SIZE_PX) * sy, minY, maxY);
-  const rRight = clamp(mm.x + (rect.right / TILE_SIZE_PX) * sx, minX, maxX);
-  const rBottom = clamp(mm.y + (rect.bottom / TILE_SIZE_PX) * sy, minY, maxY);
-  const rw = rRight - rx;
-  const rh = rBottom - ry;
-
-  // Four one-pixel fillRects form the viewport outline (GfxLike has no strokeRect)
-  gfx.fillStyle(0xffffff, 0.8);
-  gfx.fillRect(rx, ry, rw, 1); // top edge
-  gfx.fillRect(rx, ry + rh - 1, rw, 1); // bottom edge
-  gfx.fillRect(rx, ry, 1, rh); // left edge
-  gfx.fillRect(rx + rw - 1, ry, 1, rh); // right edge
-
-  // #372 — enemy fighters and the ring round a gathering army, on top of the
-  // viewport outline so neither hides behind it.
-  drawMinimapEnemyFighters(gfx, world, hud, viewerColonyId);
-  drawMinimapGatheringRing(gfx, world, hud, viewerColonyId, frameTimeMs);
-
-  // #372 — the frame, outside the map rect (nothing above draws there).
-  drawMinimapBorder(gfx, hud);
 }
 
 /** #372 — frame the minimap: a light band and a dark outer line, outside the rect. */
