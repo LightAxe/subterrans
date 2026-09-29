@@ -1896,8 +1896,9 @@ export class UIScene extends Phaser.Scene {
   private enqueueCaption(req: CaptionRequest): boolean {
     const result = admitCaption(this.captionState, req);
     if (result.begin) this.beginCaption(result.begin);
-    // #372 — something now waits behind a long-hold caption: it gives way.
-    if (result.queued) this.yieldLongCaption();
+    // #372 — an event caption now waits behind a long-hold caption: it gives
+    // way. A first-use hint (the lowest priority) does not shorten it.
+    if (result.queued?.source === 'event') this.yieldLongCaption();
     if (result.dropped?.captionKey !== undefined) untrigger(result.dropped.captionKey);
     return result.dropped === undefined;
   }
@@ -2007,9 +2008,9 @@ export class UIScene extends Phaser.Scene {
     if (yieldedHoldMs(req, 0) === null) return;
     const timer = this.activeHoldTimer;
     if (timer === null) {
-      // Still fading in (beginCaption holds only the floor), or already fading
-      // out (nothing left to shorten).
-      if (text.alpha < 1) this.activeCaptionYielded = true;
+      // No hold running: still fading in (the fade-in's onComplete then holds
+      // only the floor), or already fading out (the flag is never read again).
+      this.activeCaptionYielded = true;
       return;
     }
     // Same clock as the timer: time held so far, on the scene Clock.

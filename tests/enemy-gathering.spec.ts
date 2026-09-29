@@ -236,8 +236,18 @@ test.describe('#372 — enemy army gathering', () => {
   test('the long warning gives way to a caption queued behind it', async ({ page }) => {
     test.setTimeout(60_000);
     await bootGatheringSave(page);
+    // Wall time the warning is first seen (at or after it began), so the bound
+    // below does not loosen when the detection lags.
+    let seenAt = 0;
     await expect
-      .poll(() => captions(page), { timeout: 15_000, intervals: [50] })
+      .poll(
+        async () => {
+          const shown = await captions(page);
+          if (seenAt === 0 && shown.includes(WARNING)) seenAt = Date.now();
+          return shown;
+        },
+        { timeout: 15_000, intervals: [50] },
+      )
       .toContain(WARNING);
     // A player rally raises the one-shot rally caption, queued behind the warning.
     // Held back by the full hold it would begin ~4.7 s after the warning did; the
@@ -252,10 +262,12 @@ test.describe('#372 — enemy army gathering', () => {
         ) ?? false,
     );
     expect(accepted).toBe(true);
-    const t0 = Date.now();
     await expect
       .poll(() => captions(page), { timeout: 10_000, intervals: [50] })
       .toContain(RALLY_TEXT);
-    expect(Date.now() - t0).toBeLessThan(3800);
+    // Began by ~2.7 s after the warning (plus the tick drain); without the yield
+    // not before ~4.7 s. Measured from when the warning was seen, which is no
+    // earlier than when it began, so a lagging poll can only tighten this.
+    expect(Date.now() - seenAt).toBeLessThan(3800);
   });
 });

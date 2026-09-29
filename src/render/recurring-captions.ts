@@ -74,10 +74,12 @@ export function offerRecurringCaption(
 /**
  * How long an owed rampage warning is still offered (10 s of game time), the
  * same window as owed raid news. The queue drains within about 3 s of wall-clock
- * time (an active and a pending caption; a long-hold caption such as the #372
- * gathering warning shortens to the default hold while this is owed, via
- * UIScene.yieldLongCaption), so this only runs out at high game speed behind a
- * busy queue.
+ * time behind an active and a pending default caption, so this only runs out
+ * at high game speed behind a busy queue. The #372 gathering warning holds
+ * longer; while news is owed it shortens to a 2 s readable floor (2.7 s in all,
+ * UIScene.yieldLongCaption), so at 4x (a 2.5 s real-time window) news owed from
+ * the same moment the warning began can still expire behind it — a known cost
+ * of a once-per-gathering warning being readable.
  */
 export const RAMPAGE_CAPTION_OWED_TICKS = 200;
 
