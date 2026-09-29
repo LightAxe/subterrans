@@ -37,6 +37,26 @@ export interface CaptionRequest {
    *  overflow, UIScene un-marks this key so the caption can re-fire (it never
    *  displayed). Absent for recurring captions, which don't dedup on `triggered`. */
   captionKey?: CaptionKey;
+  /** #372 — full-opacity hold (ms) between the fade-in and fade-out; absent:
+   *  CAPTION_HOLD_MS. For a long caption that must be read (the gathering warning). */
+  holdMs?: number;
+}
+
+/** Default full-opacity hold of a caption (ms), between its 300 ms fade-in and
+ *  400 ms fade-out. */
+export const CAPTION_HOLD_MS = 800;
+/** Caption fade-in and fade-out durations (ms). */
+export const CAPTION_FADE_IN_MS = 300;
+export const CAPTION_FADE_OUT_MS = 400;
+
+/** How long (ms) `req` holds at full opacity. */
+export function captionHoldMs(req: CaptionRequest): number {
+  return req.holdMs ?? CAPTION_HOLD_MS;
+}
+
+/** Total visible lifetime (ms) of `req`: fade-in + hold + fade-out. */
+export function captionTotalMs(req: CaptionRequest): number {
+  return CAPTION_FADE_IN_MS + captionHoldMs(req) + CAPTION_FADE_OUT_MS;
 }
 
 export interface CaptionQueueState {

@@ -8,8 +8,23 @@ import {
   clearPendingFirstUse,
   createCaptionQueueState,
   recurringCaptionMayEnter,
+  captionHoldMs,
+  captionTotalMs,
+  CAPTION_HOLD_MS,
   type CaptionRequest,
 } from './caption-queue.js';
+
+describe('#372 caption hold', () => {
+  it('800 ms hold and 1500 ms total by default; a request may hold longer', () => {
+    const plain: CaptionRequest = { text: 'a', x: 0, y: 0, source: 'event' };
+    expect(CAPTION_HOLD_MS).toBe(800);
+    expect(captionHoldMs(plain)).toBe(800);
+    expect(captionTotalMs(plain)).toBe(1500);
+    const long: CaptionRequest = { ...plain, holdMs: 4000 };
+    expect(captionHoldMs(long)).toBe(4000);
+    expect(captionTotalMs(long)).toBe(4700);
+  });
+});
 
 const evt = (text: string): CaptionRequest => ({ text, x: 0, y: 0, source: 'event' });
 const fu = (hintId: string): CaptionRequest => ({

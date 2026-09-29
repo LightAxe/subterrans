@@ -41,8 +41,15 @@ export interface RecurringCaptionSink {
   /** True while nothing is showing and nothing is pending. Optional so the
    *  gate can fail closed: a sink without it never takes recurring captions. */
   captionQueueIdle?(): boolean;
-  /** Returns false iff the queue dropped the caption. */
-  showCaption(text: string, screenX: number, screenY: number): boolean;
+  /** Returns false iff the queue dropped the caption. `holdMs` (#372): a longer
+   *  full-opacity hold for a caption that must be read. */
+  showCaption(
+    text: string,
+    screenX: number,
+    screenY: number,
+    captionKey?: undefined,
+    holdMs?: number,
+  ): boolean;
 }
 
 /**
@@ -56,8 +63,12 @@ export function offerRecurringCaption(
   text: string,
   screenX: number,
   screenY: number,
+  holdMs?: number,
 ): boolean {
-  return ui.captionQueueIdle?.() === true && ui.showCaption(text, screenX, screenY);
+  if (ui.captionQueueIdle?.() !== true) return false;
+  return holdMs === undefined
+    ? ui.showCaption(text, screenX, screenY)
+    : ui.showCaption(text, screenX, screenY, undefined, holdMs);
 }
 
 /**

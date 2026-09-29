@@ -259,7 +259,7 @@ describe('entranceDirectionName — compass from the middle of the open entrance
     expect(entranceDirectionName(c, es[1]!)).toBe('south');
   });
 
-  it('diagonal when neither axis is twice the other; straight when one is', () => {
+  it('diagonal when neither axis is more than twice the other; straight when one is', () => {
     const d = colonyWith([
       [20, 40],
       [40, 60],

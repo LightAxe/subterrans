@@ -301,6 +301,10 @@ import {
   clearPendingFirstUse,
   createCaptionQueueState,
   recurringCaptionMayEnter,
+  captionHoldMs,
+  captionTotalMs,
+  CAPTION_FADE_IN_MS,
+  CAPTION_FADE_OUT_MS,
   type CaptionQueueState,
   type CaptionRequest,
 } from './caption-queue.js';
@@ -379,11 +383,6 @@ import {
  *  rendered above the dialog's info line. 1500 ms is long enough to be
  *  noticed without slowing down a player who wants to chain Save → Continue. */
 const SAVE_FLASH_MS = 1500;
-
-/** Stage 1 controls rework (issue #18) — total visible lifetime of an onboarding
- *  caption (300ms fade-in + 800ms hold + 400ms fade-out), used to size the hint-
- *  strip yield window so the strip reappears exactly as the caption clears. */
-const CAPTION_TOTAL_MS = 1500;
 
 /** Stage 1 controls rework — how long the "paused queue full" hint stays up. */
 const PAUSED_QUEUE_FULL_HINT_MS = 1500;
@@ -1858,8 +1857,16 @@ export class UIScene extends Phaser.Scene {
     screenX: number,
     screenY: number,
     captionKey?: CaptionKey,
+    holdMs?: number,
   ): boolean {
-    return this.enqueueCaption({ text, x: screenX, y: screenY, source: 'event', captionKey });
+    return this.enqueueCaption({
+      text,
+      x: screenX,
+      y: screenY,
+      source: 'event',
+      captionKey,
+      ...(holdMs === undefined ? {} : { holdMs }),
+    });
   }
 
   /**
@@ -1898,7 +1905,9 @@ export class UIScene extends Phaser.Scene {
     const capTop = req.y - 14;
     const capBottom = req.y + 14;
     if (capTop < this.hud.HINTS.y + this.hud.HINTS.h && capBottom > this.hud.HINTS.y) {
-      this.hintYieldUntilMs = this.time.now + CAPTION_TOTAL_MS;
+      // Stage 1 (issue #18): sized to the caption's lifetime so the strip
+      // reappears exactly as it clears (#372: a caption may hold longer).
+      this.hintYieldUntilMs = this.time.now + captionTotalMs(req);
     }
     const captionText = this.add.text(req.x, req.y, req.text, {
       fontSize: '14px',
@@ -1915,19 +1924,19 @@ export class UIScene extends Phaser.Scene {
     captionText.setAlpha(0);
     this.activeCaptionText = captionText;
 
-    // Fade in, hold, fade out over 1500ms total. The active caption is never
+    // Fade in, hold (captionHoldMs: 800 ms unless the request asks longer), fade out. The active caption is never
     // preempted; on its final fade we promote the pending one (if any).
     this.tweens.add({
       targets: captionText,
       alpha: { from: 0, to: 1 },
-      duration: 300,
+      duration: CAPTION_FADE_IN_MS,
       ease: 'Linear',
       onComplete: () => {
         this.tweens.add({
           targets: captionText,
           alpha: { from: 1, to: 0 },
-          duration: 400,
-          delay: 800,
+          duration: CAPTION_FADE_OUT_MS,
+          delay: captionHoldMs(req),
           ease: 'Linear',
           onComplete: () => {
             captionText.destroy();

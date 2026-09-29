@@ -79,6 +79,23 @@ describe('offerRecurringCaption (#350)', () => {
     expect(ui.droppedKeys).toEqual([]);
   });
 
+  it('#372: passes a hold time through, and leaves it off when none is given', () => {
+    const calls: unknown[][] = [];
+    const sink: RecurringCaptionSink = {
+      captionQueueIdle: () => true,
+      showCaption: (...args: unknown[]) => {
+        calls.push(args);
+        return true;
+      },
+    };
+    offerRecurringCaption(sink, 'warning', 1, 2, 4000);
+    offerRecurringCaption(sink, 'news', 1, 2);
+    expect(calls).toEqual([
+      ['warning', 1, 2, undefined, 4000],
+      ['news', 1, 2],
+    ]);
+  });
+
   it('fails closed: a sink without captionQueueIdle takes no recurring caption', () => {
     const q = createCaptionQueueState();
     const sink: RecurringCaptionSink = {

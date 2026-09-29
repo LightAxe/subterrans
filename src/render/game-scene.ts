@@ -206,6 +206,7 @@ import {
 } from './recurring-captions.js';
 import {
   createGatheringWarningState,
+  GATHER_CAPTION_HOLD_MS,
   markGatheringWarningShown,
   nextGatheringWarning,
   resetGatheringWarningState,
@@ -284,7 +285,13 @@ interface UIScenePhase9 {
   // S6 — first-occurrence caption overlay (light onboarding). Optional captionKey
   // (Stage 3b #3) lets a dropped one-shot caption un-mark its trigger so it re-fires.
   /** Returns false iff the caption queue dropped the caption (overflow). */
-  showCaption(text: string, screenX: number, screenY: number, captionKey?: CaptionKey): boolean;
+  showCaption(
+    text: string,
+    screenX: number,
+    screenY: number,
+    captionKey?: CaptionKey,
+    holdMs?: number,
+  ): boolean;
   // Stage 3b (issue #18, #3) — display a one-time first-use navigation hint via
   // the shared caption queue. UIScene satisfies first-use-hints' FirstUseHintSink.
   showFirstUseHint(id: HintFirstUseId, text: string): void;
@@ -1687,7 +1694,7 @@ export class GameScene extends Phaser.Scene {
     if (
       gatherText !== null &&
       uiScene &&
-      offerRecurringCaption(uiScene, gatherText, this.layout.w / 2, 60)
+      offerRecurringCaption(uiScene, gatherText, this.layout.w / 2, 60, GATHER_CAPTION_HOLD_MS)
     ) {
       markGatheringWarningShown(this.gatheringWarning);
     }

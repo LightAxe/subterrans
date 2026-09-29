@@ -66,6 +66,10 @@ export const INVASION_NEST_MIN_FIGHTERS = 3;
  *  still offered, the same window as the other recurring captions. */
 export const GATHER_CAPTION_OWED_TICKS = 200;
 
+/** Full-opacity hold (ms) of the warning. The default 800 ms is too short to read
+ *  its two or three lines, and it shows once per gathering. */
+export const GATHER_CAPTION_HOLD_MS = 4000;
+
 export interface EnemyGathering {
   /** The viewer's open entrance with the most enemy fighters near it. */
   entrance: NestEntrance;
@@ -194,7 +198,8 @@ export function enemyFightersInNest(world: WorldState, viewerColonyId: ColonyId)
  * entrances on the surface map, the nest's footprint where the player sees it.
  * The queen chamber is not used: it is underground, where only the x axis
  * lines up with the surface. Screen right is east and screen up is north. A
- * direction is diagonal when neither axis is at least twice the other.
+ * direction is diagonal when neither axis is more than twice the other (2:1
+ * is still diagonal).
  *
  * Null when the colony has one open entrance (nothing to tell apart), when the
  * entrance is within a tile of the middle, or when another open entrance gets
@@ -288,8 +293,9 @@ export function resetGatheringWarningState(state: GatheringWarningState): void {
  *     (fewer than INVASION_NEST_MIN_FIGHTERS enemy fighters in the viewer's
  *     tunnels) that holds for GATHER_DWELL_TICKS disarms the warning and makes
  *     it owed. An invasion that begins while armed disarms it with nothing
- *     owed (the invasion caption covers it), so its survivors walking back
- *     out do not raise the warning afterwards.
+ *     owed (the invasion itself is the signal: the screen-edge flash, and the
+ *     first time the invasion caption), so its survivors walking back out do
+ *     not raise the warning afterwards.
  *   - Disarmed, it re-arms once at most GATHER_REARM_MAX_FIGHTERS enemy
  *     fighters are near any entrance and none invading, continuously for
  *     GATHER_REARM_QUIET_TICKS: the army dispersed, or its invasion ended. An
@@ -297,8 +303,8 @@ export function resetGatheringWarningState(state: GatheringWarningState): void {
  *     disarmed however long it takes.
  *   - An owed warning is offered each frame until the queue takes it. It is
  *     dropped unshown once it is stale: the gathering broke up (at most
- *     GATHER_REARM_MAX_FIGHTERS left near), the invasion began (its own caption
- *     covers that), or GATHER_CAPTION_OWED_TICKS passed.
+ *     GATHER_REARM_MAX_FIGHTERS left near), the invasion began (a warning for
+ *     an army already inside is too late), or GATHER_CAPTION_OWED_TICKS passed.
  *     A dropped warning does not re-arm; the next one needs a new gathering.
  *
  * Text names the entrance the army is near now (it may have moved since the
