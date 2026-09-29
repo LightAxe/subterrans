@@ -18,6 +18,7 @@ import {
   isEnemyGathering,
   markGatheringWarningShown,
   measureEnemyGathering,
+  measureEnemyGatheringThisTick,
   nextGatheringWarning,
   resetGatheringWarningState,
   type GatheringWarningState,
@@ -209,6 +210,26 @@ describe('measureEnemyGathering — which fighters count', () => {
     const g = measureEnemyGathering(w, E)!;
     expect(g.entrance.surfaceTileX).toBe(104);
     expect(g.fighters).toBe(6);
+  });
+});
+
+describe('measureEnemyGatheringThisTick — one measurement per world, viewer and tick', () => {
+  it('reuses within a tick; measures again on a new tick, world or viewer', () => {
+    const { world: w } = raidWorld();
+    const ids = army(w, GATHER_MIN_FIGHTERS, 36, 62);
+    const first = measureEnemyGatheringThisTick(w, P);
+    expect(first!.fighters).toBe(GATHER_MIN_FIGHTERS);
+    kill(w, [ids[0]!]); // no tick has run: the memo stands
+    expect(measureEnemyGatheringThisTick(w, P)).toBe(first);
+    expect(measureEnemyGatheringThisTick(w, E)).toBeNull(); // other viewer
+    expect(measureEnemyGatheringThisTick(w, P)!.fighters).toBe(GATHER_MIN_FIGHTERS - 1);
+    kill(w, [ids[1]!]);
+    advance(w, 1);
+    expect(measureEnemyGatheringThisTick(w, P)!.fighters).toBe(GATHER_MIN_FIGHTERS - 2);
+    // A new world at the same tick (a restart or load) is measured afresh.
+    const other = raidWorld().world;
+    advance(other, w.tick - other.tick);
+    expect(measureEnemyGatheringThisTick(other, P)).toBeNull();
   });
 });
 

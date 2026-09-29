@@ -44,7 +44,7 @@ import type { GfxLike } from './draw-surface.js';
 import { AntTask } from '../sim/enums.js';
 import { Zone } from '../sim/terrain.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
-import { isEnemyGathering, measureEnemyGathering } from './enemy-gathering.js';
+import { isEnemyGathering, measureEnemyGatheringThisTick } from './enemy-gathering.js';
 
 // Exported for tests + external consumers. Derived from the default 800×592
 // layout's minimap rect so they stay byte-identical to the pre-#238 values
@@ -349,7 +349,7 @@ export function drawMinimapGatheringRing(
   viewerColonyId: ColonyId,
   frameTimeMs: number,
 ): void {
-  const g = measureEnemyGathering(world, viewerColonyId);
+  const g = measureEnemyGatheringThisTick(world, viewerColonyId);
   if (!isEnemyGathering(g)) return;
   const mm = hud.MINIMAP;
   const sx = mm.w / SURFACE_GRID_WIDTH;

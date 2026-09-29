@@ -22,6 +22,8 @@
 import { test, expect, type Page } from '@playwright/test';
 import { clickCanvasRect, settleToPlaying, waitForUiHook } from './helpers/boot.js';
 import { MINIMAP_RECT, SAVE_PROMPT_CONTINUE_RECT } from './helpers/geometry.js';
+import { CAPTION_YIELD_FLOOR_MS } from '../src/render/caption-queue.js';
+import { GATHER_CAPTION_HOLD_MS } from '../src/render/enemy-gathering.js';
 
 const RALLY_TEXT = 'Fighters will converge here.';
 const WARNING =
@@ -38,7 +40,7 @@ const RALLY = { tileX: 37, tileY: 64 };
 interface TestHook {
   getCaptionsShown?: () => string[];
   rallyPlayerAt?: (x: number, y: number) => boolean;
-  getActiveCaption?: () => { text: string; alpha: number } | null;
+  getCaptionHolds?: () => { text: string; holdMs: number; yielded: boolean }[];
   isPaused?: () => boolean;
   getTick?: () => number;
   sampleArea?: (x: number, y: number, w: number, h: number) => Promise<number[]>;
@@ -50,6 +52,23 @@ async function captions(page: Page): Promise<string[]> {
     const t = (window as unknown as { __phase9_test?: TestHook }).__phase9_test;
     return t?.getCaptionsShown?.() ?? [];
   });
+}
+
+/** Each caption's final full-opacity hold (ms) and whether it gave way, oldest
+ *  first, recorded by UIScene as its fade-out is scheduled. */
+async function captionHolds(
+  page: Page,
+): Promise<{ text: string; holdMs: number; yielded: boolean }[]> {
+  return await page.evaluate(
+    () =>
+      (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.getCaptionHolds?.() ?? [],
+  );
+}
+
+/** The recorded hold of the (first) warning, once its hold has ended. */
+async function warningHold(page: Page): Promise<{ holdMs: number; yielded: boolean } | null> {
+  const h = (await captionHolds(page)).find((c) => c.text === WARNING);
+  return h === undefined ? null : { holdMs: h.holdMs, yielded: h.yielded };
 }
 
 async function sample(page: Page, x: number, y: number, w: number, h: number): Promise<number[]> {
@@ -163,24 +182,23 @@ test.describe('#372 — enemy army gathering', () => {
     await expect
       .poll(() => captions(page), { timeout: 15_000, intervals: [50] })
       .toContain(WARNING);
-    // It holds long enough to read: still fully shown ~2.8-3.4 s in (the poll
-    // round-trip can lag its start by a few hundred ms). A default caption starts
-    // fading 1.1 s in and a yielded one 2.3 s in; this one holds until 4.3 s.
-    // Nothing else is queued behind it here to cut it short.
-    await page.waitForTimeout(2800);
-    expect(
-      await page.evaluate(
-        () =>
-          (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.getActiveCaption?.() ??
-          null,
-      ),
-    ).toEqual({ text: WARNING, alpha: 1 });
     const box = await page.locator('canvas').first().boundingBox();
     if (!box) throw new Error('no canvas');
+    // For the human eye only (asserts nothing): let the warning finish fading in
+    // (300 ms) so the screenshot shows it at full opacity.
+    await page.waitForTimeout(600);
     await page.screenshot({
       path: 'test-results/enemy-gathering-caption.png',
       clip: box,
     });
+
+    // It holds long enough to read: the full-opacity hold UIScene scheduled for
+    // it is GATHER_CAPTION_HOLD_MS (a default caption holds 800 ms), and nothing
+    // queued behind it here made it give way. Read from the hold log UIScene
+    // records as the caption's fade-out is scheduled — not timed.
+    await expect
+      .poll(() => warningHold(page), { timeout: 10_000 })
+      .toEqual({ holdMs: GATHER_CAPTION_HOLD_MS, yielded: false });
 
     // The army's dots are on the minimap where it stands: bright red pixels
     // within 3 px of its rally tile. The ring is centred on the army's bounding
@@ -236,24 +254,11 @@ test.describe('#372 — enemy army gathering', () => {
   test('the long warning gives way to a caption queued behind it', async ({ page }) => {
     test.setTimeout(60_000);
     await bootGatheringSave(page);
-    // Wall time the warning is first seen (at or after it began; the 50 ms poll
-    // keeps that lag small).
-    let seenAt = 0;
     await expect
-      .poll(
-        async () => {
-          const shown = await captions(page);
-          if (seenAt === 0 && shown.includes(WARNING)) seenAt = Date.now();
-          return shown;
-        },
-        { timeout: 15_000, intervals: [50] },
-      )
+      .poll(() => captions(page), { timeout: 15_000, intervals: [50] })
       .toContain(WARNING);
-    // A player rally raises the one-shot rally caption, queued behind the warning.
-    // Held back by the full hold it would begin ~4.7 s after the warning did; the
-    // warning gives way (yieldLongCaption) to its 2 s readable floor, so the rally
-    // caption begins ~2.7 s after the warning at the latest (plus a tick drain
-    // and poll latency).
+    // A player rally raises the one-shot rally caption, queued behind the warning
+    // at once (well inside the warning's first CAPTION_YIELD_FLOOR_MS).
     const accepted = await page.evaluate(
       () =>
         (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.rallyPlayerAt?.(
@@ -262,13 +267,19 @@ test.describe('#372 — enemy army gathering', () => {
         ) ?? false,
     );
     expect(accepted).toBe(true);
-    await expect
-      .poll(() => captions(page), { timeout: 10_000, intervals: [50] })
-      .toContain(RALLY_TEXT);
-    // Began by ~2.7 s after the warning (plus the tick drain); without the yield
-    // not before ~4.7 s. Lag in seeing the warning loosens this bound by that lag
-    // (small at a 50 ms poll, far under the ~0.9 s it would take to pass a
-    // regression); lag in seeing the rally caption tightens it.
-    expect(Date.now() - seenAt).toBeLessThan(3800);
+    // The warning gives way: its recorded hold is cut from GATHER_CAPTION_HOLD_MS
+    // to the readable floor — exactly the floor if it gave way within its first
+    // CAPTION_YIELD_FLOOR_MS at full opacity, or what it had already held if
+    // later (a slow runner): either way below the full hold. Read from the hold
+    // log after the fact, so no transient state has to be caught.
+    await expect.poll(() => warningHold(page), { timeout: 10_000 }).not.toBeNull();
+    const hold = (await warningHold(page))!;
+    expect(hold.yielded).toBe(true);
+    expect(hold.holdMs).toBeGreaterThanOrEqual(CAPTION_YIELD_FLOOR_MS);
+    expect(hold.holdMs).toBeLessThan(GATHER_CAPTION_HOLD_MS);
+    // And the rally caption is the next to show.
+    await expect.poll(() => captions(page), { timeout: 10_000 }).toContain(RALLY_TEXT);
+    const shown = await captions(page);
+    expect(shown[shown.indexOf(WARNING) + 1]).toBe(RALLY_TEXT);
   });
 });

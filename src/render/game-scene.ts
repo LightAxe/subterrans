@@ -320,8 +320,8 @@ interface UIScenePhase9 {
   /** #372 — a long-hold caption (the gathering warning) shortens its hold so an
    *  event caption waiting behind it is not held back (UIScene.yieldLongCaption). */
   yieldLongCaption?(): void;
-  /** #372 — Dev/E2E-only: the caption on screen and its alpha. */
-  activeCaption?(): { text: string; alpha: number } | null;
+  /** #372 — Dev/E2E-only: each caption's final hold (ms) and whether it gave way. */
+  captionHolds?(): { text: string; holdMs: number; yielded: boolean }[];
 }
 
 // Re-export GamePhase for Plan 07 and other consumers
@@ -388,8 +388,9 @@ declare global {
        *  oldest first (UIScene.captionsShown). A caption is up for 1.5 s (a
        *  long-hold one longer), so a spec asserts on the log rather than racing the live Text. Dev-build only. */
       getCaptionsShown?(): string[];
-      /** #372 — the caption on screen now and its alpha (null: none). Dev-build only. */
-      getActiveCaption?(): { text: string; alpha: number } | null;
+      /** #372 — each caption this round, oldest first: the final full-opacity hold
+       *  scheduled for it (ms) and whether it gave way. Dev-build only. */
+      getCaptionHolds?(): { text: string; holdMs: number; yielded: boolean }[];
       /** #290 PR 6 — issue a player rally on (tileX, tileY) through the exact
        *  enqueue the surface Command tap uses (handleSetRallyPoint): a command, not
        *  a state write, so the drain, the caption hook and the sim all run as for
@@ -680,7 +681,7 @@ export class GameScene extends Phaser.Scene {
       alarmHotkeyAccepts: (): number => this.alarmHotkeyAccepts,
       getTick: (): number => this.world?.tick ?? -1,
       getCaptionsShown: (): string[] => this.getUIScene()?.captionsShown?.() ?? [],
-      getActiveCaption: () => this.getUIScene()?.activeCaption?.() ?? null,
+      getCaptionHolds: () => this.getUIScene()?.captionHolds?.() ?? [],
       rallyPlayerAt: (tileX: number, tileY: number): boolean =>
         this.world !== undefined &&
         !handleSetRallyPoint(

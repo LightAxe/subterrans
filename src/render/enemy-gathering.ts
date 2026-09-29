@@ -11,12 +11,15 @@
 // is not the viewer, never a fixed id).
 //
 // Two layers:
-//   - measureEnemyGathering / isEnemyGathering: the geometry, per frame, no
-//     memory. The minimap rings the army whenever it holds.
+//   - measureEnemyGathering / isEnemyGathering: the geometry, no memory; and
+//     measureEnemyGatheringThisTick, the same memoised for one (world, viewer,
+//     tick) so the warning and the minimap ring share one scan per tick. The
+//     minimap rings the army whenever it holds.
 //   - GatheringWarningState + nextGatheringWarning: the caption, with
 //     hysteresis so it fires once per gathering (see nextGatheringWarning).
 //
-// Pure + Phaser-free: reads WorldState, mutates only its own state object.
+// Phaser-free: reads WorldState, never writes it; mutates only its own state
+// object and the one-entry render-side memo.
 
 import type { WorldState } from '../sim/types.js';
 import type { ColonyId, ColonyRecord } from '../sim/colony/colony-store.js';
@@ -163,6 +166,31 @@ export function measureEnemyGathering(
     maxTileX: maxX[top]!,
     maxTileY: maxY[top]!,
   };
+}
+
+/**
+ * #372 — measureEnemyGathering, memoised for one (world, viewer, tick). GameScene
+ * (the warning) and UIScene (the minimap ring) both need it every frame; the
+ * world only changes when a tick runs, so the second call — and every frame of a
+ * pause — reuses the first. Keyed by the WorldState object too, since a restart
+ * or load swaps in a new world that can sit at the same tick.
+ * Render-side memo (not sim state): it holds one result, never feeds the sim.
+ */
+let memoWorld: WorldState | null = null;
+let memoViewer: ColonyId = -1;
+let memoTick = -1;
+let memoResult: EnemyGathering | null = null;
+export function measureEnemyGatheringThisTick(
+  world: WorldState,
+  viewerColonyId: ColonyId,
+): EnemyGathering | null {
+  if (memoWorld !== world || memoViewer !== viewerColonyId || memoTick !== world.tick) {
+    memoResult = measureEnemyGathering(world, viewerColonyId);
+    memoWorld = world;
+    memoViewer = viewerColonyId;
+    memoTick = world.tick;
+  }
+  return memoResult;
 }
 
 /** True iff `g` is big enough to be an army (GATHER_MIN_FIGHTERS). */
@@ -317,7 +345,7 @@ export function nextGatheringWarning(
 ): string | null {
   const viewer = world.colonies[viewerColonyId];
   if (viewer === undefined) return null;
-  const g = measureEnemyGathering(world, viewerColonyId);
+  const g = measureEnemyGatheringThisTick(world, viewerColonyId);
   const gathering = isEnemyGathering(g);
   const invading = enemyFightersInNest(world, viewerColonyId) >= INVASION_NEST_MIN_FIGHTERS;
   const tick = world.tick;

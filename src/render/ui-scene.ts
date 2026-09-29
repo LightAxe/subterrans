@@ -583,6 +583,16 @@ export class UIScene extends Phaser.Scene {
   // fades in 1.5 s, too fast to catch by polling the live Text. Written only
   // under import.meta.env.DEV; cleared with the caption queue each round.
   private captionsShownLog: string[] = [];
+  // #372 — the full-opacity hold (ms) actually scheduled for the active caption:
+  // time already held + the delay just scheduled; null until its fade-in ends.
+  // Also tells a long-hold caption's fade-in (null) from its fade-out (set, no
+  // hold timer running).
+  private activeHoldScheduledMs: number | null = null;
+  // #372 — Dev/E2E-only: for each caption this round, oldest first, the final
+  // full-opacity hold scheduled for it and whether it gave way — recorded as its
+  // fade-out is scheduled, so a spec reads it after the fact instead of racing
+  // the live caption.
+  private captionHoldsLog: { text: string; holdMs: number; yielded: boolean }[] = [];
   // Stage 3b (#5) — tooltip hover state machine. hoverTarget is the widget the
   // cursor is over (null = none); the show timer fires after a dwell delay, the
   // hide timer is the mouse-out grace. tooltipText is the live Phaser Text.
@@ -1907,6 +1917,7 @@ export class UIScene extends Phaser.Scene {
    *  moment it begins (Codex R1#9). On finish, promotes any pending caption. */
   private beginCaption(req: CaptionRequest): void {
     if (import.meta.env.DEV) this.captionsShownLog.push(req.text);
+    this.activeHoldScheduledMs = null;
     if (req.source === 'first-use' && req.hintId !== undefined) {
       markFirstUseHintShown(req.hintId as HintFirstUseId);
     }
@@ -1953,19 +1964,22 @@ export class UIScene extends Phaser.Scene {
       onComplete: () => {
         if (this.activeCaptionText !== captionText) return;
         if (!longHold) {
+          this.activeHoldScheduledMs = CAPTION_HOLD_MS;
           this.startCaptionFadeOut(captionText, CAPTION_HOLD_MS);
           return;
         }
         // Asked to give way while fading in: hold only the floor.
         const hold = this.activeCaptionYielded ? yieldedHoldMs(req, 0)! : captionHoldMs(req);
-        this.holdLongCaption(captionText, hold);
+        this.holdLongCaption(captionText, hold, 0);
       },
     });
   }
 
-  /** #372 — hold a long-hold caption at full opacity for `ms`, then fade it out.
-   *  Also pulls the hint-strip yield in to the caption's new end. */
-  private holdLongCaption(captionText: Phaser.GameObjects.Text, ms: number): void {
+  /** #372 — hold a long-hold caption at full opacity for `ms` more (it has held
+   *  `heldMs` already), then fade it out. Also pulls the hint-strip yield in to
+   *  the caption's new end. */
+  private holdLongCaption(captionText: Phaser.GameObjects.Text, ms: number, heldMs: number): void {
+    this.activeHoldScheduledMs = heldMs + ms;
     this.activeHoldTimer = this.time.delayedCall(ms, () => {
       this.activeHoldTimer = null;
       if (this.activeCaptionText === captionText) this.startCaptionFadeOut(captionText, 0);
@@ -1976,6 +1990,13 @@ export class UIScene extends Phaser.Scene {
 
   /** Fade the active caption out after `delayMs`, then promote the pending one. */
   private startCaptionFadeOut(captionText: Phaser.GameObjects.Text, delayMs: number): void {
+    if (import.meta.env.DEV && this.activeCaptionReq !== null) {
+      this.captionHoldsLog.push({
+        text: this.activeCaptionReq.text,
+        holdMs: this.activeHoldScheduledMs ?? 0,
+        yielded: this.activeCaptionYielded,
+      });
+    }
     this.tweens.add({
       targets: captionText,
       alpha: { from: 1, to: 0 },
@@ -2008,22 +2029,24 @@ export class UIScene extends Phaser.Scene {
     if (yieldedHoldMs(req, 0) === null) return;
     const timer = this.activeHoldTimer;
     if (timer === null) {
-      // No hold running: still fading in (the fade-in's onComplete then holds
-      // only the floor), or already fading out (the flag is never read again).
+      // Already fading out: nothing left to shorten, and it did not give way.
+      if (this.activeHoldScheduledMs !== null) return;
+      // Still fading in: the fade-in's onComplete then holds only the floor.
       this.activeCaptionYielded = true;
       return;
     }
     // Same clock as the timer: time held so far, on the scene Clock.
-    const rest = yieldedHoldMs(req, timer.getElapsed())!;
+    const held = timer.getElapsed();
+    const rest = yieldedHoldMs(req, held)!;
     this.activeCaptionYielded = true;
     timer.remove(false);
-    this.holdLongCaption(text, rest);
+    this.holdLongCaption(text, rest, held);
   }
 
-  /** #372 — Dev/E2E-only: the caption on screen now and its alpha (null: none). */
-  activeCaption(): { text: string; alpha: number } | null {
-    if (!import.meta.env.DEV || this.activeCaptionText === null) return null;
-    return { text: this.activeCaptionText.text, alpha: this.activeCaptionText.alpha };
+  /** #372 — Dev/E2E-only: each caption's final full-opacity hold (ms) and
+   *  whether it gave way, oldest first (see captionHoldsLog). */
+  captionHolds(): { text: string; holdMs: number; yielded: boolean }[] {
+    return import.meta.env.DEV ? [...this.captionHoldsLog] : [];
   }
 
   /**
@@ -2048,6 +2071,8 @@ export class UIScene extends Phaser.Scene {
     this.captionState = createCaptionQueueState();
     this.hintYieldUntilMs = 0;
     this.captionsShownLog = [];
+    this.captionHoldsLog = [];
+    this.activeHoldScheduledMs = null;
   }
 
   /** #290 PR 6 / #350 — true while nothing is showing and nothing is pending, so
