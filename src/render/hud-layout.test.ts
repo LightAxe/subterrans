@@ -7,7 +7,13 @@
 // resized since (C1's ALARM_TOGGLE, #320's toggle widths) are pinned beside it.
 
 import { describe, it, expect } from 'vitest';
-import { buildHudLayout } from './hud-layout.js';
+import {
+  buildHudLayout,
+  captionWrapWidth,
+  CAPTION_MAX_WRAP_W,
+  CAPTION_MIN_WRAP_W,
+  CAPTION_PAD_X,
+} from './hud-layout.js';
 import { DEFAULT_LAYOUT, createLayoutContext } from './layout.js';
 
 describe('buildHudLayout', () => {
@@ -86,5 +92,41 @@ describe('buildHudLayout', () => {
     expect(hud.TRIANGLE.y).toBe(640); // 700 - 60
     // Top-left-anchored zones are size-independent.
     expect(hud.STATS).toEqual({ x: 8, y: 8, w: 200, h: 24 });
+  });
+});
+
+describe('#372 captionWrapWidth — captions clear the tool palette', () => {
+  const hud = buildHudLayout(DEFAULT_LAYOUT);
+
+  it('a centred caption wraps at 440px at the default layout, its box clear of TOOLS', () => {
+    const cx = DEFAULT_LAYOUT.w / 2;
+    const w = captionWrapWidth(cx, 60, hud);
+    expect(w).toBe(440);
+    expect(cx + w / 2 + CAPTION_PAD_X).toBeLessThan(hud.TOOLS.x);
+  });
+
+  it('never wider than CAPTION_MAX_WRAP_W, never narrower than CAPTION_MIN_WRAP_W', () => {
+    const wide = buildHudLayout(createLayoutContext(2000, 592));
+    expect(captionWrapWidth(1000, 60, wide)).toBe(CAPTION_MAX_WRAP_W);
+    expect(captionWrapWidth(hud.TOOLS.x, 60, hud)).toBe(CAPTION_MIN_WRAP_W);
+  });
+
+  it('a caption clear of the palette band keeps the full width', () => {
+    const cx = DEFAULT_LAYOUT.w / 2;
+    // TOOLS spans y 36..76; a queen-damage caption sits at h/2 - 40 = 256.
+    expect(captionWrapWidth(cx, DEFAULT_LAYOUT.h / 2 - 40, hud)).toBe(CAPTION_MAX_WRAP_W);
+    expect(captionWrapWidth(cx, 76 + 32, hud)).toBe(CAPTION_MAX_WRAP_W);
+    expect(captionWrapWidth(cx, 76 + 31, hud)).toBe(440);
+    expect(captionWrapWidth(cx, 36 - 32, hud)).toBe(CAPTION_MAX_WRAP_W);
+    expect(captionWrapWidth(cx, 36 - 31, hud)).toBe(440);
+  });
+
+  it('reflows with the layout', () => {
+    const big = buildHudLayout(createLayoutContext(1000, 700));
+    // TOOLS.x = 832; centred at 500: 2 × (832 - 4 - 500 - 8) = 640 → capped at 500.
+    expect(captionWrapWidth(500, 60, big)).toBe(CAPTION_MAX_WRAP_W);
+    const small = buildHudLayout(createLayoutContext(700, 592));
+    // TOOLS.x = 532; centred at 350: 2 × (532 - 4 - 350 - 8) = 340.
+    expect(captionWrapWidth(350, 60, small)).toBe(340);
   });
 });

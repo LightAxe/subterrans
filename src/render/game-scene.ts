@@ -201,9 +201,17 @@ import {
   createRampageCaptionState,
   offerOwedRampageCaption,
   offerRecurringCaption,
+  recurringCaptionStillOwed,
   resetRampageCaptionState,
   routeEventCaption,
 } from './recurring-captions.js';
+import {
+  createGatheringWarningState,
+  GATHER_CAPTION_HOLD_MS,
+  markGatheringWarningShown,
+  nextGatheringWarning,
+  resetGatheringWarningState,
+} from './enemy-gathering.js';
 import { checkAndTrigger, resetCaptions, type CaptionKey } from './onboarding-captions.js';
 // Stage 3b controls rework (issue #18, #3) — first-use navigation hints.
 import {
@@ -278,7 +286,13 @@ interface UIScenePhase9 {
   // S6 — first-occurrence caption overlay (light onboarding). Optional captionKey
   // (Stage 3b #3) lets a dropped one-shot caption un-mark its trigger so it re-fires.
   /** Returns false iff the caption queue dropped the caption (overflow). */
-  showCaption(text: string, screenX: number, screenY: number, captionKey?: CaptionKey): boolean;
+  showCaption(
+    text: string,
+    screenX: number,
+    screenY: number,
+    captionKey?: CaptionKey,
+    holdMs?: number,
+  ): boolean;
   // Stage 3b (issue #18, #3) — display a one-time first-use navigation hint via
   // the shared caption queue. UIScene satisfies first-use-hints' FirstUseHintSink.
   showFirstUseHint(id: HintFirstUseId, text: string): void;
@@ -303,6 +317,11 @@ interface UIScenePhase9 {
   // recurring captions (raid news, the spider-rampage warning) may enter without
   // taking the slot a one-shot caption would need.
   captionQueueIdle?(): boolean;
+  /** #372 — a long-hold caption (the gathering warning) shortens its hold so an
+   *  event caption waiting behind it is not held back (UIScene.yieldLongCaption). */
+  yieldLongCaption?(): void;
+  /** #372 — Dev/E2E-only: each caption's final hold (ms) and whether it gave way. */
+  captionHolds?(): { text: string; holdMs: number; yielded: boolean }[];
 }
 
 // Re-export GamePhase for Plan 07 and other consumers
@@ -366,9 +385,12 @@ declare global {
        *  button deterministically. No-op unless Playing. Dev-build only. */
       forceGameOver(): void;
       /** #290 PR 6 — the text of every caption that began displaying this round,
-       *  oldest first (UIScene.captionsShown). A caption is up for 1.5 s, so a
-       *  spec asserts on the log rather than racing the live Text. Dev-build only. */
+       *  oldest first (UIScene.captionsShown). A caption is up for 1.5 s (a
+       *  long-hold one longer), so a spec asserts on the log rather than racing the live Text. Dev-build only. */
       getCaptionsShown?(): string[];
+      /** #372 — each caption this round, oldest first: the final full-opacity hold
+       *  scheduled for it (ms) and whether it gave way. Dev-build only. */
+      getCaptionHolds?(): { text: string; holdMs: number; yielded: boolean }[];
       /** #290 PR 6 — issue a player rally on (tileX, tileY) through the exact
        *  enqueue the surface Command tap uses (handleSetRallyPoint): a command, not
        *  a state write, so the drain, the caption hook and the sim all run as for
@@ -659,6 +681,7 @@ export class GameScene extends Phaser.Scene {
       alarmHotkeyAccepts: (): number => this.alarmHotkeyAccepts,
       getTick: (): number => this.world?.tick ?? -1,
       getCaptionsShown: (): string[] => this.getUIScene()?.captionsShown?.() ?? [],
+      getCaptionHolds: () => this.getUIScene()?.captionHolds?.() ?? [],
       rallyPlayerAt: (tileX: number, tileY: number): boolean =>
         this.world !== undefined &&
         !handleSetRallyPoint(
@@ -782,6 +805,8 @@ export class GameScene extends Phaser.Scene {
   private readonly raidCaptions = createRaidCaptionState();
   // #350 — the spider-rampage warning owed until the caption queue is idle.
   private readonly rampageCaption = createRampageCaptionState();
+  // #372 — the enemy-army gathering warning (once per gathering; re-armed in finishBoot).
+  private readonly gatheringWarning = createGatheringWarningState();
   private renderFrame = 0; // frame counter for glow fade maps
   private readonly contestedGlowFrames: Map<number, number> = new Map(); // surface glow fade
   private readonly undergroundGlowFrames: Map<number, number> = new Map(); // underground glow fade
@@ -1672,8 +1697,22 @@ export class GameScene extends Phaser.Scene {
     // queen damage, invasion) get dropped, so each waits, owed, and is retried each
     // frame (recurring-captions.ts).
     //
+    // #372 — the enemy-army gathering warning, once per gathering near one of
+    // the player's entrances (enemy-gathering.ts). Offered first: an army about
+    // to invade outranks the spider and raid news.
+    const gatherText = nextGatheringWarning(this.gatheringWarning, this.world, PLAYER_COLONY_ID);
+    if (
+      gatherText !== null &&
+      uiScene &&
+      offerRecurringCaption(uiScene, gatherText, this.layout.w / 2, 60, GATHER_CAPTION_HOLD_MS)
+    ) {
+      markGatheringWarningShown(this.gatheringWarning);
+    }
+
     // #350 — the spider-rampage warning, owed from its spider_rampage_start until
-    // it shows or goes stale. Offered first: it outranks raid news.
+    // it shows or goes stale. Offered after the gathering warning: it outranks raid
+    // news. (Owed news behind the long gathering warning shortens that warning to
+    // a readable floor, below.)
     if (uiScene) {
       offerOwedRampageCaption(this.rampageCaption, this.world, uiScene, this.layout.w / 2, 60);
     }
@@ -1694,6 +1733,10 @@ export class GameScene extends Phaser.Scene {
       )
     ) {
       markRaidCaptionShown(this.raidCaptions, this.world, raidCaption);
+    } else if (recurringCaptionStillOwed(this.rampageCaption, raidCaption)) {
+      // #372 — news still owed behind a busy queue: a long-hold caption (the
+      // gathering warning) gives way, keeping CAPTION_YIELD_FLOOR_MS to be read.
+      uiScene?.yieldLongCaption?.();
     }
   }
 
@@ -1907,6 +1950,8 @@ export class GameScene extends Phaser.Scene {
     resetRaidCaptionState(this.raidCaptions, this.world, PLAYER_COLONY_ID);
     // #350 — a prior round's owed rampage warning must not carry over.
     resetRampageCaptionState(this.rampageCaption);
+    // #372 — a new round or loaded save starts armed with nothing owed.
+    resetGatheringWarningState(this.gatheringWarning);
     // Stage 2 §B: a fresh/loaded world must rebake every allocated terrain RT (the prior
     // session's RTs are stale). Optional chaining — finishBoot can run before create() has
     // instantiated the cache in some boot orderings; the first frame then lazily bakes.

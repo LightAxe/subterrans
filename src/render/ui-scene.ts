@@ -301,6 +301,12 @@ import {
   clearPendingFirstUse,
   createCaptionQueueState,
   recurringCaptionMayEnter,
+  captionHoldMs,
+  captionTotalMs,
+  yieldedHoldMs,
+  CAPTION_HOLD_MS,
+  CAPTION_FADE_IN_MS,
+  CAPTION_FADE_OUT_MS,
   type CaptionQueueState,
   type CaptionRequest,
 } from './caption-queue.js';
@@ -318,7 +324,13 @@ import {
   type TooltipTarget,
 } from './tooltips.js';
 import { DEFAULT_LAYOUT, cssScaleX, type LayoutContext } from './layout.js';
-import { buildHudLayout, type HudLayout, type HudRect } from './hud-layout.js';
+import {
+  buildHudLayout,
+  captionWrapWidth,
+  CAPTION_PAD_X,
+  type HudLayout,
+  type HudRect,
+} from './hud-layout.js';
 import { setViewportSize } from './camera-adapter.js';
 import {
   pauseMenuItems,
@@ -373,11 +385,6 @@ import {
  *  rendered above the dialog's info line. 1500 ms is long enough to be
  *  noticed without slowing down a player who wants to chain Save → Continue. */
 const SAVE_FLASH_MS = 1500;
-
-/** Stage 1 controls rework (issue #18) — total visible lifetime of an onboarding
- *  caption (300ms fade-in + 800ms hold + 400ms fade-out), used to size the hint-
- *  strip yield window so the strip reappears exactly as the caption clears. */
-const CAPTION_TOTAL_MS = 1500;
 
 /** Stage 1 controls rework — how long the "paused queue full" hint stays up. */
 const PAUSED_QUEUE_FULL_HINT_MS = 1500;
@@ -565,11 +572,27 @@ export class UIScene extends Phaser.Scene {
   // NOT relaunched on restart, so captionState would otherwise leak a prior-round
   // caption — incl. falsely marking a first-use hint shown; ship-review R1#1/#3).
   private activeCaptionText: Phaser.GameObjects.Text | null = null;
+  // #372 — the active caption's request; for a long-hold caption, the scene-Clock
+  // timer running its full-opacity hold (null while fading in or fading out), and
+  // whether it has been asked to give way (yieldLongCaption).
+  private activeCaptionReq: CaptionRequest | null = null;
+  private activeHoldTimer: Phaser.Time.TimerEvent | null = null;
+  private activeCaptionYielded = false;
   // #290 PR 6 — Dev/E2E-only: the text of every caption that began displaying this
   // round, oldest first (read via __phase9_test.getCaptionsShown()). A caption
   // fades in 1.5 s, too fast to catch by polling the live Text. Written only
   // under import.meta.env.DEV; cleared with the caption queue each round.
   private captionsShownLog: string[] = [];
+  // #372 — the full-opacity hold (ms) actually scheduled for the active caption:
+  // time already held + the delay just scheduled; null until its fade-in ends.
+  // Also tells a long-hold caption's fade-in (null) from its fade-out (set, no
+  // hold timer running).
+  private activeHoldScheduledMs: number | null = null;
+  // #372 — Dev/E2E-only: for each caption this round, oldest first, the final
+  // full-opacity hold scheduled for it and whether it gave way — recorded as its
+  // fade-out is scheduled, so a spec reads it after the fact instead of racing
+  // the live caption.
+  private captionHoldsLog: { text: string; holdMs: number; yielded: boolean }[] = [];
   // Stage 3b (#5) — tooltip hover state machine. hoverTarget is the widget the
   // cursor is over (null = none); the show timer fires after a dwell delay, the
   // hide timer is the mouse-out grace. tooltipText is the live Phaser Text.
@@ -1557,11 +1580,15 @@ export class UIScene extends Phaser.Scene {
     }
 
     // Minimap
+    // #372 — the viewer is the player colony: every other colony's surface
+    // fighters show as red dots, and a gathering army pulses (on scene time).
     drawMinimap(
       this.gfx as unknown as import('./draw-surface.js').GfxLike,
       world,
       this.viewState,
       this.hud,
+      PLAYER_COLONY_ID,
+      this.time.now,
     );
 
     // View toggle button background
@@ -1848,8 +1875,16 @@ export class UIScene extends Phaser.Scene {
     screenX: number,
     screenY: number,
     captionKey?: CaptionKey,
+    holdMs?: number,
   ): boolean {
-    return this.enqueueCaption({ text, x: screenX, y: screenY, source: 'event', captionKey });
+    return this.enqueueCaption({
+      text,
+      x: screenX,
+      y: screenY,
+      source: 'event',
+      captionKey,
+      ...(holdMs === undefined ? {} : { holdMs }),
+    });
   }
 
   /**
@@ -1871,6 +1906,9 @@ export class UIScene extends Phaser.Scene {
   private enqueueCaption(req: CaptionRequest): boolean {
     const result = admitCaption(this.captionState, req);
     if (result.begin) this.beginCaption(result.begin);
+    // #372 — an event caption now waits behind a long-hold caption: it gives
+    // way. A first-use hint (the lowest priority) does not shorten it.
+    if (result.queued?.source === 'event') this.yieldLongCaption();
     if (result.dropped?.captionKey !== undefined) untrigger(result.dropped.captionKey);
     return result.dropped === undefined;
   }
@@ -1879,6 +1917,7 @@ export class UIScene extends Phaser.Scene {
    *  moment it begins (Codex R1#9). On finish, promotes any pending caption. */
   private beginCaption(req: CaptionRequest): void {
     if (import.meta.env.DEV) this.captionsShownLog.push(req.text);
+    this.activeHoldScheduledMs = null;
     if (req.source === 'first-use' && req.hintId !== undefined) {
       markFirstUseHintShown(req.hintId as HintFirstUseId);
     }
@@ -1888,44 +1927,126 @@ export class UIScene extends Phaser.Scene {
     const capTop = req.y - 14;
     const capBottom = req.y + 14;
     if (capTop < this.hud.HINTS.y + this.hud.HINTS.h && capBottom > this.hud.HINTS.y) {
-      this.hintYieldUntilMs = this.time.now + CAPTION_TOTAL_MS;
+      // Stage 1 (issue #18): sized to the caption's lifetime so the strip
+      // reappears exactly as it clears (#372: a caption may hold longer).
+      this.hintYieldUntilMs = this.time.now + captionTotalMs(req);
     }
     const captionText = this.add.text(req.x, req.y, req.text, {
       fontSize: '14px',
       fontFamily: 'monospace',
       color: '#ffffcc',
       backgroundColor: '#00000088',
-      padding: { x: 8, y: 4 },
+      padding: { x: CAPTION_PAD_X, y: 4 },
       align: 'center',
-      wordWrap: { width: 500 },
+      // #372 — a caption in the palette's band wraps clear of it (hud-layout.ts).
+      wordWrap: { width: captionWrapWidth(req.x, req.y, this.hud) },
     });
     captionText.setOrigin(0.5, 0.5);
     captionText.setDepth(30);
     captionText.setAlpha(0);
     this.activeCaptionText = captionText;
+    this.activeCaptionReq = req;
+    this.activeHoldTimer = null;
+    this.activeCaptionYielded = false;
+    const longHold = yieldedHoldMs(req, 0) !== null;
 
-    // Fade in, hold, fade out over 1500ms total. The active caption is never
-    // preempted; on its final fade we promote the pending one (if any).
+    // Fade in, hold, fade out. A default caption holds CAPTION_HOLD_MS as the
+    // fade-out tween's delay, exactly as before #372. A long-hold caption holds
+    // on a scene-Clock timer instead, so yieldLongCaption can read how long it
+    // has held on the same clock it reschedules on. The active caption is never
+    // cut off; a long hold only shortens. On its final fade we promote the
+    // pending one (if any).
     this.tweens.add({
       targets: captionText,
       alpha: { from: 0, to: 1 },
-      duration: 300,
+      duration: CAPTION_FADE_IN_MS,
       ease: 'Linear',
       onComplete: () => {
-        this.tweens.add({
-          targets: captionText,
-          alpha: { from: 1, to: 0 },
-          duration: 400,
-          delay: 800,
-          ease: 'Linear',
-          onComplete: () => {
-            captionText.destroy();
-            this.activeCaptionText = null;
-            this.onCaptionFinished();
-          },
-        });
+        if (this.activeCaptionText !== captionText) return;
+        if (!longHold) {
+          this.activeHoldScheduledMs = CAPTION_HOLD_MS;
+          this.startCaptionFadeOut(captionText, CAPTION_HOLD_MS);
+          return;
+        }
+        // Asked to give way while fading in: hold only the floor.
+        const hold = this.activeCaptionYielded ? yieldedHoldMs(req, 0)! : captionHoldMs(req);
+        this.holdLongCaption(captionText, hold, 0);
       },
     });
+  }
+
+  /** #372 — hold a long-hold caption at full opacity for `ms` more (it has held
+   *  `heldMs` already), then fade it out. Also pulls the hint-strip yield in to
+   *  the caption's new end. */
+  private holdLongCaption(captionText: Phaser.GameObjects.Text, ms: number, heldMs: number): void {
+    this.activeHoldScheduledMs = heldMs + ms;
+    this.activeHoldTimer = this.time.delayedCall(ms, () => {
+      this.activeHoldTimer = null;
+      if (this.activeCaptionText === captionText) this.startCaptionFadeOut(captionText, 0);
+    });
+    const end = this.time.now + ms + CAPTION_FADE_OUT_MS;
+    if (this.hintYieldUntilMs > end) this.hintYieldUntilMs = end;
+  }
+
+  /** Fade the active caption out after `delayMs`, then promote the pending one. */
+  private startCaptionFadeOut(captionText: Phaser.GameObjects.Text, delayMs: number): void {
+    if (import.meta.env.DEV && this.activeCaptionReq !== null) {
+      this.captionHoldsLog.push({
+        text: this.activeCaptionReq.text,
+        holdMs: this.activeHoldScheduledMs ?? 0,
+        yielded: this.activeCaptionYielded,
+      });
+    }
+    this.tweens.add({
+      targets: captionText,
+      alpha: { from: 1, to: 0 },
+      duration: CAPTION_FADE_OUT_MS,
+      delay: delayMs,
+      ease: 'Linear',
+      onComplete: () => {
+        captionText.destroy();
+        this.activeCaptionText = null;
+        this.activeCaptionReq = null;
+        this.activeHoldTimer = null;
+        this.onCaptionFinished();
+      },
+    });
+  }
+
+  /**
+   * #372 — a long-hold caption (the gathering warning) gives way to an event
+   * caption (not a first-use hint) waiting behind it: its hold is cut to what CAPTION_YIELD_FLOOR_MS would have
+   * left (yieldedHoldMs), so a one-shot queued behind it, or an owed recurring
+   * caption (raid news, the rampage warning), is not held back the full 4 s. It
+   * still fades out, never cut. No-op for a default caption, once it has yielded,
+   * or once it is fading out. GameScene calls this while a recurring caption is
+   * owed; enqueueCaption calls it when an event caption is queued.
+   */
+  public yieldLongCaption(): void {
+    const req = this.activeCaptionReq;
+    const text = this.activeCaptionText;
+    if (req === null || text === null || this.activeCaptionYielded) return;
+    if (yieldedHoldMs(req, 0) === null) return;
+    const timer = this.activeHoldTimer;
+    if (timer === null) {
+      // Already fading out: nothing left to shorten, and it did not give way.
+      if (this.activeHoldScheduledMs !== null) return;
+      // Still fading in: the fade-in's onComplete then holds only the floor.
+      this.activeCaptionYielded = true;
+      return;
+    }
+    // Same clock as the timer: time held so far, on the scene Clock.
+    const held = timer.getElapsed();
+    const rest = yieldedHoldMs(req, held)!;
+    this.activeCaptionYielded = true;
+    timer.remove(false);
+    this.holdLongCaption(text, rest, held);
+  }
+
+  /** #372 — Dev/E2E-only: each caption's final full-opacity hold (ms) and
+   *  whether it gave way, oldest first (see captionHoldsLog). */
+  captionHolds(): { text: string; holdMs: number; yielded: boolean }[] {
+    return import.meta.env.DEV ? [...this.captionHoldsLog] : [];
   }
 
   /**
@@ -1943,9 +2064,15 @@ export class UIScene extends Phaser.Scene {
       this.activeCaptionText.destroy();
       this.activeCaptionText = null;
     }
+    this.activeHoldTimer?.remove(false);
+    this.activeHoldTimer = null;
+    this.activeCaptionReq = null;
+    this.activeCaptionYielded = false;
     this.captionState = createCaptionQueueState();
     this.hintYieldUntilMs = 0;
     this.captionsShownLog = [];
+    this.captionHoldsLog = [];
+    this.activeHoldScheduledMs = null;
   }
 
   /** #290 PR 6 / #350 — true while nothing is showing and nothing is pending, so

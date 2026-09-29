@@ -58,3 +58,36 @@ export function buildHudLayout(layout: LayoutContext): HudLayout {
     SAVE_ICON: { x: w - 28, y: 8, w: 20, h: 20 },
   };
 }
+
+/** Caption Text side padding (px), as UIScene.beginCaption styles it. */
+export const CAPTION_PAD_X = 8;
+/** Widest a caption line may wrap to (px); the pre-#372 fixed wrap width. */
+export const CAPTION_MAX_WRAP_W = 500;
+/** Narrowest wrap width, so a far-right caption never collapses. */
+export const CAPTION_MIN_WRAP_W = 200;
+/** Gap (px) kept between a caption's box and the tool palette. */
+const CAPTION_TOOLS_GAP = 4;
+/** Half the height (px) of the tallest caption box we expect (three 14px lines
+ *  plus padding): a caption centred farther than this below the tool palette
+ *  cannot reach it. */
+const CAPTION_MAX_HALF_H = 32;
+
+/**
+ * #372 — word-wrap width for a caption centred at (`centerX`, `centerY`). A
+ * caption whose box could reach the tool palette's band (hud.TOOLS) wraps so
+ * its box (wrap width + 2 × CAPTION_PAD_X) ends CAPTION_TOOLS_GAP px left of
+ * the palette; at the default layout a centred top caption wraps at 440 px (at
+ * the old fixed 500 a two-line caption — the gathering warning, raid-order
+ * news — ran under the Cmd button). Captions clear of the band keep
+ * CAPTION_MAX_WRAP_W. CAPTION_MIN_WRAP_W wins over clearance: a caption centred
+ * within about 112 px of the palette still wraps at 200 and overlaps it (no
+ * caption is placed there today).
+ */
+export function captionWrapWidth(centerX: number, centerY: number, hud: HudLayout): number {
+  const t = hud.TOOLS;
+  const inBand = centerY - CAPTION_MAX_HALF_H < t.y + t.h && centerY + CAPTION_MAX_HALF_H > t.y;
+  if (!inBand) return CAPTION_MAX_WRAP_W;
+  const halfRoom = t.x - CAPTION_TOOLS_GAP - centerX;
+  const w = 2 * (halfRoom - CAPTION_PAD_X);
+  return Math.max(CAPTION_MIN_WRAP_W, Math.min(CAPTION_MAX_WRAP_W, w));
+}

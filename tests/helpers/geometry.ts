@@ -73,6 +73,8 @@ export const VIEW_TOGGLE_RECT: Rect = buildHudLayout(DEFAULT_LAYOUT).VIEW_TOGGLE
 export const ALARM_TOGGLE_RECT: Rect = buildHudLayout(DEFAULT_LAYOUT).ALARM_TOGGLE;
 /** Underground colony toggle ("Your Colony [X]"), drawn on the underground view only. */
 export const COLONY_TOGGLE_RECT: Rect = buildHudLayout(DEFAULT_LAYOUT).UNDERGROUND_COLONY_TOGGLE;
+/** #372 — the minimap rect (160 × 160 in the bottom-right corner). */
+export const MINIMAP_RECT: Rect = buildHudLayout(DEFAULT_LAYOUT).MINIMAP;
 /** The tool palette's three buttons (Command / Dig / Chamber), left to right. */
 export const TOOL_BUTTON_RECTS: readonly Rect[] = TOOL_ORDER.map((_, i) =>
   toolButtonRect(i, buildHudLayout(DEFAULT_LAYOUT).TOOLS),

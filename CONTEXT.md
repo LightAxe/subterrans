@@ -384,6 +384,22 @@ FoodStorage chambers (see **Raid**).
 _Avoid_: "attack" used alone (ambiguous); don't conflate the operation kind
 (`Probe`/`Invasion`) with the AI state (`Probing`/`Invading`).
 
+**Gathering (enemy army)** (#372, render-only):
+At least `GATHER_MIN_FIGHTERS` fighters of other colonies on the surface (moving
+or not) within `GATHER_RADIUS_TILES` of one of the viewing colony's open entrances,
+not counting any within `GATHER_HOME_RADIUS_TILES` of their own open entrances; a
+fighter near two entrances counts for both. Read from world state in
+`src/render/enemy-gathering.ts`, not from the AI state, so any opponent's army
+counts. The minimap rings a gathering. The **gathering warning** caption names the
+entrance (by compass direction from the middle of the colony's open entrances) once
+the gathering has held `GATHER_DWELL_TICKS` with no **invasion** under way (fewer
+than `INVASION_NEST_MIN_FIGHTERS` enemy fighters in the colony's tunnels). It fires
+once per gathering (an invasion that starts first also uses it up) and re-arms only
+after at most `GATHER_REARM_MAX_FIGHTERS` are near any entrance and no invasion is
+under way, continuously for `GATHER_REARM_QUIET_TICKS`.
+_Avoid_: "staging" for the render concept (the AI's probe rally is the cause, not
+the definition).
+
 **Difficulty**:
 The tier chosen at boot — `Easy` / `Normal` / `Hard` — which tunes AI rates,
 spider hunger, and the egg interval.

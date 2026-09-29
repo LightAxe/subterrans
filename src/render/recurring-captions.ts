@@ -41,8 +41,15 @@ export interface RecurringCaptionSink {
   /** True while nothing is showing and nothing is pending. Optional so the
    *  gate can fail closed: a sink without it never takes recurring captions. */
   captionQueueIdle?(): boolean;
-  /** Returns false iff the queue dropped the caption. */
-  showCaption(text: string, screenX: number, screenY: number): boolean;
+  /** Returns false iff the queue dropped the caption. `holdMs` (#372): a longer
+   *  full-opacity hold for a caption that must be read. */
+  showCaption(
+    text: string,
+    screenX: number,
+    screenY: number,
+    captionKey?: undefined,
+    holdMs?: number,
+  ): boolean;
 }
 
 /**
@@ -56,15 +63,23 @@ export function offerRecurringCaption(
   text: string,
   screenX: number,
   screenY: number,
+  holdMs?: number,
 ): boolean {
-  return ui.captionQueueIdle?.() === true && ui.showCaption(text, screenX, screenY);
+  if (ui.captionQueueIdle?.() !== true) return false;
+  return holdMs === undefined
+    ? ui.showCaption(text, screenX, screenY)
+    : ui.showCaption(text, screenX, screenY, undefined, holdMs);
 }
 
 /**
  * How long an owed rampage warning is still offered (10 s of game time), the
  * same window as owed raid news. The queue drains within about 3 s of wall-clock
- * time (an active and a pending caption), so this only runs out at high game
- * speed behind a busy queue.
+ * time behind an active and a pending default caption, so this only runs out
+ * at high game speed behind a busy queue. The #372 gathering warning holds
+ * longer; while news is owed it shortens to a 2 s readable floor (2.7 s in all,
+ * UIScene.yieldLongCaption), so at 4x (a 2.5 s real-time window) news owed from
+ * the same moment the warning began can still expire behind it — a known cost
+ * of a once-per-gathering warning being readable.
  */
 export const RAMPAGE_CAPTION_OWED_TICKS = 200;
 
@@ -130,6 +145,18 @@ export function offerOwedRampageCaption(
   if (!offerRecurringCaption(ui, text, screenX, screenY)) return false;
   state.owedSinceTick = -Infinity;
   return true;
+}
+
+/**
+ * #372 — after this frame's offers, is recurring news (the rampage warning, or
+ * the raid caption `raidCaption` that was not taken) still owed? GameScene then
+ * asks a long-hold caption to give way (UIScene.yieldLongCaption).
+ */
+export function recurringCaptionStillOwed(
+  rampage: RampageCaptionState,
+  raidCaption: string | null,
+): boolean {
+  return rampage.owedSinceTick !== -Infinity || raidCaption !== null;
 }
 
 /** The part of UIScene an event caption needs: showCaption with the one-shot key. */

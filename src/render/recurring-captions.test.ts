@@ -17,6 +17,7 @@ import {
   noteRampageStart,
   offerOwedRampageCaption,
   offerRecurringCaption,
+  recurringCaptionStillOwed,
   resetRampageCaptionState,
   routeEventCaption,
   type RecurringCaptionSink,
@@ -62,6 +63,16 @@ const at = (
 ): RampageWorld =>
   ({ tick, spider: state === null ? null : { state, hungerTicks } }) as unknown as RampageWorld;
 
+describe('recurringCaptionStillOwed (#372)', () => {
+  it('true while the rampage warning or an untaken raid caption is owed', () => {
+    const r = createRampageCaptionState();
+    expect(recurringCaptionStillOwed(r, null)).toBe(false);
+    expect(recurringCaptionStillOwed(r, 'raided')).toBe(true);
+    noteRampageStart(r, 10, 100);
+    expect(recurringCaptionStillOwed(r, null)).toBe(true);
+  });
+});
+
 describe('offerRecurringCaption (#350)', () => {
   it('enters an idle queue at once', () => {
     const ui = new FakeUi();
@@ -77,6 +88,23 @@ describe('offerRecurringCaption (#350)', () => {
     // The one-shot arriving next is queued, not dropped.
     expect(ui.showCaption('invasion', 0, 0, 'aiInvading')).toBe(true);
     expect(ui.droppedKeys).toEqual([]);
+  });
+
+  it('#372: passes a hold time through, and leaves it off when none is given', () => {
+    const calls: unknown[][] = [];
+    const sink: RecurringCaptionSink = {
+      captionQueueIdle: () => true,
+      showCaption: (...args: unknown[]) => {
+        calls.push(args);
+        return true;
+      },
+    };
+    offerRecurringCaption(sink, 'warning', 1, 2, 4000);
+    offerRecurringCaption(sink, 'news', 1, 2);
+    expect(calls).toEqual([
+      ['warning', 1, 2, undefined, 4000],
+      ['news', 1, 2],
+    ]);
   });
 
   it('fails closed: a sink without captionQueueIdle takes no recurring caption', () => {

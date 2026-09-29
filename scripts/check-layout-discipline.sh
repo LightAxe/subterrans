@@ -29,12 +29,13 @@ COMMENT_FILTER='^[^:]*:[0-9]+:[[:space:]]*(//|/\*|\*)'
 # --- Check 1: no bare 800 / 592 canvas literal -----------------------------
 # File allowlist: sprites.ts (the CANVAS_W/H definitions) and layout.ts (the
 # default LayoutContext). PLUS one documented non-geometry literal: the
-# caption-hold tween duration `delay: 800` (ms) in ui-scene.ts — a timing value
-# that merely collides with the canvas width, not a geometry literal (#238).
+# caption-hold duration `CAPTION_HOLD_MS = 800` (ms) in caption-queue.ts (#372
+# moved it there from ui-scene.ts's `delay: 800`) — a timing value that merely
+# collides with the canvas width, not a geometry literal (#238).
 NUM_HITS=$( { grep -rnE '\b(800|592)\b' "${SCOPE[@]}" --include='*.ts' --exclude='*.test.ts' || true; } \
   | grep -vE "$COMMENT_FILTER" \
   | grep -vE '/(sprites|layout)\.ts:' \
-  | grep -vE '/ui-scene\.ts:[0-9]+:[[:space:]]*delay: 800,' \
+  | grep -vE '/caption-queue\.ts:[0-9]+:export const CAPTION_HOLD_MS = 800;' \
   || true )
 
 if [[ -n "$NUM_HITS" ]]; then
