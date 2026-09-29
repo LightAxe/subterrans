@@ -743,8 +743,11 @@ export const AI_DEFENCE_HOLD_RADIUS_TILES = 32 as const;
  *     One is always a threat.
  *   - AT THE DOOR: on the surface within AI_DEFENCE_ALERT_RADIUS_TILES, weight 1 —
  *     but only when there are at least AI_DEFENCE_ALERT_RAIDERS of them AND at
- *     least as many as the colony has fighters (holding: within
- *     AI_DEFENCE_HOLD_RADIUS_TILES and at least half as many). A force that outnumbers the
+ *     least as many as the colony has fighters (holding: still at least
+ *     AI_DEFENCE_ALERT_RAIDERS, within AI_DEFENCE_HOLD_RADIUS_TILES, and at least
+ *     half as many — so a raid that stays up top ends the defence once drafting
+ *     has doubled the fighters against it, and they go up as sentries to fight it;
+ *     it starts again the moment one comes in). A force that outnumbers the
  *     sentries is met below, at the shaft; a smaller one (a blockade ring, fighters
  *     parked by the door) is left to the sentries on the surface, which chase what
  *     comes near the entrance, so it cannot lock the colony into defence.
@@ -847,43 +850,48 @@ function nearestOpenEntrance(
   return best;
 }
 
-/** Surface radius (Manhattan tiles from an own open entrance) of aiRaidersAtDoor. */
-export const AI_DEFENCE_DOOR_RADIUS_TILES = 8 as const;
+/**
+ * Surface radius (Manhattan tiles from an own open entrance) of aiRaidersAtDoor:
+ * what sentries on their posts (SENTRY_POST_RING_RADIUS 3, sight FIGHT_AGGRO_RADIUS
+ * 4) reach, less a tile.
+ */
+export const AI_DEFENCE_DOOR_RADIUS_TILES = 6 as const;
 
 /**
- * #371 (V62) — AI_DEFENCE_ALERT_RAIDERS or more enemy fighters on the surface within
- * AI_DEFENCE_DOOR_RADIUS_TILES of one of the colony's open entrances, whatever
- * their number against its own: the colony drafts fighters (AI_DEFENCE_RATIO)
- * without taking them below. They stay sentries, which chase enemies this close to
- * the entrance, so fighters parked at the door are fought rather than waited out.
- * Nor does it start a probe or commit an invasion cohort meanwhile (the rally is
- * colony-wide: an operation would take every fighter away as the raid arrives).
+ * #371 (V62) — a raid at the door that the sentries are left to fight: at least
+ * AI_DEFENCE_ALERT_RAIDERS enemy fighters on the surface within
+ * AI_DEFENCE_DOOR_RADIUS_TILES of one of the colony's open entrances, and at least
+ * half as many as the colony's own fighters. The colony drafts fighters
+ * (AI_DEFENCE_RATIO) and starts no probe and commits no invasion cohort meanwhile
+ * (the rally is colony-wide: an operation would take every fighter away as the raid
+ * arrives), but does not rally below: they stay sentries, which fight enemies this
+ * close to the entrance. Drafting ends it by itself (more own fighters than twice
+ * the raiders), so a pair parked at the door cannot hold the colony for long.
  * Read-only; off below V62.
  */
 export function aiRaidersAtDoor(world: WorldState, colony: ColonyRecord): boolean {
   if (world.simVersion < SIM_VERSION_V62_AI_NEST_DEFENCE) return false;
   const ants = world.ants;
   const own = colony.colonyId;
-  let n = 0;
+  let near = 0;
+  let ownFighters = 0;
   for (let i = 0; i < world.nextEntityId; i++) {
-    if (ants.alive[i] !== 1 || ants.zone[i] !== Zone.Surface) continue;
+    if (ants.alive[i] !== 1 || ants.task[i] !== AntTask.Fighting) continue;
     const cid = ants.colonyId[i]!;
-    if (cid === own || cid === NEUTRAL_COLONY_ID || ants.task[i] !== AntTask.Fighting) continue;
-    const e = nearestOpenEntrance(
-      colony.entrances,
-      ants.posX[i]! >> FP_SHIFT,
-      ants.posY[i]! >> FP_SHIFT,
-      true,
-    );
+    if (cid === own) {
+      ownFighters += 1;
+      continue;
+    }
+    if (cid === NEUTRAL_COLONY_ID || ants.zone[i] !== Zone.Surface) continue;
+    const tx = ants.posX[i]! >> FP_SHIFT;
+    const ty = ants.posY[i]! >> FP_SHIFT;
+    const e = nearestOpenEntrance(colony.entrances, tx, ty, true);
     if (e === -1) return false;
     const ent = colony.entrances[e]!;
-    const d =
-      Math.abs(ent.surfaceTileX - (ants.posX[i]! >> FP_SHIFT)) +
-      Math.abs(ent.surfaceTileY - (ants.posY[i]! >> FP_SHIFT));
-    if (d <= AI_DEFENCE_DOOR_RADIUS_TILES) n += 1;
-    if (n >= AI_DEFENCE_ALERT_RAIDERS) return true;
+    const d = Math.abs(ent.surfaceTileX - tx) + Math.abs(ent.surfaceTileY - ty);
+    if (d <= AI_DEFENCE_DOOR_RADIUS_TILES) near += 1;
   }
-  return false;
+  return near >= AI_DEFENCE_ALERT_RAIDERS && near * 2 >= ownFighters;
 }
 
 /** The own entrance (open or not) the colony's rally point is on, or null. */

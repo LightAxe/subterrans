@@ -642,4 +642,51 @@ describe('#371 (V62) — in its own nest only fellow fighters hold a duel', () =
       6,
     ]);
   }, 30_000);
+
+  it("an invader on a LOWER-id nestmate's tile is taken (that one pairs first): it goes for the lone one", () => {
+    const { world, colony, ids, ent } = rallyOnOwnEntrance(1);
+    const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
+    for (let y = 0; y <= 3; y++) ugSet(grid, ent.x, y, UndergroundTileState.Open);
+    for (let x = ent.x; x <= ent.x + 14; x++) ugSet(grid, x, 3, UndergroundTileState.Open);
+    for (let y = 4; y <= 6; y++) ugSet(grid, ent.x + 3, y, UndergroundTileState.Open);
+    colony.digFlowFieldDirty = true;
+    zoneFlips(world, ids, 60);
+    const d = ids[0]!;
+    // A starting worker of the nest (a lower id than the defender) stands still in
+    // the pocket; combat would pair it, not the defender, with the invader there.
+    const low = colony.workers.find((w) => w < d && world.ants.alive[w] === 1)!;
+    world.ants.posX[low] = ((ent.x + 3) << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.posY[low] = (6 << FP_SHIFT) + (FP_ONE >> 1);
+    world.ants.zone[low] = Zone.Underground;
+    world.ants.currentGridColonyId[low] = PLAYER_COLONY_ID;
+    world.ants.task[low] = AntTask.Foraging;
+    world.ants.subTask[low] = ForagingSubState.CarryingFood;
+    world.ants.speed[low] = 0;
+    world.ants.hp[low] = 1000;
+    world.colonies[ENEMY_COLONY_ID]!.rallyPoint = { tileX: ent.x, tileY: ent.y };
+    for (const [x, y] of [
+      [ent.x + 3, 6],
+      [ent.x + 13, 3],
+    ] as const) {
+      const id = allocateEntityId(world);
+      initAnt(world.ants, id, {
+        colonyId: ENEMY_COLONY_ID,
+        posX: (x << FP_SHIFT) + (FP_ONE >> 1),
+        posY: (y << FP_SHIFT) + (FP_ONE >> 1),
+        task: AntTask.Fighting,
+        subTask: 0,
+        speed: 0,
+        lifespan: WORKER_LIFESPAN_TICKS,
+        zone: Zone.Underground,
+      });
+      world.ants.hp[id] = 1000;
+      world.ants.currentGridColonyId[id] = PLAYER_COLONY_ID;
+      world.colonies[ENEMY_COLONY_ID]!.workers.push(id);
+    }
+    for (let t = 0; t < 60; t++) tick(world, []);
+    expect([world.ants.posX[d]! >> FP_SHIFT, world.ants.posY[d]! >> FP_SHIFT]).toEqual([
+      ent.x + 13,
+      3,
+    ]);
+  }, 30_000);
 });

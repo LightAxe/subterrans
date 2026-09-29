@@ -1927,7 +1927,7 @@ describe('#371 (V62) — the AI defends its own nest', () => {
     rec.state = 'WarFooting';
     rec.lastProbeEndTick = -100000;
     world.aiState.push(rec);
-    for (let i = 0; i < 6; i++) colony.workers.push(ant(world, AI, DOOR_X + 2, 2));
+    for (let i = 0; i < 4; i++) colony.workers.push(ant(world, AI, DOOR_X + 2, 2));
     setPilesForTest(world, [
       { foodPileId: 77, tileX: 8, tileY: 3, pickupsRemaining: 4, pickupsInitial: 4 },
     ]);
@@ -1937,14 +1937,19 @@ describe('#371 (V62) — the AI defends its own nest', () => {
     expect(aiRaidersAtDoor(world, colony)).toBe(true);
     runAIController(world, AI);
     expect(world.commandQueue.some((c) => c.type === 'StartAIOperation')).toBe(false);
-    expect(rallies(world)).toHaveLength(0); // 6 sentries outnumber 2: they fight up top
+    expect(rallies(world)).toHaveLength(0); // 4 sentries outnumber 2: they fight up top
     expect(world.commandQueue).toContainEqual(
       expect.objectContaining({ type: 'SetBehaviorRatio', ratio: { ...AI_DEFENCE_RATIO } }),
     );
     // One tile further out, it is not at the door.
     world.commandQueue.length = 0;
-    world.ants.posX[world.nextEntityId - 2] =
-      (DOOR_X + AI_DEFENCE_DOOR_RADIUS_TILES + 1) << FP_SHIFT;
+    const far = world.nextEntityId - 2;
+    world.ants.posX[far] = (DOOR_X + AI_DEFENCE_DOOR_RADIUS_TILES + 1) << FP_SHIFT;
+    expect(aiRaidersAtDoor(world, colony)).toBe(false);
+    world.ants.posX[far] = (DOOR_X + AI_DEFENCE_DOOR_RADIUS_TILES) << FP_SHIFT;
+    expect(aiRaidersAtDoor(world, colony)).toBe(true);
+    // Drafting ends it: a fifth own fighter, and 2 raiders are under half of them.
+    ant(world, AI, DOOR_X + 2, 2);
     expect(aiRaidersAtDoor(world, colony)).toBe(false);
   });
 

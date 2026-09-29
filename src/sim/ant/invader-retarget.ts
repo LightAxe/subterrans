@@ -66,14 +66,15 @@ export const NO_FREE_HOSTILE = -1;
  * the nest has no grid, or below V59. `claimsNoTile` is the occupancy pass's
  * per-ant rule (ant-movement.ts): a friend it holds for neither bumps nor blocks.
  * #371 (V62): a tunnel defender hunting invaders in its own nest calls it too, with
- * `fightersOnly` (stampFriendTiles): only its fellow fighters are friends there.
+ * `defenderRule` (stampFriendTiles): a nestmate holds a tile only if it is a
+ * fighter or has a lower id.
  */
 export function invaderHuntStep(
   world: WorldState,
   id: number,
   gridColonyId: number,
   claimsNoTile: (world: WorldState, id: number) => boolean,
-  fightersOnly = false,
+  defenderRule = false,
 ): number {
   if (world.simVersion < SIM_VERSION_V59_INVADER_RETARGET) return NO_FREE_HOSTILE;
   const grid = world.undergroundGrids[gridColonyId];
@@ -142,7 +143,7 @@ export function invaderHuntStep(
     stamp,
     block,
     claimsNoTile,
-    fightersOnly,
+    defenderRule,
   );
   // Pass 2 — the tiles holding a hostile (`anyHostile`), and of those the ones not
   // saturated for it (`hostile`, free).

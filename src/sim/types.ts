@@ -1371,8 +1371,8 @@ export const SIM_VERSION_V61_AI_EARLY_STORAGE = 61 as const;
  *     (`aiRaidersAtDoor`). While defending no probe starts and no invasion cohort is
  *     committed; a probe in flight is called home, a committed invasion is not.
  *   - Sim (both colonies alike, CLNY-08): a tunnel defender after an invader moves
- *     by the #364 saturation-aware hunt (`invaderHuntStep`, with only fellow
- *     FIGHTERS counting as holding a duel in the defender's own nest) instead of
+ *     by the #364 saturation-aware hunt (`invaderHuntStep`, where in the
+ *     defender's own nest only a fighter or a lower-id nestmate holds a duel) instead of
  *     straight at the nearest invader, so a pack of defenders spreads over the
  *     raiders instead of stacking on one tile, where combat pairs only one of them.
  * No new serialized field, command, world.rngState draw, entity-ID advance or

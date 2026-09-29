@@ -101,13 +101,13 @@ in the tunnels just below the entrance. Moving the rally point off the colony's
 own entrances, or clearing it, brings it back out. Since **#357 (simVersion V57)**
 one walking across the surface to that entrance routes round obstacles, by a field
 leading to that entrance itself (not the nearest open one: a tunnel defender may go
-down only the entrance it defends). Since **#371 (simVersion V62)** tunnel defenders after
-invaders spread over them — each goes for the nearest invader by path whose tile no
-fellow fighter already holds the duel on (the #364 rule invaders use; the colony's
-queen, brood and workers do not count) — instead of stacking on the nearest one; and
-the rule-based AI rallies on its own entrance when enemy fighters are in its nest or
-a force at least as big as its own fighters is at its door, and clears the rally when
-they are gone.
+down only the entrance it defends). Since **#371 (simVersion V62)** tunnel
+defenders after invaders spread over them — each goes for the nearest invader by
+path whose tile no nestmate already holds the duel on (the #364 rule invaders use;
+in its own nest only a fighter, or an ant that combat would pair first, counts) —
+instead of stacking on the nearest one; and the rule-based AI rallies on its own
+entrance when enemy fighters are in its nest or a force at least as big as its own
+fighters is at its door, and clears the rally when they are gone.
 _Avoid_: **guard**, **garrison**.
 
 **Nurse**:
