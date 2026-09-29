@@ -753,8 +753,7 @@ export const AI_DEFENCE_HOLD_RADIUS_TILES = 32 as const;
  *     comes near the entrance, so it cannot lock the colony into defence.
  * Returns the entrance with the most weight; ties go to `prefer` (the entrance
  * already defended, so a raid between two shafts does not swing the rally back and
- * forth), else to the lowest index. Read-only; allocates only when an enemy
- * fighter is about.
+ * forth), else to the lowest index. Read-only and allocation-free.
  */
 export function aiThreatenedEntrance(
   world: WorldState,
@@ -768,50 +767,35 @@ export function aiThreatenedEntrance(
   const holding = prefer !== null;
   const radius = holding ? AI_DEFENCE_HOLD_RADIUS_TILES : AI_DEFENCE_ALERT_RADIUS_TILES;
   const ents = colony.entrances;
-  const ants = world.ants;
-  const own = colony.colonyId;
-  let inside: number[] | null = null;
-  let near: number[] | null = null;
+  // Pass 1 (no entrance attribution): is anyone inside, how many at the door, and
+  // how many fighters of its own does the colony have.
+  let inside = 0;
   let nearTotal = 0;
   let ownFighters = 0;
   for (let i = 0; i < world.nextEntityId; i++) {
-    if (ants.alive[i] !== 1 || ants.task[i] !== AntTask.Fighting) continue;
-    const cid = ants.colonyId[i]!;
-    if (cid === own) {
-      ownFighters += 1;
-      continue;
-    }
-    if (cid === NEUTRAL_COLONY_ID) continue;
-    const tx = ants.posX[i]! >> FP_SHIFT;
-    if (ants.zone[i] === Zone.Underground) {
-      if (ants.currentGridColonyId[i] !== own) continue;
-      const e = nearestOpenEntrance(ents, tx, 0, false);
-      if (e === -1) continue;
-      inside ??= new Array<number>(ents.length).fill(0);
-      inside[e]! += 1;
-      continue;
-    }
-    const e = nearestOpenEntrance(ents, tx, ants.posY[i]! >> FP_SHIFT, true);
-    if (e === -1) continue;
-    const ent = ents[e]!;
-    const d =
-      Math.abs(ent.surfaceTileX - tx) + Math.abs(ent.surfaceTileY - (ants.posY[i]! >> FP_SHIFT));
-    if (d > radius) continue;
-    near ??= new Array<number>(ents.length).fill(0);
-    near[e]! += 1;
-    nearTotal += 1;
+    const where = threatAt(world, colony, i, radius);
+    if (where === THREAT_OWN_FIGHTER) ownFighters += 1;
+    else if (where >= 0 && where < ents.length) inside += 1;
+    else if (where >= ents.length) nearTotal += 1;
   }
   const surface =
     nearTotal >= AI_DEFENCE_ALERT_RAIDERS &&
     (holding ? nearTotal * 2 >= ownFighters : nearTotal >= ownFighters);
-  if (inside === null && !surface) return null;
+  if (inside === 0 && !surface) return null;
+  // Pass 2, per open entrance (at most MAX_ENTRANCES_PER_COLONY; runs only while a
+  // raid is on; allocation-free): its weight.
   let pick: NestEntrance | null = null;
   let pickWeight = 0;
   for (let e = 0; e < ents.length; e++) {
-    const weight =
-      (inside === null ? 0 : inside[e]! * 2) + (surface && near !== null ? near[e]! : 0);
-    if (weight === 0) continue;
     const ent = ents[e]!;
+    if (!ent.isOpen) continue;
+    let weight = 0;
+    for (let i = 0; i < world.nextEntityId; i++) {
+      const where = threatAt(world, colony, i, radius);
+      if (where === e) weight += 2;
+      else if (surface && where === ents.length + e) weight += 1;
+    }
+    if (weight === 0) continue;
     if (
       pick === null ||
       weight > pickWeight ||
@@ -822,6 +806,38 @@ export function aiThreatenedEntrance(
     }
   }
   return pick;
+}
+
+/** threatAt: ant `i` is one of the colony's own fighters. */
+const THREAT_OWN_FIGHTER = -2;
+/** threatAt: ant `i` is no part of a raid on the colony. */
+const THREAT_NONE = -1;
+
+/**
+ * Where ant `i` stands in a raid on `colony`: THREAT_OWN_FIGHTER; `e` for an enemy
+ * fighter inside the nest charged to open entrance index `e` (nearest column);
+ * `entrances.length + e` for one on the surface within `radius` Manhattan tiles of
+ * its nearest open entrance `e`; else THREAT_NONE. Enemy = any other non-neutral
+ * colony (CLNY-08).
+ */
+function threatAt(world: WorldState, colony: ColonyRecord, i: number, radius: number): number {
+  const ants = world.ants;
+  if (ants.alive[i] !== 1 || ants.task[i] !== AntTask.Fighting) return THREAT_NONE;
+  const cid = ants.colonyId[i]!;
+  if (cid === colony.colonyId) return THREAT_OWN_FIGHTER;
+  if (cid === NEUTRAL_COLONY_ID) return THREAT_NONE;
+  const ents = colony.entrances;
+  const tx = ants.posX[i]! >> FP_SHIFT;
+  if (ants.zone[i] === Zone.Underground) {
+    if (ants.currentGridColonyId[i] !== colony.colonyId) return THREAT_NONE;
+    return nearestOpenEntrance(ents, tx, 0, false);
+  }
+  const ty = ants.posY[i]! >> FP_SHIFT;
+  const e = nearestOpenEntrance(ents, tx, ty, true);
+  if (e === -1) return THREAT_NONE;
+  const ent = ents[e]!;
+  const d = Math.abs(ent.surfaceTileX - tx) + Math.abs(ent.surfaceTileY - ty);
+  return d > radius ? THREAT_NONE : ents.length + e;
 }
 
 /**
