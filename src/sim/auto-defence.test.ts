@@ -513,6 +513,14 @@ describe('#372 (V64) — which entrance is breached', () => {
     spawn(w2.world, E, w2.b.x, 1, Zone.Underground, { grid: P, speed: 0 });
     updateFightAntTargets(w2.world);
     expect(breached(w2.world)).toBe(w2.b.id);
+    // Mirrored (the defenders' part is the higher-id entrance's): still theirs.
+    const w3 = nest(V64, true);
+    ugSet(w3.world.undergroundGrids[P]!, w3.b.x - 3, TUNNEL_Y, UndergroundTileState.Solid);
+    spawn(w3.world, E, w3.b.x + 6, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
+    spawn(w3.world, P, w3.b.x + 5, TUNNEL_Y, Zone.Underground);
+    spawn(w3.world, E, w3.a.x, 1, Zone.Underground, { grid: P, speed: 0 });
+    updateFightAntTargets(w3.world);
+    expect(breached(w3.world)).toBe(w3.b.id);
   });
 
   it('on a tie, the lower entranceId', () => {
