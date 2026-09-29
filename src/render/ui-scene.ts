@@ -1993,13 +1993,13 @@ export class UIScene extends Phaser.Scene {
   }
 
   /**
-   * #372 — a long-hold caption (the gathering warning) gives way to a caption
-   * waiting behind it: its hold is cut to what CAPTION_YIELD_FLOOR_MS would have
+   * #372 — a long-hold caption (the gathering warning) gives way to an event
+   * caption (not a first-use hint) waiting behind it: its hold is cut to what CAPTION_YIELD_FLOOR_MS would have
    * left (yieldedHoldMs), so a one-shot queued behind it, or an owed recurring
    * caption (raid news, the rampage warning), is not held back the full 4 s. It
    * still fades out, never cut. No-op for a default caption, once it has yielded,
    * or once it is fading out. GameScene calls this while a recurring caption is
-   * owed; enqueueCaption calls it when one is queued.
+   * owed; enqueueCaption calls it when an event caption is queued.
    */
   public yieldLongCaption(): void {
     const req = this.activeCaptionReq;

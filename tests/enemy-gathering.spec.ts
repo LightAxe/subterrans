@@ -236,8 +236,8 @@ test.describe('#372 — enemy army gathering', () => {
   test('the long warning gives way to a caption queued behind it', async ({ page }) => {
     test.setTimeout(60_000);
     await bootGatheringSave(page);
-    // Wall time the warning is first seen (at or after it began), so the bound
-    // below does not loosen when the detection lags.
+    // Wall time the warning is first seen (at or after it began; the 50 ms poll
+    // keeps that lag small).
     let seenAt = 0;
     await expect
       .poll(
@@ -266,8 +266,9 @@ test.describe('#372 — enemy army gathering', () => {
       .poll(() => captions(page), { timeout: 10_000, intervals: [50] })
       .toContain(RALLY_TEXT);
     // Began by ~2.7 s after the warning (plus the tick drain); without the yield
-    // not before ~4.7 s. Measured from when the warning was seen, which is no
-    // earlier than when it began, so a lagging poll can only tighten this.
+    // not before ~4.7 s. Lag in seeing the warning loosens this bound by that lag
+    // (small at a 50 ms poll, far under the ~0.9 s it would take to pass a
+    // regression); lag in seeing the rally caption tightens it.
     expect(Date.now() - seenAt).toBeLessThan(3800);
   });
 });

@@ -317,8 +317,8 @@ interface UIScenePhase9 {
   // recurring captions (raid news, the spider-rampage warning) may enter without
   // taking the slot a one-shot caption would need.
   captionQueueIdle?(): boolean;
-  /** #372 — a long-hold caption (the gathering warning) shortens its hold so a
-   *  caption waiting behind it is not held back (UIScene.yieldLongCaption). */
+  /** #372 — a long-hold caption (the gathering warning) shortens its hold so an
+   *  event caption waiting behind it is not held back (UIScene.yieldLongCaption). */
   yieldLongCaption?(): void;
   /** #372 — Dev/E2E-only: the caption on screen and its alpha. */
   activeCaption?(): { text: string; alpha: number } | null;

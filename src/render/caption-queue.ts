@@ -61,8 +61,8 @@ export function captionHoldMs(req: CaptionRequest): number {
 export const CAPTION_YIELD_FLOOR_MS = 2000;
 
 /**
- * #372 — a long-hold caption (hold > CAPTION_HOLD_MS) gives way once another
- * caption waits behind it: it keeps only what CAPTION_YIELD_FLOOR_MS would have
+ * #372 — a long-hold caption (hold > CAPTION_HOLD_MS) gives way once an event
+ * caption (not a first-use hint) waits behind it: it keeps only what CAPTION_YIELD_FLOOR_MS would have
  * left after `heldMs` at full opacity, so what waits (a one-shot, or owed raid
  * news / the rampage warning, whose owed windows assume short captions) is held
  * back ~1.2 s longer than behind a default caption, not ~3.2 s. Returns that
