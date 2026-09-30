@@ -267,7 +267,14 @@ import {
   type ContextMenuItem,
   type ContextMenuRow,
 } from './context-menu-layout.js';
-import { RAID_ORDER_OPTIONS, raidMenuItemAt, raidOrderOnTile } from './raid-order-view.js';
+import {
+  RAID_ORDER_OPTIONS,
+  raidMenuDescription,
+  raidMenuDescriptionPos,
+  raidMenuHoveredOrder,
+  raidMenuItemAt,
+  raidOrderOnTile,
+} from './raid-order-view.js';
 import { handleSetRallyPoint } from '../input/surface-input.js';
 import {
   computeHudStats,
@@ -301,6 +308,7 @@ import {
   clearPendingFirstUse,
   createCaptionQueueState,
   recurringCaptionMayEnter,
+  captionFadeInMs,
   captionHoldMs,
   captionTotalMs,
   yieldedHoldMs,
@@ -593,6 +601,24 @@ export class UIScene extends Phaser.Scene {
   // fade-out is scheduled, so a spec reads it after the fact instead of racing
   // the live caption.
   private captionHoldsLog: { text: string; holdMs: number; yielded: boolean }[] = [];
+  // #378 — the open raid menu as last drawn (hovered order, description line), or
+  // null while none is up. Written by update(); read only by the Dev/E2E hook.
+  private raidMenuView: { hovered: number | null; description: string | null } | null = null;
+  // #378 — the pointer's position as the raid menu last opened, and whether it has
+  // moved since: only a pointer that has moved hovers a row.
+  private raidMenuOpenPointerX = 0;
+  private raidMenuOpenPointerY = 0;
+  private raidMenuPointerMoved = false;
+  // #378 — Dev/E2E-only: every caption Text alive in the scene (begun, not yet
+  // destroyed), so a spec can see what is actually on screen, not just what the
+  // queue policy believes.
+  private readonly liveCaptionTexts = new Set<Phaser.GameObjects.Text>();
+  // #378 — Dev/E2E-only: caption Texts created this session (a replacement that
+  // keeps its schedule reuses the old Text and adds none).
+  private captionTextsCreated = 0;
+  // #378 — Dev/E2E-only: the text of every caption a newer version replaced this
+  // round (cut short on screen, or swapped out of the pending slot), oldest first.
+  private captionsReplacedLog: string[] = [];
   // Stage 3b (#5) — tooltip hover state machine. hoverTarget is the widget the
   // cursor is over (null = none); the show timer fires after a dwell delay, the
   // hide timer is the mouse-out grace. tooltipText is the live Phaser Text.
@@ -640,6 +666,9 @@ export class UIScene extends Phaser.Scene {
   private contextMenuVisibleItems: readonly ContextMenuItem[] = CONTEXT_MENU_ITEMS;
   /** #352 — the raid menu's row labels (one per raid order), created once. */
   private raidMenuLabels!: Phaser.GameObjects.Text[];
+  /** #378 — the raid menu's one-line description (the hovered order, else the
+   *  order in force), created once, placed and shown per frame. */
+  private raidMenuDescText!: Phaser.GameObjects.Text;
   private antActivityText!: Phaser.GameObjects.Text;
   private dragState!: SliderDragState;
 
@@ -911,6 +940,21 @@ export class UIScene extends Phaser.Scene {
       t.setDepth(10);
       return t;
     });
+    // #378 — the raid menu's description line, in the tooltip style. One line for
+    // every order today; should a layout ever be narrower than a line, it wraps so
+    // the whole box (text + padding on both sides) still fits the canvas.
+    const descPadX = 6;
+    this.raidMenuDescText = this.add.text(0, 0, '', {
+      color: '#ffffcc',
+      fontSize: '12px',
+      fontFamily: 'monospace',
+      backgroundColor: '#000000cc',
+      padding: { x: descPadX, y: 3 },
+      wordWrap: { width: this.layout.w - 2 * descPadX },
+    });
+    this.raidMenuDescText.setScrollFactor(0);
+    this.raidMenuDescText.setVisible(false);
+    this.raidMenuDescText.setDepth(10);
 
     // Ant-activity popup body — single multi-line Text widget anchored to the
     // top-left of the ant-activity panel rect. Created once, shown/hidden and
@@ -1140,6 +1184,13 @@ export class UIScene extends Phaser.Scene {
           requestHideContextMenu();
           return;
         }
+        // #378 — the raid menu's description line is painted over whatever lies
+        // under it, HUD controls included (the minimap, say): a click on it only
+        // dismisses the menu, like a click on the menu itself.
+        if (this.isOverRaidMenuDescription(pointer.x, pointer.y)) {
+          requestHideContextMenu();
+          return;
+        }
         requestHideContextMenu();
         // fall through — process the actual HUD target. The deferred hide
         // lets any cross-scene pointerdown handler that runs after this one
@@ -1234,7 +1285,8 @@ export class UIScene extends Phaser.Scene {
         this.viewState.activeView === 'underground' &&
         this.isInsideRect(pointer.x, pointer.y, this.hud.UNDERGROUND_COLONY_TOGGLE)
       ) {
-        toggleUndergroundColony(this.viewState);
+        // #378 — also moves the underground camera to the colony it switches to.
+        toggleUndergroundColony(this.viewState, this.getWorld());
         return;
       }
       // Stage 1 controls rework (issue #18) — tool palette click. Routes through
@@ -1454,6 +1506,11 @@ export class UIScene extends Phaser.Scene {
       );
       contextMenuState.screenX = a.x;
       contextMenuState.screenY = a.y;
+      // #378 — where the pointer was as the menu opened: it hovers nothing until
+      // it moves from here (raidMenuHoveredOrder).
+      this.raidMenuOpenPointerX = this.input.activePointer.x;
+      this.raidMenuOpenPointerY = this.input.activePointer.y;
+      this.raidMenuPointerMoved = false;
     }
     applyPendingAntActivityPanelHide();
     this.gfx.clear();
@@ -1719,6 +1776,8 @@ export class UIScene extends Phaser.Scene {
     const projWorld = this.getProjectedWorld();
     const projColony = projWorld.colonies[PLAYER_COLONY_ID];
     for (const label of this.raidMenuLabels) label.setVisible(false);
+    this.raidMenuDescText.setVisible(false);
+    if (import.meta.env.DEV) this.raidMenuView = null;
     if (contextMenuState.visible && contextMenuState.kind === 'raid') {
       // #352 — the raid menu: the five orders, the one in force on this entrance
       // (in the PROJECTED world, so a queued pick shows while paused) outlined.
@@ -1729,18 +1788,53 @@ export class UIScene extends Phaser.Scene {
         contextMenuState.anchorTileX,
         contextMenuState.anchorTileY,
       );
+      // #378 — the row under the mouse is lit, once the mouse has moved since the
+      // menu opened (it opens with its corner under the pointer, on a row nobody
+      // chose); a touch pointer hovers nothing (it rests where the finger lifted).
+      // Read from the live pointer each frame.
+      const pointer = this.input.activePointer;
+      if (pointer.x !== this.raidMenuOpenPointerX || pointer.y !== this.raidMenuOpenPointerY) {
+        this.raidMenuPointerMoved = true;
+      }
+      const hovered = raidMenuHoveredOrder(
+        pointer.x,
+        pointer.y,
+        contextMenuState.screenX,
+        contextMenuState.screenY,
+        this.raidMenuPointerMoved && !pointer.wasTouch && this.input.isOver,
+      );
       drawContextMenuGeometry(
         this.contextMenuGfx as unknown as import('./draw-surface.js').GfxLike,
         contextMenuState.screenX,
         contextMenuState.screenY,
         RAID_ORDER_OPTIONS,
         current ?? -1,
+        hovered ?? -1,
       );
       for (let i = 0; i < this.raidMenuLabels.length; i++) {
         const pos = itemLabelPos(i, contextMenuState.screenX, contextMenuState.screenY);
         this.raidMenuLabels[i]!.setPosition(pos.x, pos.y);
         this.raidMenuLabels[i]!.setVisible(true);
       }
+      // #378 — what the hovered order does (else the order in force), one line
+      // below the menu, or above it when below would run into the bottom HUD strip.
+      const description = raidMenuDescription(hovered, current);
+      if (description !== null) {
+        const t = this.raidMenuDescText;
+        if (t.text !== description) t.setText(description);
+        const pos = raidMenuDescriptionPos(
+          contextMenuState.screenX,
+          contextMenuState.screenY,
+          contextMenuHeight(RAID_ORDER_OPTIONS),
+          t.width,
+          t.height,
+          this.layout.w,
+          this.hud.HINTS.y,
+        );
+        t.setPosition(pos.x, pos.y);
+        t.setVisible(true);
+      }
+      if (import.meta.env.DEV) this.raidMenuView = { hovered, description };
     } else if (contextMenuState.visible && projColony) {
       const items = visibleContextMenuItems(projColony, projWorld);
       this.contextMenuVisibleItems = items;
@@ -1888,6 +1982,22 @@ export class UIScene extends Phaser.Scene {
   }
 
   /**
+   * #378 — show a caption that is the latest version of a message (the raid order
+   * the player just gave, RAID_ORDER_CAPTION_SUPERSEDE_KEY): it replaces an older
+   * caption with the same `supersedeKey` that is on screen or waiting, instead of
+   * queueing behind it (caption-queue.ts). An event caption otherwise, with no
+   * one-shot key. Returns false iff the queue dropped it (overflow).
+   */
+  public showSupersedingCaption(
+    text: string,
+    screenX: number,
+    screenY: number,
+    supersedeKey: string,
+  ): boolean {
+    return this.enqueueCaption({ text, x: screenX, y: screenY, source: 'event', supersedeKey });
+  }
+
+  /**
    * Stage 3b (#3) — display a one-time first-use navigation hint. Implements the
    * FirstUseHintSink the trigger seams call. Renders top-center, clear of the
    * bottom HUD strip. Admitted as source:'first-use' so an event caption
@@ -1905,22 +2015,89 @@ export class UIScene extends Phaser.Scene {
    *  Returns false iff the request was dropped. */
   private enqueueCaption(req: CaptionRequest): boolean {
     const result = admitCaption(this.captionState, req);
-    if (result.begin) this.beginCaption(result.begin);
+    // #378 — a newer version cut the caption on screen short: its Text goes now,
+    // and the newer one starts at the opacity the old one had, so the words change
+    // in place rather than the caption blinking out and fading back in.
+    // While a different caption waits behind it, the newer version takes over the
+    // old one's Text and remaining time instead (keepSchedule), so the waiting
+    // caption is not held back by the switch.
+    if (result.replacedActive && result.keepSchedule && result.begin) {
+      this.swapActiveCaptionWords(result.begin);
+    } else {
+      const fromAlpha = result.replacedActive ? this.cutActiveCaption() : 0;
+      if (result.begin) this.beginCaption(result.begin, fromAlpha);
+    }
     // #372 — an event caption now waits behind a long-hold caption: it gives
     // way. A first-use hint (the lowest priority) does not shorten it.
     if (result.queued?.source === 'event') this.yieldLongCaption();
     if (result.dropped?.captionKey !== undefined) untrigger(result.dropped.captionKey);
+    // #378 — a replaced pending caption never displayed: un-mark a one-shot key,
+    // as for a drop.
+    const replaced = result.replacedPending;
+    if (replaced !== undefined) {
+      if (import.meta.env.DEV) this.captionsReplacedLog.push(replaced.text);
+      if (replaced.captionKey !== undefined) untrigger(replaced.captionKey);
+    }
     return result.dropped === undefined;
   }
 
+  /**
+   * #378 — a newer version replaces the caption on screen while a different
+   * caption waits behind it: put its words on the SAME Text, whose fades and hold
+   * run on unchanged, so the waiting caption comes up exactly when it would have.
+   * The newer words may show for less than a full lifetime; the order badge on the
+   * map says the same thing for as long as the order stands.
+   */
+  private swapActiveCaptionWords(req: CaptionRequest): void {
+    const text = this.activeCaptionText;
+    if (import.meta.env.DEV) {
+      if (this.activeCaptionReq !== null) this.captionsReplacedLog.push(this.activeCaptionReq.text);
+      this.captionsShownLog.push(req.text);
+    }
+    this.activeCaptionReq = req;
+    if (text === null) return;
+    text.setText(req.text);
+    text.setPosition(req.x, req.y);
+    text.setWordWrapWidth(captionWrapWidth(req.x, req.y, this.hud));
+  }
+
+  /**
+   * #378 — tear down the caption on screen that a newer version of it replaced:
+   * its tweens (killed, so no onComplete promotes anything — the queue already
+   * holds the newer version as active), its hold timer and its Text. Returns the
+   * Text's opacity when cut (0 if none was up).
+   */
+  private cutActiveCaption(): number {
+    const text = this.activeCaptionText;
+    if (import.meta.env.DEV && this.activeCaptionReq !== null) {
+      this.captionsReplacedLog.push(this.activeCaptionReq.text);
+    }
+    this.activeHoldTimer?.remove(false);
+    this.activeHoldTimer = null;
+    this.activeCaptionText = null;
+    this.activeCaptionReq = null;
+    this.activeCaptionYielded = false;
+    this.activeHoldScheduledMs = null;
+    if (text === null) return 0;
+    const alpha = text.alpha;
+    this.tweens.killTweensOf(text);
+    text.destroy();
+    return alpha;
+  }
+
   /** Render a caption Text + run its fade tween. Marks a first-use hint shown the
-   *  moment it begins (Codex R1#9). On finish, promotes any pending caption. */
-  private beginCaption(req: CaptionRequest): void {
+   *  moment it begins (Codex R1#9). On finish, promotes any pending caption.
+   *  `fromAlpha` (#378): the opacity to start from — 0, or that of the older
+   *  version this one replaced; the fade-in covers only the rest of the way. */
+  private beginCaption(req: CaptionRequest, fromAlpha = 0): void {
     if (import.meta.env.DEV) this.captionsShownLog.push(req.text);
     this.activeHoldScheduledMs = null;
     if (req.source === 'first-use' && req.hintId !== undefined) {
       markFirstUseHintShown(req.hintId as HintFirstUseId);
     }
+    const startAlpha = Math.max(0, Math.min(1, fromAlpha));
+    // A full fade-in from 0; from a replaced caption's opacity, only the rest of it.
+    const fadeInMs = captionFadeInMs(startAlpha);
     // Stage 1 (Codex R4-1): a caption whose vertical band overlaps the hint
     // strip (hud.HINTS) yields (hides) the strip for its lifetime so the two
     // don't collide.
@@ -1929,7 +2106,7 @@ export class UIScene extends Phaser.Scene {
     if (capTop < this.hud.HINTS.y + this.hud.HINTS.h && capBottom > this.hud.HINTS.y) {
       // Stage 1 (issue #18): sized to the caption's lifetime so the strip
       // reappears exactly as it clears (#372: a caption may hold longer).
-      this.hintYieldUntilMs = this.time.now + captionTotalMs(req);
+      this.hintYieldUntilMs = this.time.now + captionTotalMs(req) - (CAPTION_FADE_IN_MS - fadeInMs);
     }
     const captionText = this.add.text(req.x, req.y, req.text, {
       fontSize: '14px',
@@ -1943,7 +2120,14 @@ export class UIScene extends Phaser.Scene {
     });
     captionText.setOrigin(0.5, 0.5);
     captionText.setDepth(30);
-    captionText.setAlpha(0);
+    captionText.setAlpha(startAlpha);
+    if (import.meta.env.DEV) {
+      this.captionTextsCreated++;
+      this.liveCaptionTexts.add(captionText);
+      captionText.once(Phaser.GameObjects.Events.DESTROY, () =>
+        this.liveCaptionTexts.delete(captionText),
+      );
+    }
     this.activeCaptionText = captionText;
     this.activeCaptionReq = req;
     this.activeHoldTimer = null;
@@ -1954,12 +2138,13 @@ export class UIScene extends Phaser.Scene {
     // fade-out tween's delay, exactly as before #372. A long-hold caption holds
     // on a scene-Clock timer instead, so yieldLongCaption can read how long it
     // has held on the same clock it reschedules on. The active caption is never
-    // cut off; a long hold only shortens. On its final fade we promote the
-    // pending one (if any).
+    // cut off — except by a newer version of itself (#378, cutActiveCaption, whose
+    // killed tweens promote nothing) — and a long hold only shortens. On its final
+    // fade we promote the pending one (if any).
     this.tweens.add({
       targets: captionText,
-      alpha: { from: 0, to: 1 },
-      duration: CAPTION_FADE_IN_MS,
+      alpha: { from: startAlpha, to: 1 },
+      duration: fadeInMs,
       ease: 'Linear',
       onComplete: () => {
         if (this.activeCaptionText !== captionText) return;
@@ -2044,9 +2229,66 @@ export class UIScene extends Phaser.Scene {
   }
 
   /** #372 — Dev/E2E-only: each caption's final full-opacity hold (ms) and
-   *  whether it gave way, oldest first (see captionHoldsLog). */
+   *  whether it gave way, oldest first (see captionHoldsLog). #378: an entry is
+   *  written as a caption's fade-out is SCHEDULED, so a caption a newer version
+   *  replaced keeps the hold it was scheduled even if it was cut short, and a
+   *  newer version that took over an old caption's Text after that point
+   *  (keepSchedule) has no entry of its own — see captionsReplaced. */
   captionHolds(): { text: string; holdMs: number; yielded: boolean }[] {
     return import.meta.env.DEV ? [...this.captionHoldsLog] : [];
+  }
+
+  /** #378 — Dev/E2E-only: the open raid menu as last drawn — the hovered order
+   *  (null: none) and the description line (null: none) — or null while no raid
+   *  menu is up. */
+  raidMenuState(): { hovered: number | null; description: string | null } | null {
+    return import.meta.env.DEV ? this.raidMenuView : null;
+  }
+
+  /** #378 — Dev/E2E-only: the raid menu's description line box as last drawn
+   *  (canvas px), or null while it is not shown. */
+  raidMenuDescriptionRect(): { x: number; y: number; w: number; h: number } | null {
+    if (!import.meta.env.DEV) return null;
+    const t = this.raidMenuDescText;
+    return contextMenuState.kind === 'raid' && t.visible
+      ? { x: t.x, y: t.y, w: t.width, h: t.height }
+      : null;
+  }
+
+  /** #378 — Dev/E2E-only: captions a newer version replaced (captionsReplacedLog). */
+  captionsReplaced(): string[] {
+    return import.meta.env.DEV ? [...this.captionsReplacedLog] : [];
+  }
+
+  /** #378 — Dev/E2E-only: the caption on screen and the one waiting behind it
+   *  (null: none), from the queue policy's own state; the text of every caption
+   *  Text actually alive in the scene (`onScreen`, oldest first); and how many
+   *  caption Texts have been created this session (`textsCreated`). */
+  captionQueueTexts(): {
+    active: string | null;
+    pending: string | null;
+    onScreen: string[];
+    textsCreated: number;
+  } {
+    if (!import.meta.env.DEV) return { active: null, pending: null, onScreen: [], textsCreated: 0 };
+    return {
+      active: this.captionState.active?.text ?? null,
+      pending: this.captionState.pending?.text ?? null,
+      onScreen: [...this.liveCaptionTexts].map((t) => t.text),
+      textsCreated: this.captionTextsCreated,
+    };
+  }
+
+  /**
+   * #378 — Dev/E2E-only: stop (or restart) this scene's clock, which runs every
+   * caption's fades and holds, so a spec can hold a caption on screen while it
+   * gives the next command, however slow the machine. Also stops the tooltip
+   * timers; nothing in the sim runs on it. No-op outside Dev builds.
+   */
+  freezeCaptionClock(frozen: boolean): void {
+    if (!import.meta.env.DEV) return;
+    this.tweens.timeScale = frozen ? 0 : 1;
+    this.time.timeScale = frozen ? 0 : 1;
   }
 
   /**
@@ -2072,6 +2314,7 @@ export class UIScene extends Phaser.Scene {
     this.hintYieldUntilMs = 0;
     this.captionsShownLog = [];
     this.captionHoldsLog = [];
+    this.captionsReplacedLog = [];
     this.activeHoldScheduledMs = null;
   }
 
@@ -2107,6 +2350,20 @@ export class UIScene extends Phaser.Scene {
       this.gameOverGroup.length > 0 ||
       this.savePromptGroup.length > 0 ||
       this.difficultySelectGroup.length > 0
+    );
+  }
+
+  /** #378 — true if (x, y) is on the raid menu's description line as last drawn
+   *  (it is shown only while the raid menu is up). */
+  private isOverRaidMenuDescription(x: number, y: number): boolean {
+    const t = this.raidMenuDescText;
+    return (
+      contextMenuState.kind === 'raid' &&
+      t.visible &&
+      x >= t.x &&
+      x < t.x + t.width &&
+      y >= t.y &&
+      y < t.y + t.height
     );
   }
 
@@ -2158,15 +2415,17 @@ export class UIScene extends Phaser.Scene {
     }
     // #320 review — an open chamber menu is drawn over (and takes the clicks
     // of) any HUD control beneath it, so don't tooltip the covered control.
+    // #378: likewise the raid menu's description line.
     if (
       contextMenuState.visible &&
-      isInsideContextMenu(
+      (isInsideContextMenu(
         pointer.x,
         pointer.y,
         contextMenuState.screenX,
         contextMenuState.screenY,
         this.contextMenuRows(),
-      )
+      ) ||
+        this.isOverRaidMenuDescription(pointer.x, pointer.y))
     ) {
       this.cancelTooltip();
       return;

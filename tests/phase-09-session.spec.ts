@@ -16,7 +16,7 @@ import {
 // #304 — the new-game screen is two steps (pick a difficulty row, press Start);
 // the shared helper drives it so every spec boots the same way.
 import { clickCanvasRect, settleToPlaying } from './helpers/boot.js';
-import { SETTINGS_KEY } from '../src/platform/settings.js';
+import { DEFAULT_SETTINGS, SETTINGS_KEY } from '../src/platform/settings.js';
 
 const errorFilter = (msg: ConsoleMessage) => msg.type() === 'error';
 const SAVE_KEY = 'subterrans:save:v3';
@@ -556,12 +556,15 @@ test.describe('Phase 09.1 Chunk 2 — enemy underground toggle', () => {
       await boot(page);
       // The P handler persists every flip; null = never written = the default.
       const readPheromone = () =>
-        page.evaluate((key) => {
-          const raw = localStorage.getItem(key);
-          if (raw === null) return true;
-          const parsed = JSON.parse(raw) as { settings?: { pheromoneOverlay?: boolean } };
-          return parsed.settings?.pheromoneOverlay ?? true;
-        }, SETTINGS_KEY);
+        page.evaluate(
+          ({ key, dflt }) => {
+            const raw = localStorage.getItem(key);
+            if (raw === null) return dflt;
+            const parsed = JSON.parse(raw) as { settings?: { pheromoneOverlay?: boolean } };
+            return parsed.settings?.pheromoneOverlay ?? dflt;
+          },
+          { key: SETTINGS_KEY, dflt: DEFAULT_SETTINGS.pheromoneOverlay },
+        );
       const start = await readPheromone();
       await press(page, P);
       await expect.poll(readPheromone, { timeout: 5_000 }).toBe(!start);

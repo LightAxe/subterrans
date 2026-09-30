@@ -5,13 +5,20 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   RAID_ORDER_OPTIONS,
-  RAID_BADGE_SIZE_PX,
+  RAID_BADGE_CELL_SCREEN_PX,
+  RAID_BADGE_SCREEN_PX,
   activeRaidOrder,
   drawRaidOrderBadge,
+  raidBadgeStackLiftWorldPx,
+  raidBadgeWorldPx,
+  raidMenuDescription,
+  raidMenuDescriptionPos,
+  raidMenuHoveredOrder,
   raidMenuItemAt,
   raidOrderCaption,
   raidOrderOfRally,
   raidOrderOnTile,
+  raidOrderOption,
   worldHasRaidOrders,
 } from './raid-order-view.js';
 import { drawGhostDelta } from './draw-command-legibility.js';
@@ -19,10 +26,14 @@ import type { GhostDelta } from './command-ghosts.js';
 import { TILE_SIZE_PX } from './sprites.js';
 import {
   CONTEXT_MENU,
+  CONTEXT_MENU_HOVER_LIGHTEN,
   clampContextMenuAnchor,
+  contextMenuHeight,
+  contextMenuRowColor,
   drawContextMenuGeometry,
   isInsideContextMenu,
 } from './context-menu-layout.js';
+import { lerpColor } from './sprites.js';
 import {
   createRaidCaptionState,
   nextRaidCaption,
@@ -86,6 +97,7 @@ function surfaceView(): ViewState {
     undergroundCamera: makeCameraView(0, 0),
     undergroundVisited: true,
     activeUndergroundColonyId: PLAYER_COLONY_ID,
+    undergroundCenterByColony: new Map(),
     showPheromoneOverlay: false,
   };
 }
@@ -197,9 +209,9 @@ describe('activeRaidOrder and the rally badge', () => {
     const seen = new Set<string>();
     for (const o of RAID_ORDER_OPTIONS) {
       const g = new MockGfx();
-      drawRaidOrderBadge(g, 160, 320, o.raidType);
+      drawRaidOrderBadge(g, 160, 320, o.raidType, 1);
       const [bx, by, bw, bh] = g.rects[0]!;
-      expect([bw, bh]).toEqual([RAID_BADGE_SIZE_PX, RAID_BADGE_SIZE_PX]);
+      expect([bw, bh]).toEqual([RAID_BADGE_SCREEN_PX, RAID_BADGE_SCREEN_PX]);
       expect(by + bh).toBeLessThanOrEqual(320); // wholly above the rally tile
       const cells = g.rects.slice(1);
       expect(cells.length).toBe(o.glyph.join('').split('#').length - 1);
@@ -375,26 +387,195 @@ describe('#352 review — menu placement, the order in force, the queued badge',
       pendingRaidOrder: null,
     };
     const tile = { tileX: 10, tileY: 20 };
-    const plain = new MockGfx();
-    drawGhostDelta(
-      plain,
-      { ...base, pendingRaidOrder: { ...tile, raidType: RaidType.Deny, overCommitted: false } },
-      'surface',
-      PLAYER_COLONY_ID,
-    );
-    const ref = new MockGfx();
-    drawRaidOrderBadge(ref, tile.tileX * TILE_SIZE_PX, tile.tileY * TILE_SIZE_PX, RaidType.Deny);
-    expect(plain.rects).toEqual(ref.rects);
-    const lifted = new MockGfx();
-    drawGhostDelta(
-      lifted,
-      { ...base, pendingRaidOrder: { ...tile, raidType: RaidType.Deny, overCommitted: true } },
-      'surface',
-      PLAYER_COLONY_ID,
-    );
-    expect(lifted.rects.map((r) => r[1])).toEqual(
-      ref.rects.map((r) => r[1] - RAID_BADGE_SIZE_PX - 1),
-    );
+    // #378: the badge is sized for the camera zoom, which drawGhostDelta passes on.
+    for (const zoom of [1, 2, 0.5]) {
+      const plain = new MockGfx();
+      drawGhostDelta(
+        plain,
+        { ...base, pendingRaidOrder: { ...tile, raidType: RaidType.Deny, overCommitted: false } },
+        'surface',
+        PLAYER_COLONY_ID,
+        zoom,
+      );
+      const ref = new MockGfx();
+      drawRaidOrderBadge(
+        ref,
+        tile.tileX * TILE_SIZE_PX,
+        tile.tileY * TILE_SIZE_PX,
+        RaidType.Deny,
+        zoom,
+      );
+      expect(plain.rects).toEqual(ref.rects);
+      const lifted = new MockGfx();
+      drawGhostDelta(
+        lifted,
+        { ...base, pendingRaidOrder: { ...tile, raidType: RaidType.Deny, overCommitted: true } },
+        'surface',
+        PLAYER_COLONY_ID,
+        zoom,
+      );
+      const lift = raidBadgeStackLiftWorldPx(zoom);
+      expect(lifted.rects.map((r) => r[1])).toEqual(ref.rects.map((r) => r[1] - lift));
+      // Stacked just clear of the committed badge: it ends 1 screen px above it.
+      expect((lift - raidBadgeWorldPx(zoom)) * zoom).toBeCloseTo(1, 9);
+    }
     expect(new MockGfx().rects).toEqual([]);
+  });
+});
+
+describe('#378 — the rally badge is sized on screen, not in the world', () => {
+  /** The badge rects drawn for the rally tile at (wx, wy) = (160, 320) under `zoom`. */
+  function badge(zoom: number, type: RaidType = RaidType.Assault) {
+    const g = new MockGfx();
+    drawRaidOrderBadge(g, 160, 320, type, zoom);
+    const [bx, by, bw, bh] = g.rects[0]!;
+    return { g, bx, by, bw, bh, cells: g.rects.slice(1) };
+  }
+
+  it('is the same size on screen at every zoom, letter cells included', () => {
+    for (const zoom of [0.2, 0.5, 0.8, 1, 1.5, 2]) {
+      const { bw, bh, cells } = badge(zoom);
+      expect(bw * zoom).toBeCloseTo(RAID_BADGE_SCREEN_PX, 9);
+      expect(bh * zoom).toBeCloseTo(RAID_BADGE_SCREEN_PX, 9);
+      expect(raidBadgeWorldPx(zoom) * zoom).toBeCloseTo(RAID_BADGE_SCREEN_PX, 9);
+      for (const [, , cw, ch] of cells) {
+        expect(cw * zoom).toBeCloseTo(RAID_BADGE_CELL_SCREEN_PX, 9);
+        expect(ch * zoom).toBeCloseTo(RAID_BADGE_CELL_SCREEN_PX, 9);
+      }
+    }
+  });
+
+  it('is legible at 1x: half as big again as the old 12-px chip, a 15-px letter', () => {
+    expect(RAID_BADGE_SCREEN_PX).toBeGreaterThanOrEqual(18);
+    expect(5 * RAID_BADGE_CELL_SCREEN_PX).toBeGreaterThanOrEqual(15);
+    expect(badge(1).bw).toBe(RAID_BADGE_SCREEN_PX);
+  });
+
+  it('never dominates at high zoom: at 2x it is smaller on screen than the tile under it', () => {
+    const zoom = 2;
+    const { bw } = badge(zoom);
+    expect(bw * zoom).toBeLessThan(TILE_SIZE_PX * zoom * 0.75);
+    expect(bw * zoom).toBeLessThan(24); // the old world-sized chip was 24 px at 2x
+  });
+
+  it('sits centred over the rally tile (to a whole screen px) and wholly above it, 1 screen px clear', () => {
+    for (const zoom of [0.5, 1, 2]) {
+      const { bx, by, bw, bh, cells } = badge(zoom);
+      expect(Math.abs(bx + bw / 2 - (160 + TILE_SIZE_PX / 2)) * zoom).toBeLessThanOrEqual(0.5);
+      expect((320 - (by + bh)) * zoom).toBeCloseTo(1, 9);
+      for (const [x, y, w, h] of cells) {
+        expect(x >= bx && y >= by && x + w <= bx + bw + 1e-9 && y + h <= by + bh + 1e-9).toBe(true);
+      }
+    }
+  });
+
+  it('lands on whole pixels at 1x (a tile-aligned camera draws it crisp)', () => {
+    const { g } = badge(1);
+    for (const [x, y, w, h] of g.rects) {
+      for (const v of [x, y, w, h]) expect(Number.isInteger(v)).toBe(true);
+    }
+    // At 2x its left edge is a whole number of screen px from the tile's.
+    const b2 = badge(2);
+    expect(Number.isInteger((b2.bx - 160) * 2)).toBe(true);
+  });
+
+  it('keeps the letter shape: the same cells at every zoom, only scaled', () => {
+    const at = (zoom: number) =>
+      badge(zoom, RaidType.Blockade).cells.map(([x, y]) => [
+        Math.round(((x - badge(zoom).bx) * zoom) / RAID_BADGE_CELL_SCREEN_PX),
+        Math.round(((y - badge(zoom).by) * zoom) / RAID_BADGE_CELL_SCREEN_PX),
+      ]);
+    expect(at(0.5)).toEqual(at(1));
+    expect(at(2)).toEqual(at(1));
+  });
+});
+
+describe('#378 — the raid menu: hover highlight and description', () => {
+  const ax = 100;
+  const ay = 50;
+  const rowY = (i: number) => ay + i * CONTEXT_MENU.ITEM_HEIGHT + 4;
+
+  it('a mouse hovers the row under it; nothing off the menu', () => {
+    for (const o of RAID_ORDER_OPTIONS) {
+      expect(raidMenuHoveredOrder(ax + 10, rowY(o.raidType), ax, ay, true)).toBe(o.raidType);
+    }
+    expect(raidMenuHoveredOrder(ax - 1, rowY(0), ax, ay, true)).toBeNull();
+    expect(
+      raidMenuHoveredOrder(ax + 10, ay + contextMenuHeight(RAID_ORDER_OPTIONS), ax, ay, true),
+    ).toBeNull();
+  });
+
+  it('a pointer not pointing (touch, or a mouse not moved since the menu opened) hovers nothing — not even the first row it rests on', () => {
+    expect(raidMenuHoveredOrder(ax, ay, ax, ay, false)).toBeNull();
+    for (const o of RAID_ORDER_OPTIONS) {
+      expect(raidMenuHoveredOrder(ax + 10, rowY(o.raidType), ax, ay, false)).toBeNull();
+    }
+  });
+
+  it('describes the hovered order, else the order in force, else nothing', () => {
+    expect(raidMenuDescription(RaidType.Spoil, RaidType.Deny)).toMatch(/^Spoil: /);
+    expect(raidMenuDescription(null, RaidType.Deny)).toMatch(/^Deny: /); // no hover
+    expect(raidMenuDescription(RaidType.Loot, null)).toMatch(/^Loot: /);
+    expect(raidMenuDescription(null, null)).toBeNull();
+  });
+
+  it('uses the order caption’s own wording (single-sourced), one line per order', () => {
+    for (const o of RAID_ORDER_OPTIONS) {
+      const d = raidMenuDescription(o.raidType, null)!;
+      expect(d).toBe(`${o.label}: ${raidOrderOption(o.raidType).blurb}`);
+      expect(raidOrderCaption(o.raidType).endsWith(o.blurb)).toBe(true);
+      expect(d).not.toContain('\n');
+      // A rough bound only (12-px monospace is ~7.2 px a glyph, plus 12 px of
+      // padding): one line fits the 800-px canvas. The e2e screenshot shows it.
+      expect(12 + d.length * 7.2).toBeLessThan(800);
+    }
+  });
+
+  it('draws the hovered row lit, every other row as before; hover and the in-force outline coexist', () => {
+    const plain = new MockGfx();
+    drawContextMenuGeometry(plain, ax, ay, RAID_ORDER_OPTIONS, RaidType.Deny);
+    const hovered = new MockGfx();
+    drawContextMenuGeometry(hovered, ax, ay, RAID_ORDER_OPTIONS, RaidType.Deny, RaidType.Spoil);
+    expect(hovered.rects).toEqual(plain.rects); // same geometry, outline included
+    const diff = hovered.styles
+      .map((c, i) => [i, c, plain.styles[i]] as const)
+      .filter(([, a, b]) => a !== b);
+    expect(diff).toHaveLength(1);
+    const spoil = raidOrderOption(RaidType.Spoil);
+    const lit = lerpColor(spoil.stripeColor, 0xffffff, CONTEXT_MENU_HOVER_LIGHTEN);
+    expect(diff[0]![1]).toBe(lit);
+    expect(diff[0]![2]).toBe(spoil.stripeColor);
+    expect(contextMenuRowColor(spoil, true)).toBe(lit);
+    expect(contextMenuRowColor(spoil, false)).toBe(spoil.stripeColor);
+  });
+
+  it('a lit row is clearly brighter than every unlit stripe', () => {
+    const lum = (c: number) => ((c >> 16) & 0xff) + ((c >> 8) & 0xff) + (c & 0xff);
+    const brightestUnlit = Math.max(...RAID_ORDER_OPTIONS.map((o) => lum(o.stripeColor)));
+    for (const o of RAID_ORDER_OPTIONS) {
+      expect(lum(contextMenuRowColor(o, true)) - lum(o.stripeColor)).toBeGreaterThan(150);
+      expect(lum(contextMenuRowColor(o, true))).toBeGreaterThan(brightestUnlit);
+    }
+  });
+
+  it('places the description just below the menu, or above it when below meets the HUD strip', () => {
+    const menuH = contextMenuHeight(RAID_ORDER_OPTIONS);
+    // Room below: left-aligned with the menu, 2 px under it.
+    expect(raidMenuDescriptionPos(ax, ay, menuH, 400, 20, 800, 508)).toEqual({
+      x: ax,
+      y: ay + menuH + 2,
+    });
+    // The menu pushed down to the strip (clampContextMenuAnchor): above it instead.
+    const low = 508 - menuH;
+    const above = raidMenuDescriptionPos(ax, low, menuH, 400, 20, 800, 508);
+    expect(above).toEqual({ x: ax, y: low - 2 - 20 });
+    expect(above.y + 20).toBeLessThanOrEqual(low); // never over the menu
+    // Near the right edge: moved left to end inside the canvas.
+    expect(raidMenuDescriptionPos(680, ay, menuH, 400, 20, 800, 508).x).toBe(400);
+    // Wider than the canvas: pinned at 0, never off the left.
+    expect(raidMenuDescriptionPos(680, ay, menuH, 900, 20, 800, 508).x).toBe(0);
+    // Fits neither below nor above (not reachable at 800 × 592): pinned at the
+    // top — never off it — even though it then overlaps the menu.
+    expect(raidMenuDescriptionPos(ax, 0, menuH, 400, 20, 800, menuH + 10).y).toBe(0);
   });
 });

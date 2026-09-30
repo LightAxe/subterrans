@@ -21,7 +21,9 @@ export const SETTINGS_VERSION = 1 as const;
 
 export interface Settings {
   /** Pheromone trail overlay visibility (issue #114). When false, the player's
-   *  pheromone overlay is not drawn. Render-only; does not affect simulation. */
+   *  pheromone overlay is not drawn. Default false (#378: off until the player
+   *  turns it on with P or the Settings toggle — on, its blocks hid the ants);
+   *  a stored value wins. Render-only; does not affect simulation. */
   pheromoneOverlay: boolean;
   /** Stage 3b (issue #18) — visibility of the static per-tool hint-strip legend.
    *  When false, only the legend is hidden; the paused-queue-full warning and
@@ -56,7 +58,7 @@ export interface Settings {
 export const SURVEY_EMAIL_MAX = 254;
 
 export const DEFAULT_SETTINGS: Readonly<Settings> = {
-  pheromoneOverlay: true,
+  pheromoneOverlay: false,
   hintStripVisible: true,
   firstUseHints: {},
   surveyEmail: '',

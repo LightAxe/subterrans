@@ -124,16 +124,16 @@ test.describe('Issue #115/#116 — single click triggers single dispatch', () =>
     page,
   }) => {
     await bootGame(page);
-    // Default pheromoneOverlay is true.
+    // Default pheromoneOverlay is false (#378: off until the player turns it on).
     const before = await page.evaluate(() => {
       try {
         const raw = localStorage.getItem('subterrans:settings:v1');
-        return raw === null ? true : (JSON.parse(raw).settings?.pheromoneOverlay ?? true);
+        return raw === null ? false : (JSON.parse(raw).settings?.pheromoneOverlay ?? false);
       } catch {
-        return true;
+        return false;
       }
     });
-    expect(before).toBe(true);
+    expect(before).toBe(false);
 
     // Open pause menu → Settings → toggle pheromone.
     await page.keyboard.press('Escape');
@@ -154,8 +154,8 @@ test.describe('Issue #115/#116 — single click triggers single dispatch', () =>
     });
     // ONE click should flip the setting. The duplicate-dispatch bug fired
     // dispatchPauseMenuItem twice → flipped on then off → 'after' would still
-    // be true. After the fix, after === false.
-    expect(after).toBe(false);
+    // be false. After the fix, after === true.
+    expect(after).toBe(true);
   });
 });
 
@@ -168,6 +168,7 @@ test.describe('Issue #114 — P key toggles pheromone overlay', () => {
     await page.locator('canvas').first().waitFor({ state: 'attached' });
     await settleToPlaying(page);
 
+    // #378: the overlay starts off, so the first P turns it on.
     await page.keyboard.press('p');
     await page.waitForTimeout(100);
 
@@ -175,16 +176,16 @@ test.describe('Issue #114 — P key toggles pheromone overlay', () => {
       const raw = localStorage.getItem('subterrans:settings:v1');
       return raw === null ? null : JSON.parse(raw).settings?.pheromoneOverlay;
     });
-    expect(persisted).toBe(false);
+    expect(persisted).toBe(true);
 
-    // Press again → back to true.
+    // Press again → back off.
     await page.keyboard.press('p');
     await page.waitForTimeout(100);
     const persisted2 = await page.evaluate(() => {
       const raw = localStorage.getItem('subterrans:settings:v1');
       return raw === null ? null : JSON.parse(raw).settings?.pheromoneOverlay;
     });
-    expect(persisted2).toBe(true);
+    expect(persisted2).toBe(false);
   });
 });
 
@@ -227,16 +228,16 @@ test.describe('Round-2 review — keybinds gated on Playing phase', () => {
     page,
   }) => {
     await bootGame(page);
-    // Verify default
+    // Verify default (#378: off)
     const before = await page.evaluate(() => {
       try {
         const raw = localStorage.getItem('subterrans:settings:v1');
-        return raw === null ? true : (JSON.parse(raw).settings?.pheromoneOverlay ?? true);
+        return raw === null ? false : (JSON.parse(raw).settings?.pheromoneOverlay ?? false);
       } catch {
-        return true;
+        return false;
       }
     });
-    expect(before).toBe(true);
+    expect(before).toBe(false);
 
     // Open menu, then press P.
     await page.keyboard.press('Escape');
@@ -250,12 +251,12 @@ test.describe('Round-2 review — keybinds gated on Playing phase', () => {
     const after = await page.evaluate(() => {
       try {
         const raw = localStorage.getItem('subterrans:settings:v1');
-        return raw === null ? true : (JSON.parse(raw).settings?.pheromoneOverlay ?? true);
+        return raw === null ? false : (JSON.parse(raw).settings?.pheromoneOverlay ?? false);
       } catch {
-        return true;
+        return false;
       }
     });
-    expect(after).toBe(true);
+    expect(after).toBe(false);
   });
 });
 
@@ -471,18 +472,19 @@ test.describe('Round-6 (Codex P2) — pheromone toggle survives degraded storage
 
     // Sample 1: initial state.
     const before = await page.screenshot({ clip: labelClip });
-    // Click toggle → flip to OFF in-mem (saveSettings drops the write silently).
+    // Click toggle → flip to ON in-mem (#378: it starts OFF; saveSettings drops
+    // the write silently).
     await canvas.click({ position: toggleClickPos });
     await page.waitForTimeout(120);
     const afterOne = await page.screenshot({ clip: labelClip });
-    // Click again → flip back to ON.
+    // Click again → flip back to OFF.
     await canvas.click({ position: toggleClickPos });
     await page.waitForTimeout(120);
     const afterTwo = await page.screenshot({ clip: labelClip });
 
     // Pre-fix (degraded storage + loadSettings-derived flip): every click
-    // recomputes from DEFAULT_SETTINGS = {pheromoneOverlay: true}, so the
-    // label always ends at "OFF" after the first click and never flips
+    // recomputes from DEFAULT_SETTINGS = {pheromoneOverlay: false}, so the
+    // label always ends at "ON" after the first click and never flips
     // back. Post-fix: in-mem state alternates regardless of storage.
     expect(before.equals(afterOne)).toBe(false); // 1 click changed it
     expect(afterOne.equals(afterTwo)).toBe(false); // 2nd click changed it back
@@ -556,7 +558,7 @@ test.describe('Pheromone overlay actually renders (UAT P1 — pre-existing draw-
     });
     await page.reload();
     await page.locator('canvas').first().waitFor({ state: 'attached' });
-    await settleToPlaying(page); // fresh Normal game, surface view, overlay ON
+    await settleToPlaying(page); // fresh Normal game, surface view, overlay OFF (#378)
 
     const drawOrder = () =>
       page.evaluate(
@@ -566,18 +568,41 @@ test.describe('Pheromone overlay actually renders (UAT P1 — pre-existing draw-
           ).__phase9_test?.getDrawOrder() ?? [],
       );
 
-    // Overlay ON (default): pheromone must be drawn AFTER terrain and BEFORE
-    // entities. The pre-fix order was [pheromone, terrain, entities] (overlay
-    // overpainted) — this assertion fails on that order. Poll: the first frames
-    // may render before getDrawOrder is populated.
-    await expect.poll(drawOrder, { timeout: 5_000 }).toEqual(['terrain', 'pheromone', 'entities']);
-
-    // Toggle the overlay OFF ('p'): pheromone drops out of the draw order.
-    await page.keyboard.press('p');
+    // Overlay OFF (the #378 default, no stored preference): no pheromone layer.
+    // Poll: the first frames may render before getDrawOrder is populated.
     await expect.poll(drawOrder, { timeout: 5_000 }).toEqual(['terrain', 'entities']);
 
-    // Toggle back ON: the overlay returns, still correctly ordered between layers.
+    // Toggle the overlay ON ('p'): pheromone must be drawn AFTER terrain and
+    // BEFORE entities. The pre-fix order was [pheromone, terrain, entities]
+    // (overlay overpainted) — this assertion fails on that order.
     await page.keyboard.press('p');
+    await expect.poll(drawOrder, { timeout: 5_000 }).toEqual(['terrain', 'pheromone', 'entities']);
+
+    // Toggle back OFF: pheromone drops out of the draw order again.
+    await page.keyboard.press('p');
+    await expect.poll(drawOrder, { timeout: 5_000 }).toEqual(['terrain', 'entities']);
+  });
+
+  test('#378 — a stored "on" preference still wins over the off default', async ({ page }) => {
+    await page.goto('/');
+    await page.locator('canvas').first().waitFor({ state: 'attached' });
+    await page.evaluate(() => {
+      localStorage.removeItem('subterrans:save:v3');
+      localStorage.setItem(
+        'subterrans:settings:v1',
+        JSON.stringify({ version: 1, settings: { pheromoneOverlay: true } }),
+      );
+    });
+    await page.reload();
+    await page.locator('canvas').first().waitFor({ state: 'attached' });
+    await settleToPlaying(page);
+    const drawOrder = () =>
+      page.evaluate(
+        () =>
+          (
+            window as { __phase9_test?: { getDrawOrder(): string[] } }
+          ).__phase9_test?.getDrawOrder() ?? [],
+      );
     await expect.poll(drawOrder, { timeout: 5_000 }).toEqual(['terrain', 'pheromone', 'entities']);
   });
 });

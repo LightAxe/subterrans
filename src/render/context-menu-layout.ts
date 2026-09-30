@@ -26,6 +26,7 @@ import { hasCompletedChamber } from '../sim/colony/colony-system.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
 import type { WorldState } from '../sim/types.js';
 import type { GfxLike } from './draw-surface.js';
+import { lerpColor } from './sprites.js';
 
 export const CONTEXT_MENU = {
   WIDTH: 120,
@@ -178,6 +179,20 @@ export function itemLabelPos(
 }
 
 /**
+ * #378 — how far a hovered row's stripe is lit toward white (0–1): enough to read
+ * as "this one" on every stripe colour, dark enough that the white label stays
+ * legible on it.
+ */
+export const CONTEXT_MENU_HOVER_LIGHTEN = 0.3;
+
+/** #378 — a row's stripe colour: its own, or lit toward white while hovered. */
+export function contextMenuRowColor(row: ContextMenuRow, hovered: boolean): number {
+  return hovered
+    ? lerpColor(row.stripeColor, 0xffffff, CONTEXT_MENU_HOVER_LIGHTEN)
+    : row.stripeColor;
+}
+
+/**
  * Draw the menu background + stripes for the given filtered item list. Pure
  * Graphics calls, compatible with MockGfx in tests. Does NOT draw text —
  * UIScene renders labels via Phaser.GameObjects.Text children since GfxLike
@@ -190,13 +205,15 @@ export function drawContextMenuGeometry(
   items: readonly ContextMenuRow[] = CONTEXT_MENU_ITEMS,
   /** #352 — row index to outline (the raid menu's current order), or -1. */
   selected = -1,
+  /** #378 — row index under the mouse, drawn lit (contextMenuRowColor), or -1. */
+  hovered = -1,
 ): void {
   const h = contextMenuHeight(items);
   gfx.fillStyle(0x222222, 0.95);
   gfx.fillRect(anchorX, anchorY, CONTEXT_MENU.WIDTH, h);
   for (let i = 0; i < items.length; i++) {
     const item = items[i]!;
-    gfx.fillStyle(item.stripeColor, 1);
+    gfx.fillStyle(contextMenuRowColor(item, i === hovered), 1);
     gfx.fillRect(
       anchorX + 2,
       anchorY + i * CONTEXT_MENU.ITEM_HEIGHT + 2,

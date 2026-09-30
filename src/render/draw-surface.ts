@@ -58,7 +58,7 @@ import {
   ANT_DOT_SCREEN_PX,
 } from './camera-adapter.js';
 import { SPIDER_SPRITE_HEIGHT, SPIDER_SPRITE_WIDTH } from './ant-sprite-layer.js';
-import { activeRaidOrder, drawRaidOrderBadge } from './raid-order-view.js';
+import { activeRaidOrder, drawRaidOrderBadge, raidBadgeWorldRect } from './raid-order-view.js';
 import { SPIDER_HUNGER_THRESHOLD_TICKS, SPIDER_HP_FULL } from '../sim/constants.js';
 import {
   pileAmountFp,
@@ -621,10 +621,21 @@ export function drawSurfaceEntities(
       gfx.fillRect(wx + 7, wy + 1, 2, TILE_SIZE_PX - 2);
       // Center square accent.
       gfx.fillRect(wx + 6, wy + 6, 4, 4);
-      // #352 — on an enemy entrance (V60) a badge above the tile names the raid
-      // order: L(oot) / D(eny) / S(poil) / B(lockade) / A(ssault).
+    }
+    // #352 — on an enemy entrance (V60) a badge above the tile names the raid
+    // order: L(oot) / D(eny) / S(poil) / B(lockade) / A(ssault). #378: sized in
+    // screen px, so it is drawn for this camera's zoom — and culled by its own box,
+    // which zoomed out reaches past the tile's cull margin (40 world px above the
+    // tile at 0.5x), so part of it can be on screen while the tile is not.
+    const badge = raidBadgeWorldRect(wx, wy, cam.zoom);
+    if (
+      badge.x < rect.right &&
+      badge.x + badge.w > rect.left &&
+      badge.y < rect.bottom &&
+      badge.y + badge.h > rect.top
+    ) {
       const order = activeRaidOrder(curr, PLAYER_COLONY_ID);
-      if (order !== null) drawRaidOrderBadge(gfx, wx, wy, order);
+      if (order !== null) drawRaidOrderBadge(gfx, wx, wy, order, cam.zoom);
     }
   }
 

@@ -38,7 +38,7 @@ describe('loadSettings', () => {
 
   it('round-trips a saved Settings object losslessly', () => {
     const next: Settings = mk({
-      pheromoneOverlay: false,
+      pheromoneOverlay: true,
       hintStripVisible: false,
       firstUseHints: { pan: true, zoom: true },
     });
@@ -52,7 +52,7 @@ describe('loadSettings', () => {
   });
 
   it('falls back to DEFAULT_SETTINGS when envelope is missing version', () => {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ settings: { pheromoneOverlay: false } }));
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ settings: { pheromoneOverlay: true } }));
     expect(loadSettings()).toEqual(DEFAULT_SETTINGS);
   });
 
@@ -61,7 +61,7 @@ describe('loadSettings', () => {
       SETTINGS_KEY,
       JSON.stringify({
         version: SETTINGS_VERSION + 1,
-        settings: { pheromoneOverlay: false },
+        settings: { pheromoneOverlay: true },
       }),
     );
     expect(loadSettings()).toEqual(DEFAULT_SETTINGS);
@@ -73,9 +73,9 @@ describe('loadSettings', () => {
     // without invalidating the file (Codex: backward-compatible add).
     localStorage.setItem(
       SETTINGS_KEY,
-      JSON.stringify({ version: SETTINGS_VERSION, settings: { pheromoneOverlay: false } }),
+      JSON.stringify({ version: SETTINGS_VERSION, settings: { pheromoneOverlay: true } }),
     );
-    expect(loadSettings()).toEqual(mk({ pheromoneOverlay: false }));
+    expect(loadSettings()).toEqual(mk({ pheromoneOverlay: true }));
   });
 
   it('replaces a wrong-typed field with its default but keeps valid siblings intact', () => {
@@ -122,16 +122,16 @@ describe('loadSettings', () => {
       SETTINGS_KEY,
       JSON.stringify({
         version: SETTINGS_VERSION,
-        settings: { pheromoneOverlay: false, futureKey: 'whatever' },
+        settings: { pheromoneOverlay: true, futureKey: 'whatever' },
       }),
     );
-    expect(loadSettings()).toEqual(mk({ pheromoneOverlay: false }));
+    expect(loadSettings()).toEqual(mk({ pheromoneOverlay: true }));
   });
 });
 
 describe('saveSettings', () => {
   it('writes a versioned envelope under SETTINGS_KEY', () => {
-    const s = mk({ pheromoneOverlay: false, firstUseHints: { pan: true } });
+    const s = mk({ pheromoneOverlay: true, firstUseHints: { pan: true } });
     saveSettings(s);
     const raw = localStorage.getItem(SETTINGS_KEY);
     expect(raw).not.toBeNull();
@@ -169,7 +169,7 @@ describe('surveyEmail (#303)', () => {
       JSON.stringify({
         version: SETTINGS_VERSION,
         settings: {
-          pheromoneOverlay: false,
+          pheromoneOverlay: true,
           hintStripVisible: false,
           firstUseHints: { pan: true },
         },
@@ -177,7 +177,7 @@ describe('surveyEmail (#303)', () => {
     );
     const loaded = loadSettings();
     expect(loaded.surveyEmail).toBe('');
-    expect(loaded.pheromoneOverlay).toBe(false);
+    expect(loaded.pheromoneOverlay).toBe(true);
     expect(loaded.hintStripVisible).toBe(false);
     expect(loaded.firstUseHints).toEqual({ pan: true });
   });
@@ -227,7 +227,7 @@ describe('difficulty (#304)', () => {
       JSON.stringify({
         version: SETTINGS_VERSION,
         settings: {
-          pheromoneOverlay: false,
+          pheromoneOverlay: true,
           hintStripVisible: false,
           firstUseHints: { a: true },
           surveyEmail: 'player@example.com',
@@ -236,7 +236,7 @@ describe('difficulty (#304)', () => {
     );
     const loaded = loadSettings();
     expect(loaded.difficulty).toBe('Normal');
-    expect(loaded.pheromoneOverlay).toBe(false);
+    expect(loaded.pheromoneOverlay).toBe(true);
     expect(loaded.hintStripVisible).toBe(false);
     expect(loaded.firstUseHints).toEqual({ a: true });
     expect(loaded.surveyEmail).toBe('player@example.com');
@@ -248,12 +248,45 @@ describe('difficulty (#304)', () => {
         SETTINGS_KEY,
         JSON.stringify({
           version: SETTINGS_VERSION,
-          settings: { difficulty: bad, pheromoneOverlay: false },
+          settings: { difficulty: bad, pheromoneOverlay: true },
         }),
       );
       const loaded = loadSettings();
       expect(loaded.difficulty, JSON.stringify(bad)).toBe('Normal');
-      expect(loaded.pheromoneOverlay).toBe(false);
+      expect(loaded.pheromoneOverlay).toBe(true);
     }
+  });
+});
+
+describe('pheromone overlay default (#378)', () => {
+  it('is off by default: a fresh profile starts with the overlay hidden', () => {
+    expect(DEFAULT_SETTINGS.pheromoneOverlay).toBe(false);
+    expect(loadSettings().pheromoneOverlay).toBe(false);
+  });
+
+  it('a stored preference still wins over the default — on stays on, off stays off', () => {
+    saveSettings(mk({ pheromoneOverlay: true }));
+    expect(loadSettings().pheromoneOverlay).toBe(true);
+    saveSettings(mk({ pheromoneOverlay: false }));
+    expect(loadSettings().pheromoneOverlay).toBe(false);
+    // A hand-written or older blob that turned it on, with other keys missing.
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({ version: SETTINGS_VERSION, settings: { pheromoneOverlay: true } }),
+    );
+    expect(loadSettings().pheromoneOverlay).toBe(true);
+  });
+
+  it('a blob with no pheromone key (or a corrupt one) reads as the default: off', () => {
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({ version: SETTINGS_VERSION, settings: { hintStripVisible: false } }),
+    );
+    expect(loadSettings().pheromoneOverlay).toBe(false);
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({ version: SETTINGS_VERSION, settings: { pheromoneOverlay: 'on' } }),
+    );
+    expect(loadSettings().pheromoneOverlay).toBe(false);
   });
 });

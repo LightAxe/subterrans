@@ -27,7 +27,7 @@ import type { WorldState, SpiderState } from '../sim/types.js';
 import { createWorldState } from '../sim/types.js';
 import { sgSet, SurfaceTileState } from '../sim/terrain.js';
 import { initAnt } from '../sim/ant/ant-store.js';
-import { AntTask, FightingSubState, ForagingSubState } from '../sim/enums.js';
+import { AntTask, FightingSubState, ForagingSubState, RaidType } from '../sim/enums.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import {
   PLAYER_COLONY_ID,
@@ -51,7 +51,8 @@ import {
   COLOR_NEUTRAL_CONTESTED_GLOW,
 } from './sprites.js';
 import { COLOR_BARREN_EARTH } from './terrain-atlas.js';
-import { makeCameraView, type CameraView } from './camera-adapter.js';
+import { makeCameraView, visibleWorldRect, type CameraView } from './camera-adapter.js';
+import { RAID_BADGE_SCREEN_PX } from './raid-order-view.js';
 
 // ---------------------------------------------------------------------------
 // MockGfx — spy recorder implementing GfxLike
@@ -1174,6 +1175,100 @@ describe('drawSurfaceEntities — rally-point marker', () => {
     const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
     expect(rallyRects(gfx).length).toBe(0);
+  });
+
+  // #378 — the raid-order badge over a rally on an enemy entrance is sized in screen
+  // px: drawSurfaceEntities must hand it the camera's zoom.
+  it('#378: the raid-order badge on an enemy entrance is the same size on screen at every zoom', () => {
+    addPlayerColony({ tileX: 5, tileY: 5 });
+    world.colonies[PLAYER_COLONY_ID]!.raidType = RaidType.Blockade;
+    const enemyId = PLAYER_COLONY_ID + 1;
+    const enemy = createColonyRecord(enemyId, 888);
+    enemy.entrances = [{ entranceId: 1, surfaceTileX: 5, surfaceTileY: 5, isOpen: true }];
+    enemy.rallyPoint = null;
+    enemy.digFlowFieldDirty = false;
+    enemy.priorityFoodPileId = null;
+    world.colonies[enemyId] = enemy;
+    for (const zoom of [0.5, 1, 2]) {
+      const g = new MockGfx();
+      const cam = makeCamera(5, 5);
+      cam.zoom = zoom;
+      cam.targetZoom = zoom;
+      drawSurfaceEntities(g, sprites, world, world, 0, cam);
+      // The badge's dark square is the fillRect right after its 0x101010 fill.
+      const i = g.calls.findIndex((c) => c.method === 'fillStyle' && c.args[0] === 0x101010);
+      expect(i).toBeGreaterThanOrEqual(0);
+      const square = g.calls[i + 1]!;
+      expect(square.method).toBe('fillRect');
+      expect((square.args[2] as number) * zoom).toBeCloseTo(RAID_BADGE_SCREEN_PX, 9);
+      expect((square.args[3] as number) * zoom).toBeCloseTo(RAID_BADGE_SCREEN_PX, 9);
+    }
+  });
+
+  // #378 review (CodeRabbit) — the badge is culled by its own box, not the tile's:
+  // zoomed out it reaches past the tile's 16-world-px cull margin.
+  describe('#378: the raid-order badge is culled by its own box', () => {
+    /** A player rally on an enemy entrance at (tileX, tileY), Blockade in force. */
+    function rallyOnEnemyEntrance(tileX: number, tileY: number): void {
+      addPlayerColony({ tileX, tileY });
+      world.colonies[PLAYER_COLONY_ID]!.raidType = RaidType.Blockade;
+      const enemyId = PLAYER_COLONY_ID + 1;
+      const enemy = createColonyRecord(enemyId, 888);
+      enemy.entrances = [{ entranceId: 1, surfaceTileX: tileX, surfaceTileY: tileY, isOpen: true }];
+      enemy.rallyPoint = null;
+      enemy.digFlowFieldDirty = false;
+      enemy.priorityFoodPileId = null;
+      world.colonies[enemyId] = enemy;
+    }
+    /** The badge's dark square, if drawn. */
+    function badgeSquare(g: MockGfx): GfxCall | undefined {
+      const i = g.calls.findIndex((c) => c.method === 'fillStyle' && c.args[0] === 0x101010);
+      return i < 0 ? undefined : g.calls[i + 1];
+    }
+    // Camera centred on tile (50, 50) at 0.5x: the view is 1184 world px tall, so
+    // its bottom edge is at 50 × 16 + 592 = 1392.
+    function halfZoomCam(): CameraView {
+      const cam = makeCamera(50, 50);
+      cam.zoom = 0.5;
+      cam.targetZoom = 0.5;
+      return cam;
+    }
+
+    it('a rally tile 32 world px below the view: no crosshair, but the badge (reaching 40 px above it) is drawn', () => {
+      const cam = halfZoomCam();
+      const bottom = visibleWorldRect(cam).bottom;
+      const tileY = (bottom + 32) / TILE_SIZE_PX; // 89: wy = bottom + 32
+      expect(Number.isInteger(tileY)).toBe(true);
+      rallyOnEnemyEntrance(50, tileY);
+      drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
+      expect(rallyRects(gfx)).toHaveLength(0); // the tile is past its cull margin
+      const sq = badgeSquare(gfx);
+      expect(sq).toBeDefined();
+      // Its top edge is 8 world px inside the view: part of it is on screen.
+      expect(bottom - (sq!.args[1] as number)).toBeCloseTo(8, 9);
+    });
+
+    it('a rally tile far enough below that the whole badge is off screen draws nothing', () => {
+      const cam = halfZoomCam();
+      const bottom = visibleWorldRect(cam).bottom;
+      rallyOnEnemyEntrance(50, (bottom + 48) / TILE_SIZE_PX); // badge top = bottom + 8
+      drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
+      expect(rallyRects(gfx)).toHaveLength(0);
+      expect(badgeSquare(gfx)).toBeUndefined();
+    });
+
+    it('a rally tile just past the left edge: the badge (it overhangs the tile) is still drawn', () => {
+      // At 0.5x the 38-px badge spans wx − 12 … wx + 26: a tile whose left edge is
+      // 20 px left of the view (outside the crosshair's 16-px margin) still shows
+      // it. The view's left edge at 180 (centre 980, half-width 800) puts tile 10
+      // (wx 160) there.
+      const cam = makeCameraView(980, 50 * TILE_SIZE_PX, 0.5);
+      expect(visibleWorldRect(cam).left).toBe(10 * TILE_SIZE_PX + 20);
+      rallyOnEnemyEntrance(10, 50);
+      drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
+      expect(rallyRects(gfx)).toHaveLength(0);
+      expect(badgeSquare(gfx)).toBeDefined();
+    });
   });
 
   // Phase 09.1-05 Task 1: structural regression guard. The fight-target marker

@@ -5,8 +5,11 @@
 // pure and Phaser-free so it unit-tests without a canvas:
 //   - the raid menu's rows (label + stripe colour), in RaidType order, and its
 //     hit test (the geometry is the chamber menu's, context-menu-layout.ts);
-//   - the caption that names the order when the player gives it;
-//   - the rally-marker badge: a 5×5 pixel letter above the rally tile.
+//   - (#378) the menu's hovered row and the one-line description shown with it;
+//   - the caption that names the order when the player gives it (#378: a newer
+//     one replaces an older one still up or waiting, RAID_ORDER_CAPTION_SUPERSEDE_KEY);
+//   - the rally-marker badge: a 5×5 pixel letter above the rally tile, sized in
+//     screen pixels (#378).
 // It reads WorldState; it never writes it (the choice goes out as a SetRallyPoint
 // command through the input layer).
 
@@ -99,6 +102,15 @@ export function raidOrderCaption(type: RaidType): string {
   return `Raiding: ${o.label}. ${o.blurb}`;
 }
 
+/**
+ * #378 — the caption-queue supersede key of the order caption (caption-queue.ts,
+ * CaptionRequest.supersedeKey): each order caption is the newest word on the one
+ * order in force, so a newer one replaces an older one that is still on screen
+ * or waiting, rather than queueing behind it ("Raiding: Blockade" lingering after
+ * the player picked Assault).
+ */
+export const RAID_ORDER_CAPTION_SUPERSEDE_KEY = 'raidOrder';
+
 export { worldHasRaidOrders };
 
 /**
@@ -167,39 +179,156 @@ export function raidMenuItemAt(
   return option ? option.raidType : null;
 }
 
-/** Badge side (px): a 1-px dark border round the 5 × 2 px letter. */
-export const RAID_BADGE_SIZE_PX = 12;
-/** Side of one lit cell of the badge letter (px). */
-const RAID_BADGE_CELL_PX = 2;
+/**
+ * #378 — the raid menu row the pointer hovers, or null. `pointing` is true only
+ * for a mouse that has moved since the menu opened. The menu opens with its
+ * top-left corner at the press, so a pointer that has not moved rests on its
+ * first row (or, on a menu moved up clear of the HUD strip, on whatever row lies
+ * there) without having chosen it: a touch pointer rests where the long-press
+ * finger lifted, a mouse where the right-click was. Taking either for a hover
+ * would light that row, and describe it, every time the menu opens.
+ */
+export function raidMenuHoveredOrder(
+  px: number,
+  py: number,
+  anchorX: number,
+  anchorY: number,
+  pointing: boolean,
+): RaidType | null {
+  return pointing ? raidMenuItemAt(px, py, anchorX, anchorY) : null;
+}
+
+/**
+ * #378 — the one-line explanation shown with the open raid menu: the hovered
+ * order's, else (no hover: touch, a mouse not yet moved, or the pointer off the
+ * menu) that of the order in force on this entrance, the outlined row; else none. "Deny: <blurb>"
+ * — the blurb is the order caption's, so the menu and the "Raiding: …" caption
+ * always say the same thing.
+ */
+export function raidMenuDescription(
+  hovered: RaidType | null,
+  inForce: RaidType | null,
+): string | null {
+  const type = hovered ?? inForce;
+  if (type === null) return null;
+  const o = raidOrderOption(type);
+  return `${o.label}: ${o.blurb}`;
+}
+
+/** Gap (px) between the raid menu and its description line. */
+const RAID_MENU_DESCRIPTION_GAP_PX = 2;
+
+/**
+ * #378 — the top-left of the raid menu's description line, `w` × `h` px: just
+ * below the menu (`menuH` tall, top-left at anchorX/anchorY) and left-aligned
+ * with it; just above the menu instead when below would run into the bottom HUD
+ * strip (`maxBottom`, where the menu itself is kept above); moved left as far as
+ * needed to end inside `maxRight`, never past 0. If it fits neither below nor
+ * above (impossible in the 800×592 layout: the menu is 120 px tall, the strip
+ * ~508 px down), it is pinned at the top and may overlap the menu.
+ */
+export function raidMenuDescriptionPos(
+  anchorX: number,
+  anchorY: number,
+  menuH: number,
+  w: number,
+  h: number,
+  maxRight: number,
+  maxBottom: number,
+): { x: number; y: number } {
+  const x = Math.max(0, Math.min(anchorX, maxRight - w));
+  const below = anchorY + menuH + RAID_MENU_DESCRIPTION_GAP_PX;
+  const y =
+    below + h <= maxBottom ? below : Math.max(0, anchorY - RAID_MENU_DESCRIPTION_GAP_PX - h);
+  return { x, y };
+}
+
+// #378 — the rally badge is sized in SCREEN pixels, not world pixels. It is a label
+// on the map, like the strategic-zoom ant dots (ANT_DOT_SCREEN_PX): it should read
+// the same at every zoom. The #352 badge was 12 world px — 12 px on screen at 1x,
+// hard to read; 6 px (a speck) at 0.5x; 24 px at 2x. It is now 19 px on screen at
+// every zoom: half as big again at 1x, still readable zoomed out, and smaller than
+// before at 2x, where the tile under it is 32 px: zooming in never makes it outgrow the tile.
+// A zoom-compensated world size (bigger world px as you zoom out, clamped) would
+// need a second tuning curve to land at the same place; a fixed screen size is the
+// simpler rule and matches how the dot LOD already works.
+
+/** Side of one lit cell of the badge letter, on screen (px). */
+export const RAID_BADGE_CELL_SCREEN_PX = 3;
+/** The dark border round the 5-cell letter, on screen (px). */
+const RAID_BADGE_BORDER_SCREEN_PX = 2;
+/** Badge side on screen (px), at every zoom: the 5 × 3 px letter in its 2-px border. */
+export const RAID_BADGE_SCREEN_PX = 5 * RAID_BADGE_CELL_SCREEN_PX + 2 * RAID_BADGE_BORDER_SCREEN_PX;
+/** Gap between the badge and the top of the rally tile, on screen (px). */
+const RAID_BADGE_GAP_SCREEN_PX = 1;
+
+/** World px per screen px at camera zoom `zoom` (a non-positive zoom reads as 1). */
+function worldPxPerScreenPx(zoom: number): number {
+  return zoom > 0 ? 1 / zoom : 1;
+}
+
+/** #378 — the badge's side in world px at camera zoom `zoom` (RAID_BADGE_SCREEN_PX on screen). */
+export function raidBadgeWorldPx(zoom: number): number {
+  return RAID_BADGE_SCREEN_PX * worldPxPerScreenPx(zoom);
+}
+
+/** #378 — how far (world px) a second badge is lifted to sit just above the first. */
+export function raidBadgeStackLiftWorldPx(zoom: number): number {
+  return (RAID_BADGE_SCREEN_PX + RAID_BADGE_GAP_SCREEN_PX) * worldPxPerScreenPx(zoom);
+}
+
+/**
+ * #378 — the world-px box the badge for the rally tile at (wx, wy) covers at
+ * camera zoom `zoom`: RAID_BADGE_SCREEN_PX on screen, centred over the tile to a
+ * whole screen pixel (the odd 19-px badge over the even 16-px tile at 1x would
+ * otherwise sit half a pixel off the grid, its letter cells blurring across pixel
+ * edges at exactly the zoom it is for), 1 screen px above it. Zoomed out it reaches
+ * well past the tile (40 world px above it at 0.5x), so it is culled by this box,
+ * not by the tile's.
+ */
+export function raidBadgeWorldRect(
+  wx: number,
+  wy: number,
+  zoom: number,
+): { x: number; y: number; w: number; h: number } {
+  const k = worldPxPerScreenPx(zoom);
+  const side = RAID_BADGE_SCREEN_PX * k;
+  return {
+    x: wx + Math.floor((TILE_SIZE_PX / k - RAID_BADGE_SCREEN_PX) / 2) * k,
+    y: wy - side - RAID_BADGE_GAP_SCREEN_PX * k,
+    w: side,
+    h: side,
+  };
+}
 
 /**
  * Draw the raid-order badge for the rally tile whose top-left world pixel is
- * (wx, wy): a dark square just above the tile holding the order's letter.
+ * (wx, wy): a dark square centred just above the tile holding the order's
+ * letter, RAID_BADGE_SCREEN_PX on screen at camera zoom `zoom` (raidBadgeWorldRect).
  */
 export function drawRaidOrderBadge(
   gfx: GfxLike,
   wx: number,
   wy: number,
   type: RaidType,
+  /** The camera zoom the badge is drawn under (it is sized in screen px). */
+  zoom: number,
   /** 1 for the committed order; the ghost alpha for a queued one (paused). */
   alpha = 1,
 ): void {
   const o = raidOrderOption(type);
-  const bx = wx + ((TILE_SIZE_PX - RAID_BADGE_SIZE_PX) >> 1);
-  const by = wy - RAID_BADGE_SIZE_PX - 1;
+  const k = worldPxPerScreenPx(zoom);
+  const cell = RAID_BADGE_CELL_SCREEN_PX * k;
+  const inset = RAID_BADGE_BORDER_SCREEN_PX * k;
+  const { x: bx, y: by, w: side } = raidBadgeWorldRect(wx, wy, zoom);
   gfx.fillStyle(0x101010, 0.9 * alpha);
-  gfx.fillRect(bx, by, RAID_BADGE_SIZE_PX, RAID_BADGE_SIZE_PX);
+  gfx.fillRect(bx, by, side, side);
   gfx.fillStyle(o.badgeColor, alpha);
   for (let row = 0; row < o.glyph.length; row++) {
     const line = o.glyph[row]!;
     for (let col = 0; col < line.length; col++) {
       if (line[col] !== '#') continue;
-      gfx.fillRect(
-        bx + 1 + col * RAID_BADGE_CELL_PX,
-        by + 1 + row * RAID_BADGE_CELL_PX,
-        RAID_BADGE_CELL_PX,
-        RAID_BADGE_CELL_PX,
-      );
+      gfx.fillRect(bx + inset + col * cell, by + inset + row * cell, cell, cell);
     }
   }
 }

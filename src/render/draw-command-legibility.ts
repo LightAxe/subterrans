@@ -13,7 +13,7 @@ import { chamberSeed, chamberPerimeterPoints } from './chamber-shape.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
 import type { GfxLike } from './draw-surface.js';
 import type { GhostDelta } from './command-ghosts.js';
-import { RAID_BADGE_SIZE_PX, drawRaidOrderBadge } from './raid-order-view.js';
+import { drawRaidOrderBadge, raidBadgeStackLiftWorldPx } from './raid-order-view.js';
 import type { FeedforwardOutcome } from './command-feedforward.js';
 
 // --- UAT-tunable visual constants ---------------------------------------------
@@ -86,6 +86,8 @@ export function drawGhostDelta(
   delta: GhostDelta,
   view: 'surface' | 'underground',
   activeUndergroundColonyId: number,
+  /** #378 — the active camera's zoom: the queued raid-order badge is sized in screen px. */
+  zoom = 1,
 ): void {
   if (view === 'underground') {
     if (activeUndergroundColonyId !== PLAYER_COLONY_ID) return; // enemy-view inert
@@ -165,8 +167,8 @@ export function drawGhostDelta(
     if (delta.pendingRaidOrder !== null) {
       const t = TILE_SIZE_PX;
       const o = delta.pendingRaidOrder;
-      const lift = o.overCommitted ? RAID_BADGE_SIZE_PX + 1 : 0;
-      drawRaidOrderBadge(gfx, o.tileX * t, o.tileY * t - lift, o.raidType, GHOST_ALPHA);
+      const lift = o.overCommitted ? raidBadgeStackLiftWorldPx(zoom) : 0;
+      drawRaidOrderBadge(gfx, o.tileX * t, o.tileY * t - lift, o.raidType, zoom, GHOST_ALPHA);
     }
     // A queued ClearRallyPoint: the committed white crosshair (draw-surface.ts) still sits
     // on this tile while paused, so tint a removal crosshair over it as the "pending removal"
