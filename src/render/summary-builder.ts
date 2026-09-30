@@ -152,6 +152,8 @@ export function buildOutcomeAttribution(
     if (ev.type === 'round_end') {
       const { reason } = ev.payload;
       if (reason === 'TimeoutTiebreak') {
+        // Worlds before V67 only: from V67 (#376) the sim never emits a
+        // TimeoutTiebreak, so a new game never shows this copy.
         const { playerWorkerCount, aiWorkerCount } = ev.payload;
         let narrative: string;
         if (playerWorkerCount > aiWorkerCount) {
@@ -323,6 +325,12 @@ export function buildPlaytraceSummary(
       droppedStructural,
     },
     difficulty: world.difficulty,
+    // 'full_round' says the buffer started at tick 0, not that it holds every event.
+    // In a full_round with droppedCombatKill > 0 only, it holds every other event
+    // plus the latest kills; with droppedStructural > 0, the terminal events plus the
+    // latest non-kill events and no kills from then on (#388 — before it, the first
+    // non-kill events). ('since_load': the counters came back with the save, the
+    // events did not.) eventsStartTick moves up as old events are evicted.
     eventsCoverage: resumedFromSave ? 'since_load' : totalEmitted > 0 ? 'full_round' : 'unknown',
     eventsStartTick: events.length > 0 ? (events[0]?.tick ?? null) : null,
   };

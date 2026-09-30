@@ -2008,9 +2008,10 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   }
   // #290 PR 2 — the tick domain is int32: tick-valued ant columns
   // (`lastMealTick`, `fleeShelterUntilTick`) are Int32Arrays. 2^31 ticks is
-  // ~3.4 years of play at 20 Hz, and a two-queen match ends at
-  // MATCH_TIMEOUT_TICKS (24 000), so no real world reaches it; the bound keeps a
-  // tampered save from loading into a world whose tick columns would wrap.
+  // ~3.4 years of play at 20 Hz. A two-queen match has no time limit from V67
+  // (#376; before, it ended at MATCH_TIMEOUT_TICKS, 24 000), but no real world
+  // runs anywhere near that long; the bound keeps a tampered save from loading
+  // into a world whose tick columns would wrap.
   // rngState — same hardening for symmetry. Rng's `state | 0` would coerce
   // NaN/strings to 0 on first use, but boundary validation surfaces tampering
   // explicitly instead of silently snapping.

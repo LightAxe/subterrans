@@ -4,10 +4,13 @@
 // `includeSnapshot` defaulted to false until #295 flipped it (2026-09-20), so
 // playtest reports arrived with a seed and a sentence. The open question that
 // blocked the flip was size: the one snapshot we had was 7 KB gzipped for a
-// 1,196-tick round, while a real round can run to the 24,000-tick match timeout,
+// 1,196-tick round, while a real round could run to the 24,000-tick match timeout,
 // and both `antTrace` and `inputLog` grow with duration. This harness produced
 // the numbers the decision was made on; keep it runnable so a future change to
-// the snapshot shape can be re-measured the same way.
+// the snapshot shape can be re-measured the same way. (From simVersion V67, #376,
+// a round has no time limit at all: pass later --checkpoints to measure a longer
+// one. submitPlaytrace's downgrade chain keeps any round under the cap by dropping
+// replay data, down to survey-only.)
 //
 // This harness answers that by running a real matchup headlessly — by default
 // the same `runAIController(world, ENEMY_COLONY_ID)`-against-a-passive-player
@@ -29,7 +32,7 @@
 // It also reports the drain tick of every sim-origin self-emitted command,
 // which is the input #296's regression test needed to pick a scenario.
 //
-// NOT wired into `npm run verify` — a 24,000-tick match takes minutes. Run it
+// NOT wired into `npm run verify` — a 24,000-tick run takes minutes. Run it
 // by hand when the size question comes up again:
 //
 //   npm run measure:playtrace-size
@@ -68,8 +71,7 @@ register(
 
 const { createScenario } = await import('../src/sim/scenario.js');
 const { tick } = await import('../src/sim/tick.js');
-const { PLAYER_COLONY_ID, ENEMY_COLONY_ID, MATCH_TIMEOUT_TICKS } =
-  await import('../src/sim/constants.js');
+const { PLAYER_COLONY_ID, ENEMY_COLONY_ID } = await import('../src/sim/constants.js');
 const { runAIController } = await import('../src/render/ai-controller.js');
 const { buildDebugSnapshot } = await import('../src/platform/debug-snapshot.js');
 const { buildPlaytraceSummary } = await import('../src/render/summary-builder.js');
@@ -125,7 +127,9 @@ const DIFFICULTY_ARG = parseStrArg('difficulty', 'Normal');
 // EVERY token must be a positive integer tick. Dropping the bad ones (the old
 // `.filter`) turned `--checkpoints=6000,abc` into a silent single-checkpoint
 // run, and `--checkpoints=abc` into the default three.
-const CHECKPOINT_TOKENS = parseStrArg('checkpoints', `6000,12000,${MATCH_TIMEOUT_TICKS}`)
+// The default last checkpoint, 24 000, was the match cap before V67 (#376); it is
+// kept so new measurements stay comparable with the ones the #295 decision used.
+const CHECKPOINT_TOKENS = parseStrArg('checkpoints', '6000,12000,24000')
   .split(',')
   .map((tok) => tok.trim());
 const CHECKPOINTS = CHECKPOINT_TOKENS.map((tok) => {
