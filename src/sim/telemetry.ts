@@ -6,16 +6,42 @@
 // instead it calls narrow sim helpers (e.g. transitionAIState in S2)
 // that perform both the state mutation and the event emission atomically.
 //
-// Cap policy (D-34):
+// Cap policy (D-34; #388):
 //   - Hard cap: WorldState.events never exceeds PLAYTRACE_EVENT_CAP_PER_ROUND.
-//   - combat_kill is the only evictable event type (lowest priority).
-//   - New structural event over cap: evict oldest combat_kill, append new.
-//   - New combat_kill over cap: evict oldest combat_kill, append new.
-//   - Over cap with no combat_kill to evict: drop and increment
-//     droppedStructuralCount. Expected to stay 0 in a 7-minute round; from
-//     V67 (#376) a round has no time limit, and one that runs for hours can
-//     fill the buffer with structural events, after which new ones (queen_death
-//     included) are dropped.
+//   - New event over cap: evict the oldest combat_kill (lowest priority), append
+//     the new one, increment droppedCombatKillCount.
+//   - Over cap with no combat_kill to evict: increment droppedStructuralCount —
+//     one event is lost; it counts there whatever its type, as it always has, so
+//     it includes a new combat_kill dropped in this state. A new combat_kill is
+//     dropped; any other new event evicts the OLDEST non-terminal structural
+//     event and is appended. Terminal events (isTerminalEvent: queen_death and
+//     round_end, which the end screen and the playtrace's roundEndReason read) are
+//     never evicted. So in live play — at most one terminal event per colony
+//     before the game loop stops on the outcome — the event that ends a match is
+//     always recorded, and so is the latest invasion_start / spider_rampage_start
+//     the render layer warns on. Only a buffer holding nothing but terminal
+//     events drops the new one (a harness that keeps ticking past a stalemate
+//     gets a round_end every tick).
+//   The overflow was expected to stay 0 in a round of 20 minutes or less; from
+//   V67 (#376) a round has no time limit, and one that runs for hours fills the
+//   buffer with structural events.
+//
+// #388 — before it, the no-combat_kill case dropped the NEW event, so after a
+// few hours of play the queen_death that ended the match was lost (no cause or
+// narrative on the end screen, a null roundEndReason) and the invasion / rampage
+// warnings went quiet.
+// What the new rule keeps changes only which events are in the buffer: which
+// branch an emit takes depends only on the buffer's length and on whether it
+// holds a combat_kill, and the new path runs only when it holds none, keeps the
+// length, and appends only a non-combat_kill — so the length, the combat_kill
+// count and both saved counters stay exactly what the old rule gave at every emit
+// (telemetry.test.ts checks it against the old rule). world.events itself is
+// never saved (serializeWorldState skips it, so it is not in hashWorldState) and
+// nothing in src/sim or the AI controller reads it — so no simVersion gate.
+// What the buffer holds after an overflow: with only combat_kills lost, every
+// other event plus the latest kills (unchanged); once a structural event has
+// been lost, the terminal events plus the latest non-kill events, and no kills
+// from then on (before #388: the first non-kill events).
 
 import type { WorldState } from './types.js';
 import type { ColonyId } from './colony/colony-store.js';
@@ -129,9 +155,9 @@ export type SimEvent =
       };
     }
   | {
-      // combat_kill is the ONLY evictable (low-priority) event type.
-      // The cap policy preferentially drops oldest combat_kills when the
-      // buffer is full, preserving structural events.
+      // combat_kill is the lowest-priority event: at the cap the oldest one is
+      // evicted first; with none buffered the oldest non-terminal structural
+      // event is evicted instead (#388), and a new combat_kill is dropped.
       tick: number;
       type: 'combat_kill';
       payload: {
@@ -168,9 +194,27 @@ export type SimEvent =
 // Cap enforcement helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * #388 — a terminal event states how a match ended: the end screen reads the
+ * queen_death (its cause) and a round_end (a tiebreak's narrative), and the
+ * playtrace's roundEndReason is derived from them. emitEvent never evicts one.
+ */
+export function isTerminalEvent(event: SimEvent): boolean {
+  return event.type === 'queen_death' || event.type === 'round_end';
+}
+
 function findOldestCombatKillIndex(events: SimEvent[]): number {
   for (let i = 0; i < events.length; i++) {
     if (events[i]!.type === 'combat_kill') return i;
+  }
+  return -1;
+}
+
+/** Oldest event that is neither a combat_kill nor terminal; -1 if none. */
+function findOldestEvictableStructuralIndex(events: SimEvent[]): number {
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i]!;
+    if (ev.type !== 'combat_kill' && !isTerminalEvent(ev)) return i;
   }
   return -1;
 }
@@ -190,8 +234,17 @@ export function emitEvent(world: WorldState, event: SimEvent): void {
     world.events.splice(evictIdx, 1);
     world.events.push(event);
     world.droppedCombatKillCount += 1;
-  } else {
-    // No combat_kill to evict; structural overflow — hard cap honored.
-    world.droppedStructuralCount += 1;
+    return;
   }
+  // No combat_kill to evict: one event is lost (counted as structural, as it
+  // always was) — hard cap honored. #388: keep the NEW event (unless it is a
+  // combat_kill) and lose the oldest non-terminal structural one instead, so a
+  // match's terminal event and the latest warnings survive. Same counts either
+  // way (see the header).
+  world.droppedStructuralCount += 1;
+  if (event.type === 'combat_kill') return;
+  const structuralIdx = findOldestEvictableStructuralIndex(world.events);
+  if (structuralIdx < 0) return; // nothing but terminal events: drop the new one
+  world.events.splice(structuralIdx, 1);
+  world.events.push(event);
 }

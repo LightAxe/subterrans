@@ -185,6 +185,7 @@ import { canAcceptWorldHotkey, type HotkeyGamePhase } from '../input/hotkey-poli
 import { contextMenuState, hideContextMenu } from './context-menu-state.js';
 import { antActivityPanelState } from './ant-activity-panel-state.js';
 import { buildPlaytraceSummary, type GameOutcomeLabel } from './summary-builder.js';
+import { queenDeathCauseAt } from './ui-scene-logic.js';
 import { colonyFoodTotal } from '../sim/food/food-api.js';
 import {
   raidCaptionText,
@@ -1559,11 +1560,15 @@ export class GameScene extends Phaser.Scene {
     if (events.length === 0) return;
     const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9 | null;
 
-    // Use tick-based filtering rather than an array-index cursor. The event
-    // buffer evicts old combat_kills via splice when it reaches capacity, which
-    // shifts array indices and makes a length-based cursor stale. Tick-based
-    // filtering is invariant to splice position because structural events
-    // (invasion_start, spider_rampage_start, etc.) are never evicted.
+    // Use tick-based filtering rather than an array-index cursor. At capacity the
+    // event buffer evicts via splice (old combat_kills; from #388 also the oldest
+    // non-terminal structural events), which shifts array indices and makes a
+    // length-based cursor stale, and keeps the length at the cap so a length
+    // cursor would see nothing new. Tick-based filtering is invariant to splice
+    // position: eviction takes the OLDEST evictable event, and a new structural
+    // event (invasion_start, spider_rampage_start, …) is always appended (unless
+    // the buffer holds nothing but terminal events), so the ones this drain acts
+    // on reach it with ticks newer than lastProcessedEventTick.
     //
     // Safety of `ev.tick <= lastProcessedEventTick` (strict skip on boundary tick):
     // All sim ticks for a render frame complete synchronously before this method
@@ -1806,22 +1811,11 @@ export class GameScene extends Phaser.Scene {
     resetPanInputState();
     resetDragState(this.dragState);
 
-    // Extract death cause from the first queen_death event emitted this tick.
-    // Forward scan: player is added to diedThisTick first, so the player's event
-    // comes before enemy events — Defeat gives the player's cause, Victory gives
-    // the enemy's. Tick filter prevents stale events from earlier ticks matching.
-    // world.tick was incremented at step 19 (tick.ts) after checkQueenDeath (step 18),
-    // so the queen_death event carries world.tick - 1.
+    // Death cause from the first queen_death event emitted this tick (see
+    // queenDeathCauseAt). world.tick was incremented at step 19 (tick.ts) after
+    // checkQueenDeath (step 18), so the queen_death event carries world.tick - 1.
     const deathTick = (this.world?.tick ?? 1) - 1;
-    const evts = this.world?.events ?? [];
-    let cause: import('./ui-scene-logic.js').QueenDeathCause = null;
-    for (let i = 0; i < evts.length; i++) {
-      const ev = evts[i];
-      if (ev && ev.type === 'queen_death' && ev.tick === deathTick) {
-        cause = ev.payload.cause;
-        break;
-      }
-    }
+    const cause = queenDeathCauseAt(this.world?.events ?? [], deathTick);
     this.currentCause = cause;
 
     // S6: build narrative for the loss screen.

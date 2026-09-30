@@ -419,9 +419,7 @@ function entranceDanger(world: WorldState, colonyId: number): number {
  * combat loop actually fired.
  *
  * Read from the queen's hunger clock rather than the `queen_death` telemetry
- * event: the event carries no colonyId (and `world.events` is a capped buffer,
- * PLAYTRACE_EVENT_CAP_PER_ROUND, that a run of hours can fill with structural
- * events, after which later queen deaths are dropped). The clock is exact —
+ * event: the event carries no colonyId. The clock is exact —
  * `tickFoodConsumption` only kills the queen on a failed meal once ticks since
  * her last meal reach QUEEN_STARVE_AFTER_TICKS, and every successful meal resets
  * `lastMealTick` — so, read right after the death tick, a meals-until-starvation

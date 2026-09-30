@@ -3,18 +3,21 @@
 // Scope: pure functions only (no Phaser scene booting).
 // Overlay rendering and interaction (Phaser-coupled) is covered by Plan 07 Playwright.
 //
-// Helpers under test (exported from ui-scene.ts):
+// Helpers under test (exported from ui-scene-logic.ts):
 //   - formatOutcomeTitle(outcome): { text: string; color: number }
 //   - formatKillStatsSubtitle(killCount): string
 //   - formatCauseSubtitle(outcome, cause): string
+//   - queenDeathCauseAt(events, deathTick): QueenDeathCause (#388)
 
 import { describe, it, expect } from 'vitest';
 import {
   formatOutcomeTitle,
   formatKillStatsSubtitle,
   formatCauseSubtitle,
+  queenDeathCauseAt,
 } from './ui-scene-logic.js';
 import { GameOutcome } from '../sim/game-over.js';
+import type { SimEvent } from '../sim/telemetry.js';
 
 // ---------------------------------------------------------------------------
 // formatOutcomeTitle
@@ -130,5 +133,35 @@ describe('formatCauseSubtitle — MutualDestruction', () => {
 describe('formatCauseSubtitle — None', () => {
   it('returns empty string', () => {
     expect(formatCauseSubtitle(GameOutcome.None, null)).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// queenDeathCauseAt (#388 — extracted from GameScene.enterGameOver)
+// ---------------------------------------------------------------------------
+
+describe('queenDeathCauseAt', () => {
+  const death = (tick: number, cause: 'InvasionKill' | 'Starvation'): SimEvent => ({
+    tick,
+    type: 'queen_death',
+    payload: { cause, location: { x: 0, y: 0, grid: 'underground' }, aiStateAtTime: null },
+  });
+  const hunt = (tick: number): SimEvent => ({
+    tick,
+    type: 'spider_hunt_start',
+    payload: { reticleTile: { x: 0, y: 0, grid: 'surface' }, targetWorkers: 0 },
+  });
+
+  it('returns the cause of the first queen_death on the death tick', () => {
+    const events = [hunt(9), death(10, 'Starvation'), death(10, 'InvasionKill')];
+    expect(queenDeathCauseAt(events, 10)).toBe('Starvation');
+  });
+
+  it('ignores a queen_death from another tick', () => {
+    expect(queenDeathCauseAt([death(9, 'InvasionKill')], 10)).toBeNull();
+  });
+
+  it('returns null with no queen_death', () => {
+    expect(queenDeathCauseAt([hunt(10)], 10)).toBeNull();
   });
 });

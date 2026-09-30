@@ -1,18 +1,15 @@
-// ui-scene-logic.ts — Pure helpers extracted from UIScene for testability.
+// ui-scene-logic.ts — Pure helpers extracted from UIScene (and, for
+// queenDeathCauseAt, GameScene) for testability.
 //
 // These functions have no Phaser dependency and can be unit-tested under Node (Vitest).
-// UIScene imports and uses these; Plan 07 covers Phaser-coupled integration via Playwright.
+// UIScene / GameScene import and use these; Plan 07 covers Phaser-coupled integration
+// via Playwright.
 
 import { GameOutcome } from '../sim/game-over.js';
+import type { SimEvent } from '../sim/telemetry.js';
 
-// queen_death cause values from sim/telemetry.ts — duplicated here to avoid a
-// Phaser-free module importing from the sim telemetry bundle.
-export type QueenDeathCause =
-  | 'InvasionKill'
-  | 'SpiderRampage'
-  | 'Starvation'
-  | 'MutualDestruction'
-  | null;
+// queen_death cause values, from the sim/telemetry.ts event type.
+export type QueenDeathCause = Extract<SimEvent, { type: 'queen_death' }>['payload']['cause'];
 
 // ---------------------------------------------------------------------------
 // formatOutcomeTitle — maps GameOutcome to display text + color
@@ -34,6 +31,28 @@ export function formatOutcomeTitle(outcome: GameOutcome): { text: string; color:
     default:
       return { text: '', color: 0x000000 };
   }
+}
+
+// ---------------------------------------------------------------------------
+// queenDeathCauseAt — the cause the end screen names (survey line; GameOver fallback)
+// ---------------------------------------------------------------------------
+
+/**
+ * The cause of the queen death that ended the match: the first `queen_death` event
+ * emitted on `deathTick` (the tick() that returned the outcome — world.tick − 1
+ * once it has returned). checkQueenDeath adds the player's queen to the dead
+ * first, so her event comes before the enemy's: Defeat gives the player's cause,
+ * Victory the enemy's. The tick filter keeps a stale event from an earlier tick
+ * from matching. null when there is no such event — a tiebreak ended the match,
+ * the forceGameOver dev seam, or a buffer holding nothing but terminal events
+ * (before #388 also any match long enough to fill the buffer with structural
+ * events) — or when its cause is null (an unattributed kill, pre-V16 events).
+ */
+export function queenDeathCauseAt(events: readonly SimEvent[], deathTick: number): QueenDeathCause {
+  for (const ev of events) {
+    if (ev.type === 'queen_death' && ev.tick === deathTick) return ev.payload.cause;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------

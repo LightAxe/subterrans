@@ -15,6 +15,11 @@
 //   - save/load exactly at the old cap: a V67 world plays on byte-identically to
 //     the unsaved one; a V66 save still times out after loading on this build;
 //   - control: a queen death long before the old cap still ends a V67 match.
+//
+// #388 — such a long match can fill the 2000-event telemetry buffer with structural
+// events. The event that ends it must still be recorded: with the buffer full, a
+// queen death still gives the end screen its cause and narrative and the playtrace
+// its roundEndReason, and a stalemate its narrative and roundEndReason.
 import { describe, it, expect } from 'vitest';
 import { tick } from '../sim/tick.js';
 import { createScenario } from '../sim/scenario.js';
@@ -39,9 +44,13 @@ import { AntTask } from '../sim/enums.js';
 import {
   setColonyFoodForTest,
   setMealsUntilStarvationForTest,
+  setPilesForTest,
 } from '../sim/food/food-test-utils.js';
+import { emitEvent, PLAYTRACE_EVENT_CAP_PER_ROUND } from '../sim/telemetry.js';
 import { runAIController } from '../render/ai-controller.js';
-import { buildOutcomeAttribution } from '../render/summary-builder.js';
+import { buildOutcomeAttribution, buildPlaytraceSummary } from '../render/summary-builder.js';
+import { buildPlaytraceEnvelope } from '../render/playtrace-upload.js';
+import { formatCauseSubtitle, queenDeathCauseAt } from '../render/ui-scene-logic.js';
 import { hashWorldState } from './world-hash.js';
 import { deserializeWorldState, serializeWorldState } from './save.js';
 
@@ -215,5 +224,100 @@ describe('#376 V67 — a match has no time limit (whole tick)', () => {
     expect(outcome).toBe(GameOutcome.Defeat);
     const attribution = buildOutcomeAttribution(world.events, 'Defeat');
     expect(attribution.narrativeSeed).not.toMatch(TIMEOUT_COPY);
+  }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// #388 — a full telemetry buffer still records how the match ended
+// ---------------------------------------------------------------------------
+
+/** Fill the buffer to its cap with non-terminal structural events from a past tick. */
+function fillEventBuffer(world: WorldState): void {
+  while (world.events.length < PLAYTRACE_EVENT_CAP_PER_ROUND) {
+    emitEvent(world, {
+      tick: 1000,
+      type: 'spider_hunt_start',
+      payload: { reticleTile: { x: 1, y: 1, grid: 'surface' }, targetWorkers: 0 },
+    });
+  }
+}
+
+/** What the game-over screen and the playtrace upload read, built as game-scene builds them. */
+function endOfMatchView(
+  world: WorldState,
+  outcome: GameOutcome,
+): {
+  subtitle: string;
+  narrative: string | null;
+  roundEndReason: string | null;
+  droppedStructural: number;
+} {
+  const label =
+    outcome === GameOutcome.Victory
+      ? 'Victory'
+      : outcome === GameOutcome.Defeat
+        ? 'Defeat'
+        : 'MutualDestruction';
+  const cause = queenDeathCauseAt(world.events, world.tick - 1);
+  const summary = buildPlaytraceSummary(world, false, label);
+  const envelope = buildPlaytraceEnvelope(
+    {
+      endpoint: '/api/playtrace',
+      sessionId: 'test',
+      outcome,
+      quitFromPauseMenu: false,
+      includeSnapshot: false,
+      world,
+      seed: 7,
+      inputLog: [],
+      survey: { rating: 5, freeText: '', brokenFlag: false },
+      resumedFromSave: false,
+    },
+    null,
+    world.events.slice(),
+    summary,
+  );
+  return {
+    subtitle: formatCauseSubtitle(outcome, cause),
+    narrative: summary.outcomeAttribution.narrativeSeed,
+    roundEndReason: envelope.roundEndReason,
+    droppedStructural: summary.eventOverflow.droppedStructural,
+  };
+}
+
+describe('#388 — a full event buffer still records the end of the match', () => {
+  it('a queen death after the buffer filled: cause, narrative and roundEndReason survive', () => {
+    const world = worldNearOldCap(7);
+    fillEventBuffer(world);
+    while (world.tick < MATCH_TIMEOUT_TICKS + 50) step(world); // play on with it full
+    let outcome: GameOutcome = GameOutcome.None;
+    const deadline = world.tick + 400;
+    while (outcome === GameOutcome.None && world.tick < deadline) {
+      setColonyFoodForTest(world, world.colonies[ENEMY_COLONY_ID]!, 0);
+      outcome = step(world);
+    }
+    expect(outcome).toBe(GameOutcome.Victory);
+    expect(world.events).toHaveLength(PLAYTRACE_EVENT_CAP_PER_ROUND);
+    const view = endOfMatchView(world, outcome);
+    expect(view.droppedStructural).toBeGreaterThan(0); // the buffer really overflowed
+    expect(view.subtitle).toBe('Their queen starved');
+    expect(view.narrative).toBe('The enemy queen starved after their colony ran out of food.');
+    expect(view.roundEndReason).toBe('QueenDeath');
+  }, 60_000);
+
+  it('a stalemate after the buffer filled: its narrative and roundEndReason survive', () => {
+    const world = worldNearOldCap(7);
+    setPilesForTest(world, []);
+    for (const cid of [PLAYER_COLONY_ID, ENEMY_COLONY_ID]) {
+      setColonyFoodForTest(world, world.colonies[cid]!, 0);
+    }
+    fillEventBuffer(world);
+    const outcome = step(world);
+    expect(outcome).toBe(GameOutcome.MutualDestruction);
+    expect(world.events).toHaveLength(PLAYTRACE_EVENT_CAP_PER_ROUND);
+    const view = endOfMatchView(world, outcome);
+    expect(view.droppedStructural).toBeGreaterThan(0);
+    expect(view.narrative).toBe('Both colonies ran out of food and the round ended in a draw.');
+    expect(view.roundEndReason).toBe('StalemateTiebreak');
   }, 60_000);
 });
