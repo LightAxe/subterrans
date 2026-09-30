@@ -175,6 +175,17 @@ export const QUEEN_STARVE_AFTER_TICKS = STARVATION_GRACE_TICKS;
  */
 export const QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS = 10;
 
+/**
+ * #375 (V66) — while the queen is fed she regains 1 HP on each tick she eats whose
+ * number is a multiple of this, up to COMBAT_HP_QUEEN (her max): twice the drain
+ * rate, 0 → 30 HP in 150 ticks. Short hunger bursts heal back; a long famine still
+ * kills. Heals combat wounds too (a fighter's 4 per 5 ticks still outpaces it).
+ * Tuned by the #375 AI-economy sweep (PR #386): the AI's famines run 40–90 ticks
+ * with fed gaps of 60–150, and slower rates (10–200) left its queen starving 4–11
+ * times per 100 Normal seeds against V65's 1.
+ */
+export const QUEEN_FED_HP_REGEN_INTERVAL_TICKS = 5;
+
 /** Larva: tries to eat every tick. */
 export const LARVA_MEAL_INTERVAL_TICKS = 1;
 /** Larva: fp per meal (= LARVA_FOOD_PER_TICK). */

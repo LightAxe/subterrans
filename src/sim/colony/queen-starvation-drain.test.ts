@@ -3,8 +3,9 @@
 // While she cannot eat she loses 1 HP each time the ticks since her last meal reach
 // a multiple of QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS, and dies of starvation at 0 HP.
 // Covered: the drain schedule, a full-HP queen dying on the V65 tick, a wounded one
-// sooner, a meal stopping the drain (no regeneration), the drain restarting after a
-// meal, the home-ground buffer untouched, the queen_death cause through tick(), the
+// sooner, a meal stopping the drain, regeneration while fed (capped, not while
+// starving, combat wounds too, not at V65), the drain restarting after a meal, the
+// home-ground buffer untouched, the queen_death cause through tick(), the
 // larva unchanged, and the V65 instant-death path pinned.
 import { describe, it, expect } from 'vitest';
 import { tickFoodConsumption } from './colony-system.js';
@@ -18,6 +19,7 @@ import {
   QUEEN_FOOD_PER_TICK,
   QUEEN_STARVE_AFTER_TICKS,
   QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
+  QUEEN_FED_HP_REGEN_INTERVAL_TICKS,
   STARVATION_GRACE_TICKS,
 } from '../constants.js';
 import { LARVA_HUNGER, mealsUntilStarvation, QUEEN_HUNGER } from '../hunger.js';
@@ -115,50 +117,108 @@ describe('#375 V66 — the queen starves by losing HP', () => {
     expect(world.ants.hp[q]).toBe(6);
   });
 
-  it('eating stops the drain; lost HP does not come back; a new famine restarts the interval', () => {
+  it('eating stops the drain; fed, she heals 1 HP per regen interval up to full; a new famine restarts the interval', () => {
     const { world, colony, q } = starvingWorld(SIM_VERSION_V66_QUEEN_STARVES_HP);
     for (let t = 0; t < 55; t++) consume(world, colony); // sinceMeal 1..55: 5 drains
     expect(world.ants.hp[q]).toBe(COMBAT_HP_QUEEN - 5);
 
-    // Food arrives: she eats every tick for 1000 ticks and her HP holds. (One meal's
-    // worth each tick: the queen eats first, so nobody else takes it.)
-    for (let t = 0; t < 1000; t++) {
+    // Food arrives: she eats every tick (one meal's worth each tick: the queen eats
+    // first, so nobody else takes it) and regains 1 HP on each tick she eats whose
+    // number is a multiple of the regen interval, never above her max.
+    let healed = 0;
+    for (let t = 0; t < 10 * QUEEN_FED_HP_REGEN_INTERVAL_TICKS; t++) {
+      const eatTick = world.tick;
+      const before = world.ants.hp[q]!;
       setColonyFoodForTest(world, colony, QUEEN_FOOD_PER_TICK);
       consume(world, colony);
       expect(mealsUntilStarvation(world, q, QUEEN_HUNGER)).toBe(STARVATION_GRACE_TICKS);
+      const expected =
+        eatTick % QUEEN_FED_HP_REGEN_INTERVAL_TICKS === 0 && before < COMBAT_HP_QUEEN ? 1 : 0;
+      expect(world.ants.hp[q]! - before, `tick ${eatTick}`).toBe(expected);
+      healed += expected;
     }
-    expect(world.ants.hp[q]).toBe(COMBAT_HP_QUEEN - 5);
+    expect(healed).toBe(5);
+    expect(world.ants.hp[q]).toBe(COMBAT_HP_QUEEN); // capped at full
     expect(world.ants.alive[q]).toBe(1);
 
     // The food runs out: the interval counts from her last meal, not the old one.
     setColonyFoodForTest(world, colony, 0);
     for (let i = 1; i < QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS; i++) consume(world, colony);
-    expect(world.ants.hp[q]).toBe(COMBAT_HP_QUEEN - 5);
+    expect(world.ants.hp[q]).toBe(COMBAT_HP_QUEEN);
     consume(world, colony); // 10 ticks since her last meal
-    expect(world.ants.hp[q]).toBe(COMBAT_HP_QUEEN - 6);
-    // 24 HP left: she dies 240 ticks after that drain, 250 after her last meal.
+    expect(world.ants.hp[q]).toBe(COMBAT_HP_QUEEN - 1);
+    // 29 HP left: she dies 300 ticks after her last meal, as from full.
     const lastMeal = world.ants.lastMealTick[q]!;
-    expect(deathTick(world, colony)).toBe(lastMeal + 25 * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS);
+    expect(deathTick(world, colony)).toBe(lastMeal + STARVATION_GRACE_TICKS);
   });
 
-  it('separate famines add up: 30 gaps of 10 missed meals kill a queen V65 would keep', () => {
-    // Lost HP never comes back, so famines that each end before the old 300-tick
-    // clock still wear her down: 30 gaps of 10 unfed ticks (each ended by a meal).
-    const run = (v: number): number => {
-      const { world, colony } = starvingWorld(v);
-      for (let gap = 0; gap < 40; gap++) {
-        setColonyFoodForTest(world, colony, QUEEN_FOOD_PER_TICK);
-        consume(world, colony); // a meal
+  it('she does not heal while starving, nor above her max when fed', () => {
+    const { world, colony, q } = starvingWorld(SIM_VERSION_V66_QUEEN_STARVES_HP);
+    world.ants.hp[q] = 20;
+    // Unfed across several regen ticks: HP only falls.
+    let prev = 20;
+    for (let t = 0; t < 3 * QUEEN_FED_HP_REGEN_INTERVAL_TICKS; t++) {
+      consume(world, colony);
+      expect(world.ants.hp[q]).toBeLessThanOrEqual(prev);
+      prev = world.ants.hp[q]!;
+    }
+    // A full-HP queen fed across many regen ticks stays at max.
+    const fed = starvingWorld(SIM_VERSION_V66_QUEEN_STARVES_HP);
+    for (let t = 0; t < 5 * QUEEN_FED_HP_REGEN_INTERVAL_TICKS; t++) {
+      setColonyFoodForTest(fed.world, fed.colony, QUEEN_FOOD_PER_TICK);
+      consume(fed.world, fed.colony);
+      expect(fed.world.ants.hp[fed.q]).toBe(COMBAT_HP_QUEEN);
+    }
+  });
+
+  it('combat wounds heal the same way while she is fed; the home-ground buffer is not regenerated', () => {
+    const { world, colony, q } = starvingWorld(SIM_VERSION_V66_QUEEN_STARVES_HP);
+    world.ants.hp[q] = 6; // e.g. after a fight
+    world.ants.homeGroundBonusHp[q] = 1;
+    for (let t = 0; t < 24 * QUEEN_FED_HP_REGEN_INTERVAL_TICKS; t++) {
+      setColonyFoodForTest(world, colony, QUEEN_FOOD_PER_TICK);
+      consume(world, colony);
+    }
+    expect(world.ants.hp[q]).toBe(COMBAT_HP_QUEEN);
+    expect(world.ants.homeGroundBonusHp[q]).toBe(1);
+  });
+
+  it('V65 pinned: a wounded queen who is fed never heals', () => {
+    const { world, colony, q } = starvingWorld(V65);
+    world.ants.hp[q] = 6;
+    for (let t = 0; t < 10 * QUEEN_FED_HP_REGEN_INTERVAL_TICKS; t++) {
+      setColonyFoodForTest(world, colony, QUEEN_FOOD_PER_TICK);
+      consume(world, colony);
+    }
+    expect(world.ants.hp[q]).toBe(6);
+  });
+
+  it('short famines heal back when she is fed long enough between them; without the time they add up', () => {
+    // Each famine: 50 unfed ticks = 5 HP. Fed 5 regen intervals between them she is
+    // whole again; fed only one tick between them (never on a regen tick) she is not.
+    const run = (fedTicks: number): { alive: boolean; hp: number } => {
+      const { world, colony, q } = starvingWorld(SIM_VERSION_V66_QUEEN_STARVES_HP);
+      for (let famine = 0; famine < 8; famine++) {
         setColonyFoodForTest(world, colony, 0);
-        for (let i = 0; i < QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS; i++) {
+        for (let i = 0; i < 5 * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS; i++) {
           consume(world, colony);
-          if (world.ants.alive[colony.queenEntityId] === 0) return gap;
+          if (world.ants.alive[q] === 0) return { alive: false, hp: 0 };
+        }
+        for (let i = 0; i < fedTicks; i++) {
+          // Skip regen ticks when fed only briefly (the "without the time" arm).
+          if (fedTicks === 1 && world.tick % QUEEN_FED_HP_REGEN_INTERVAL_TICKS === 0) {
+            consume(world, colony);
+          }
+          setColonyFoodForTest(world, colony, QUEEN_FOOD_PER_TICK);
+          consume(world, colony);
         }
       }
-      return -1;
+      return { alive: world.ants.alive[q] === 1, hp: world.ants.hp[q]! };
     };
-    expect(run(SIM_VERSION_V66_QUEEN_STARVES_HP)).toBe(COMBAT_HP_QUEEN - 1);
-    expect(run(V65)).toBe(-1);
+    const healed = run(6 * QUEEN_FED_HP_REGEN_INTERVAL_TICKS);
+    expect(healed.alive).toBe(true);
+    expect(healed.hp).toBe(COMBAT_HP_QUEEN);
+    expect(run(1).alive).toBe(false); // 8 × 5 = 40 HP of famine, never healed
   });
 
   it('a queen fed at least every 9 ticks never loses HP', () => {

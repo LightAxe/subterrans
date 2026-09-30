@@ -45,6 +45,8 @@ import {
   RECONCILE_INTERVAL_TICKS,
   NURSE_MIN_WORKERS,
   QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
+  QUEEN_FED_HP_REGEN_INTERVAL_TICKS,
+  COMBAT_HP_QUEEN,
 } from '../constants.js';
 import {
   clampColonyFoodStores,
@@ -164,7 +166,13 @@ function feedOrStarve(
  * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS, and dies of starvation (`despawnAnt`,
  * 'starvation') at 0 HP. Fed at tick s and never again, a queen at h HP dies at
  * s + h × 10: at full HP (30) the V65 tick s + 300. A meal stops the drain; the
- * interval restarts from her new last meal. Nothing restores lost HP.
+ * interval restarts from her new last meal.
+ *
+ * While she is fed she heals: on a tick she eats whose number is a multiple of
+ * QUEEN_FED_HP_REGEN_INTERVAL_TICKS she regains 1 HP, up to COMBAT_HP_QUEEN. So a
+ * short hunger burst heals back while a long famine still kills. The regen heals
+ * any lost HP, combat damage included, and never touches the home-ground buffer.
+ * Keyed on world.tick, so it needs no saved state.
  */
 function feedQueenOrDrain(world: WorldState, colony: ColonyRecord, id: number): void {
   const ants = world.ants;
@@ -172,6 +180,9 @@ function feedQueenOrDrain(world: WorldState, colony: ColonyRecord, id: number): 
   if (sinceMeal < QUEEN_HUNGER.mealIntervalTicks) return;
   if (withdrawFood(world, colony, QUEEN_HUNGER.mealFp)) {
     ants.lastMealTick[id] = world.tick;
+    if (world.tick % QUEEN_FED_HP_REGEN_INTERVAL_TICKS === 0 && ants.hp[id]! < COMBAT_HP_QUEEN) {
+      ants.hp[id] = ants.hp[id]! + 1;
+    }
     return;
   }
   if (sinceMeal % QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS !== 0) return;

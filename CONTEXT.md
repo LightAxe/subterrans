@@ -175,7 +175,9 @@ walks home to eat, then goes back to its rally point or post. Since **#363
 walks home from a fight too, when home can feed it. Since **#375 (simVersion
 V66)** the **queen** starves by losing health: while she cannot eat she loses 1 HP
 every 10 ticks and dies of starvation at 0 HP, so a full-HP queen lasts the same
-300 ticks and a wounded one less. A meal stops the loss; lost HP does not come back.
+300 ticks and a wounded one less. A meal stops the loss, and while she is fed she
+slowly **regenerates** lost HP — combat wounds too — up to full, so a short hunger
+burst heals back but a long famine still kills.
 The HUD's queen bar is her HP. Larvae, workers and fighters still die outright at
 their starvation tick. A starved ant leaves
 no food behind. The spider keeps its own hunger clock and eats only its kills.

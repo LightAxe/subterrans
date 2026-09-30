@@ -6,12 +6,15 @@
 // QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS). Up to #375 it was a one-shot, shown once
 // per session, so a second attack or famine later in the match went unannounced.
 //
-// It now re-arms once the queen has RECOVERED: she ate on the last tick and has
-// lost no HP for QUEEN_DANGER_REARM_TICKS. (Fed on the frame of the check, not
-// continuously: a queen eating often enough never loses HP anyway.) Her HP is not the
-// threshold: ants never regenerate HP, so a wounded queen never climbs back above
-// any HP line, and an HP-keyed re-arm would never re-arm. Recovery is therefore
-// "out of danger for a while", read from the two causes themselves.
+// It now re-arms once the queen has RECOVERED:
+//   - she is back at full health (base HP = COMBAT_HP_QUEEN) — from V66 a fed queen
+//     regenerates (QUEEN_FED_HP_REGEN_INTERVAL_TICKS), so this is the HP threshold;
+//   - she ate on the last tick; and
+//   - she has lost no HP for QUEEN_DANGER_REARM_TICKS. This keeps a fight at full
+//     base HP, where blows land on the home-ground buffer, from re-raising the
+//     caption on every blow.
+// A pre-V66 world has no regeneration, so a wounded queen there would never reach
+// full HP again; for it the HP threshold is waived (fed and unhurt suffices).
 //
 // Render-side session state only; nothing is saved. Pure + Phaser-free so it is
 // unit-testable; GameScene owns the state and calls `advanceQueenDanger` each frame.
@@ -20,11 +23,13 @@ import type { WorldState } from '../sim/types.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
 import { isAlive } from '../sim/ant/ant-store.js';
 import { QUEEN_HUNGER } from '../sim/hunger.js';
+import { COMBAT_HP_QUEEN } from '../sim/constants.js';
+import { SIM_VERSION_V66_QUEEN_STARVES_HP } from '../sim/types.js';
 import { queenMealsUntilStarvation } from './hud-stats.js';
 import { checkAndTrigger, untrigger } from './onboarding-captions.js';
 import { QUEEN_DAMAGE_SUPPRESS_TICKS } from './screen-effects.js';
 
-/** Ticks (10 s at 20 Hz) the queen must go fed and unhurt before the caption re-arms. */
+/** Ticks (10 s at 20 Hz) the queen must go unhurt, fed and healed, before the caption re-arms. */
 export const QUEEN_DANGER_REARM_TICKS = 200;
 
 export interface QueenDangerState {
@@ -47,12 +52,14 @@ export interface QueenDangerStep {
 
 /**
  * Advance the tracker by one render frame. `hp` is the queen's combined HP now,
- * `fed` whether she ate on the last tick, `tick` the world tick.
+ * `fed` whether she ate on the last tick, `healed` whether she is back above the
+ * re-arm HP threshold, `tick` the world tick.
  */
 export function stepQueenDanger(
   state: QueenDangerState,
   hp: number,
   fed: boolean,
+  healed: boolean,
   tick: number,
 ): QueenDangerStep {
   const hurt = state.prevHp !== null && hp < state.prevHp;
@@ -61,7 +68,12 @@ export function stepQueenDanger(
     state.lastHarmTick = tick;
     return { hurt, rearm: false };
   }
-  if (state.lastHarmTick !== null && fed && tick - state.lastHarmTick >= QUEEN_DANGER_REARM_TICKS) {
+  if (
+    state.lastHarmTick !== null &&
+    fed &&
+    healed &&
+    tick - state.lastHarmTick >= QUEEN_DANGER_REARM_TICKS
+  ) {
     state.lastHarmTick = null;
     return { hurt, rearm: true };
   }
@@ -78,8 +90,9 @@ export interface QueenDangerFrame {
 
 /**
  * GameScene's per-frame queen-danger step for `colony` (the player's): reads her
- * combined HP (base + home-ground buffer) and whether she ate on the last tick,
- * re-arms the caption on recovery (untrigger), and on an HP loss past
+ * combined HP (base + home-ground buffer), whether she ate on the last tick and
+ * whether she is back at full base HP (V66; waived before), re-arms the caption on
+ * recovery (untrigger), and on an HP loss past
  * QUEEN_DAMAGE_SUPPRESS_TICKS asks for the pulse and the caption (checkAndTrigger,
  * so it shows once per danger spell).
  */
@@ -93,7 +106,10 @@ export function advanceQueenDanger(
   const fed =
     isAlive(world.ants, q) &&
     queenMealsUntilStarvation(world, colony) >= QUEEN_HUNGER.starveAfterTicks;
-  const step = stepQueenDanger(state, hp, fed, world.tick);
+  const healed =
+    world.simVersion < SIM_VERSION_V66_QUEEN_STARVES_HP ||
+    (world.ants.hp[q] ?? 0) >= COMBAT_HP_QUEEN;
+  const step = stepQueenDanger(state, hp, fed, healed, world.tick);
   if (step.rearm) untrigger('queenDamage');
   if (!step.hurt || world.tick <= QUEEN_DAMAGE_SUPPRESS_TICKS) return NO_DANGER;
   return { pulse: true, caption: checkAndTrigger('queenDamage') };

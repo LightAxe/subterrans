@@ -1,6 +1,6 @@
 // queen-danger.test.ts — #375: "Your queen is in danger." covers combat and (from
-// V66) starvation, and re-arms once she has recovered (fed and unhurt for
-// QUEEN_DANGER_REARM_TICKS).
+// V66) starvation, and re-arms once she has recovered (back at full HP — waived
+// before V66 — fed, and unhurt for QUEEN_DANGER_REARM_TICKS).
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   createQueenDangerState,
@@ -13,14 +13,25 @@ import { checkAndTrigger, resetCaptions, untrigger } from './onboarding-captions
 import { QUEEN_DAMAGE_SUPPRESS_TICKS } from './screen-effects.js';
 import { createScenario } from '../sim/scenario.js';
 import { tick } from '../sim/tick.js';
-import { PLAYER_COLONY_ID } from '../sim/constants.js';
+import {
+  COMBAT_HP_QUEEN,
+  PLAYER_COLONY_ID,
+  QUEEN_FED_HP_REGEN_INTERVAL_TICKS,
+} from '../sim/constants.js';
+import { SIM_VERSION_V66_QUEEN_STARVES_HP } from '../sim/types.js';
 import { setColonyFoodForTest } from '../sim/food/food-test-utils.js';
 
 const DANGER = 'Your queen is in danger.';
 
 /** GameScene's per-frame queen-danger step, minus Phaser: returns the caption shown, if any. */
-function frame(state: QueenDangerState, hp: number, fed: boolean, t: number): string | null {
-  const d = stepQueenDanger(state, hp, fed, t);
+function frame(
+  state: QueenDangerState,
+  hp: number,
+  fed: boolean,
+  t: number,
+  healed = true,
+): string | null {
+  const d = stepQueenDanger(state, hp, fed, healed, t);
   if (d.rearm) untrigger('queenDamage');
   return d.hurt ? checkAndTrigger('queenDamage') : null;
 }
@@ -30,10 +41,10 @@ describe('stepQueenDanger', () => {
 
   it('reports hurt on an HP drop only (not the first frame, not a rise)', () => {
     const s = createQueenDangerState();
-    expect(stepQueenDanger(s, 30, true, 0).hurt).toBe(false);
-    expect(stepQueenDanger(s, 30, true, 1).hurt).toBe(false);
-    expect(stepQueenDanger(s, 29, false, 2).hurt).toBe(true);
-    expect(stepQueenDanger(s, 33, true, 3).hurt).toBe(false); // home-ground buffer refilled
+    expect(stepQueenDanger(s, 30, true, true, 0).hurt).toBe(false);
+    expect(stepQueenDanger(s, 30, true, true, 1).hurt).toBe(false);
+    expect(stepQueenDanger(s, 29, false, false, 2).hurt).toBe(true);
+    expect(stepQueenDanger(s, 33, true, true, 3).hurt).toBe(false); // healed / buffer refilled
   });
 
   it('the caption shows once per danger spell, and again after she recovers', () => {
@@ -41,10 +52,10 @@ describe('stepQueenDanger', () => {
     expect(frame(s, 30, true, 0)).toBeNull();
     expect(frame(s, 29, true, 10)).toBe(DANGER);
     expect(frame(s, 28, true, 20)).toBeNull(); // same spell
-    // Fed and unhurt, but not yet for long enough.
+    // Fed, healed and unhurt, but not yet for long enough.
     expect(frame(s, 28, true, 20 + QUEEN_DANGER_REARM_TICKS - 1)).toBeNull();
     expect(frame(s, 27, true, 20 + QUEEN_DANGER_REARM_TICKS)).toBeNull(); // hit again: still armed off
-    // Recovered: fed now, and no HP lost for 200 ticks since the last hit, re-arms it.
+    // Recovered: fed, healed, and no HP lost for 200 ticks since the last hit, re-arms it.
     const last = 20 + QUEEN_DANGER_REARM_TICKS;
     expect(frame(s, 27, true, last + QUEEN_DANGER_REARM_TICKS)).toBeNull(); // re-arms here
     expect(frame(s, 26, false, last + QUEEN_DANGER_REARM_TICKS + 1)).toBe(DANGER);
@@ -54,17 +65,29 @@ describe('stepQueenDanger', () => {
     const s = createQueenDangerState();
     frame(s, 30, true, 0);
     expect(frame(s, 29, false, 1)).toBe(DANGER);
-    expect(stepQueenDanger(s, 29, false, 1 + QUEEN_DANGER_REARM_TICKS * 10).rearm).toBe(false);
+    expect(stepQueenDanger(s, 29, false, true, 1 + QUEEN_DANGER_REARM_TICKS * 10).rearm).toBe(
+      false,
+    );
     expect(frame(s, 28, false, 2 + QUEEN_DANGER_REARM_TICKS * 10)).toBeNull();
+  });
+
+  it('does not re-arm until she is healed, however long fed and unhurt', () => {
+    const s = createQueenDangerState();
+    frame(s, 30, true, 0);
+    expect(frame(s, 25, true, 1, false)).toBe(DANGER);
+    expect(stepQueenDanger(s, 26, true, false, 1 + QUEEN_DANGER_REARM_TICKS * 10).rearm).toBe(
+      false,
+    );
+    expect(stepQueenDanger(s, 30, true, true, 2 + QUEEN_DANGER_REARM_TICKS * 10).rearm).toBe(true);
   });
 
   it('re-arms once only, and not before any harm', () => {
     const s = createQueenDangerState();
-    expect(stepQueenDanger(s, 30, true, 0).rearm).toBe(false);
-    expect(stepQueenDanger(s, 30, true, QUEEN_DANGER_REARM_TICKS * 3).rearm).toBe(false);
-    stepQueenDanger(s, 29, true, 1000);
-    expect(stepQueenDanger(s, 29, true, 1000 + QUEEN_DANGER_REARM_TICKS).rearm).toBe(true);
-    expect(stepQueenDanger(s, 29, true, 1001 + QUEEN_DANGER_REARM_TICKS).rearm).toBe(false);
+    expect(stepQueenDanger(s, 30, true, true, 0).rearm).toBe(false);
+    expect(stepQueenDanger(s, 30, true, true, QUEEN_DANGER_REARM_TICKS * 3).rearm).toBe(false);
+    stepQueenDanger(s, 29, true, true, 1000);
+    expect(stepQueenDanger(s, 29, true, true, 1000 + QUEEN_DANGER_REARM_TICKS).rearm).toBe(true);
+    expect(stepQueenDanger(s, 29, true, true, 1001 + QUEEN_DANGER_REARM_TICKS).rearm).toBe(false);
   });
 });
 
@@ -94,7 +117,10 @@ describe('#375 advanceQueenDanger against the sim (V66): starvation raises it, r
     expect(shown).toHaveLength(1);
     expect(pulses).toBe(2);
     expect(world.ants.hp[q]).toBe(28);
-    for (let i = 0; i < QUEEN_DANGER_REARM_TICKS + 5; i++) step(2048); // fed
+    // Fed: she regenerates to full HP, then stays unhurt long enough to re-arm.
+    const recover = 2 * QUEEN_FED_HP_REGEN_INTERVAL_TICKS + QUEEN_DANGER_REARM_TICKS + 5;
+    for (let i = 0; i < recover; i++) step(2048);
+    expect(world.ants.hp[q]).toBe(COMBAT_HP_QUEEN);
     expect(shown).toHaveLength(1);
     for (let i = 0; i < 25; i++) step(0); // second famine
     expect(shown).toHaveLength(2);
@@ -123,6 +149,27 @@ describe('#375 advanceQueenDanger against the sim (V66): starvation raises it, r
     advanceQueenDanger(s, world, colony);
     world.ants.homeGroundBonusHp[q] = 2;
     expect(advanceQueenDanger(s, world, colony)).toEqual({ pulse: true, caption: DANGER });
+  });
+
+  it('V66: a wounded queen fed and unhurt does not re-arm below full HP; pre-V66 the HP bar is waived', () => {
+    for (const [v, expected] of [
+      [SIM_VERSION_V66_QUEEN_STARVES_HP, 1],
+      [SIM_VERSION_V66_QUEEN_STARVES_HP - 1, null],
+    ] as const) {
+      const world = createScenario(7, 'Normal');
+      world.simVersion = v;
+      const colony = world.colonies[PLAYER_COLONY_ID]!;
+      const q = colony.queenEntityId;
+      const s = createQueenDangerState();
+      s.prevHp = COMBAT_HP_QUEEN - 1;
+      s.lastHarmTick = 0;
+      world.ants.hp[q] = COMBAT_HP_QUEEN - 1; // fixture: wounded, 1 HP short of full
+      // eslint-disable-next-line no-restricted-syntax -- test fixture: stage the world tick
+      world.tick = QUEEN_DANGER_REARM_TICKS * 5;
+      world.ants.lastMealTick[q] = world.tick - 1; // fed
+      advanceQueenDanger(s, world, colony);
+      expect(s.lastHarmTick === null ? null : 1, `V${v}`).toBe(expected);
+    }
   });
 
   it('a dead queen never re-arms the caption', () => {
