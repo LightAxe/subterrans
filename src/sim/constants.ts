@@ -154,7 +154,12 @@ export const LARVA_FOOD_PER_TICK = 1;
 // Workers and fighters eat from V51 (#290 PR 4): one meal every interval, from
 // the colony stores at home or from their own load away (hunger.ts).
 
-/** Queen: tries to eat every tick. */
+/**
+ * Queen: tries to eat every tick. The V66 fed regeneration (#375,
+ * QUEEN_FED_HP_REGEN_INTERVAL_TICKS) counts on it: she heals on the ticks she eats
+ * that are multiples of that interval, which are regular only while she eats every
+ * tick (queen-starvation-drain.test.ts pins this at 1).
+ */
 export const QUEEN_MEAL_INTERVAL_TICKS = 1;
 /** Queen: fp per meal (= QUEEN_FOOD_PER_TICK). */
 export const QUEEN_MEAL_FP = QUEEN_FOOD_PER_TICK;
@@ -178,7 +183,8 @@ export const QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS = 10;
 /**
  * #375 (V66) — while the queen is fed she regains 1 HP on each tick she eats whose
  * number is a multiple of this, up to COMBAT_HP_QUEEN (her max): twice the drain
- * rate, 0 → 30 HP in 150 ticks. Short hunger bursts heal back; a long famine still
+ * rate, 1 → 30 HP in 145 ticks. Keyed on the ticks she eats, so it relies on
+ * QUEEN_MEAL_INTERVAL_TICKS = 1. Short hunger bursts heal back; a long famine still
  * kills. Heals combat wounds too (a fighter's 4 per 5 ticks still outpaces it).
  * Tuned by the #375 AI-economy sweep (PR #386): the AI's famines run 40–90 ticks
  * with fed gaps of 60–150, and slower rates (10–200) left its queen starving 4–11

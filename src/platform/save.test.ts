@@ -1574,6 +1574,16 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       w.ants.lastMealTick[q] -= 1;
       expect(() => deserializeWorldState(serializeWorldState(w))).toThrow(/lastMealTick/);
     });
+    it('#375 V66: rejects a live queen above COMBAT_HP_QUEEN (the queen window assumes the cap)', () => {
+      const w = createScenario(42);
+      const q = w.colonies[PLAYER_COLONY_ID]!.queenEntityId;
+      w.ants.hp[q] = COMBAT_HP_QUEEN;
+      expect(() => deserializeWorldState(serializeWorldState(w))).not.toThrow();
+      w.ants.hp[q] = COMBAT_HP_QUEEN + 1;
+      expect(() => deserializeWorldState(serializeWorldState(w))).toThrow(/above COMBAT_HP_QUEEN/);
+      w.simVersion = SIM_VERSION_V66_QUEEN_STARVES_HP - 1; // pre-V66: not checked
+      expect(() => deserializeWorldState(serializeWorldState(w))).not.toThrow();
+    });
     it('#290 accepts tick 2^31 − 1 and rejects tick 2^31 (int32 tick domain for Int32 tick columns)', () => {
       const w = createScenario(42);
       // eslint-disable-next-line no-restricted-syntax

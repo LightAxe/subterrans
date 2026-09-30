@@ -10,13 +10,18 @@
 // base tree produces (GOLDEN was captured by running this file on
 // fix/373-alarm-invasion at 7ab0897, before #375).
 //
-// Save/load: the drain is keyed on the saved hunger clock and HP alone, so a V66
-// world saved mid-drain and loaded continues byte-identically.
+// Save/load: the drain is keyed on the saved hunger clock and HP, and the fed
+// regeneration on world.tick, so a V66 world saved mid-drain and loaded continues
+// byte-identically through a meal spell (regen) and a renewed famine.
 import { describe, it, expect } from 'vitest';
 import { tick } from '../sim/tick.js';
 import { createScenario } from '../sim/scenario.js';
 import type { WorldState } from '../sim/types.js';
-import { ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
+import {
+  ENEMY_COLONY_ID,
+  PLAYER_COLONY_ID,
+  QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
+} from '../sim/constants.js';
 import { setColonyFoodForTest } from '../sim/food/food-test-utils.js';
 import { runAIController } from '../render/ai-controller.js';
 import { fnv1a, hashWorldState } from './world-hash.js';
@@ -88,7 +93,7 @@ describe('#375 — pinned V65: queen starvation is unchanged below V66', () => {
 });
 
 describe('#375 V66 — a world saved mid-drain continues byte-identically', () => {
-  it('save/load at tick 155 of a famine: same hashes, same starvation tick', () => {
+  it('save/load at tick 155 of a famine, fed 30 ticks, then starved: same hashes and death tick', () => {
     const famine = [PLAYER_COLONY_ID];
     const world = createScenario(7, 'Normal');
     const pq = world.colonies[PLAYER_COLONY_ID]!.queenEntityId;
@@ -97,16 +102,31 @@ describe('#375 V66 — a world saved mid-drain continues byte-identically', () =
     expect(world.ants.hp[pq]).toBe(5); // 15 drains
     const loaded = deserializeWorldState(JSON.parse(JSON.stringify(serializeWorldState(world))));
     expect(hashWorldState(loaded)).toBe(hashWorldState(world));
+    // Fed for 30 ticks (6 regen ticks at interval 5): both worlds heal alike.
+    const feed = (w: WorldState): void => {
+      setColonyFoodForTest(w, w.colonies[PLAYER_COLONY_ID]!, 1 << 12);
+      runAIController(w, ENEMY_COLONY_ID);
+      tick(w, w.commandQueue.splice(0));
+    };
+    for (let t = 155; t < 185; t++) {
+      feed(world);
+      feed(loaded);
+      if (t % 5 === 0) expect(hashWorldState(loaded), `tick ${t}`).toBe(hashWorldState(world));
+    }
+    const healedHp = world.ants.hp[pq];
+    expect(healedHp).toBeGreaterThan(5);
+    expect(loaded.ants.hp[pq]).toBe(healedHp);
+    const lastMeal = world.ants.lastMealTick[pq]!;
     let deathA = -1;
     let deathB = -1;
-    for (let t = 155; t < 260; t++) {
+    for (let t = 185; t < 400; t++) {
       step(world, famine);
       step(loaded, famine);
       if (t % 5 === 0) expect(hashWorldState(loaded), `tick ${t}`).toBe(hashWorldState(world));
       if (deathA < 0 && world.ants.alive[pq] === 0) deathA = t;
       if (deathB < 0 && loaded.ants.alive[pq] === 0) deathB = t;
     }
-    expect(deathA).toBe(199); // 20 HP × 10 ticks, from lastMealTick −1
+    expect(deathA).toBe(lastMeal + healedHp * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS);
     expect(deathB).toBe(deathA);
     expect(hashWorldState(loaded)).toBe(hashWorldState(world));
   }, 60_000);

@@ -20,6 +20,7 @@ import {
   QUEEN_STARVE_AFTER_TICKS,
   QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
   QUEEN_FED_HP_REGEN_INTERVAL_TICKS,
+  QUEEN_MEAL_INTERVAL_TICKS,
   STARVATION_GRACE_TICKS,
 } from '../constants.js';
 import { LARVA_HUNGER, mealsUntilStarvation, QUEEN_HUNGER } from '../hunger.js';
@@ -63,6 +64,9 @@ describe('#375 V66 — the queen starves by losing HP', () => {
   it('10 × 30 HP = 300 ticks: a full-HP queen lasts exactly the old grace', () => {
     expect(QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS * COMBAT_HP_QUEEN).toBe(QUEEN_STARVE_AFTER_TICKS);
     expect(QUEEN_STARVE_AFTER_TICKS).toBe(STARVATION_GRACE_TICKS);
+    // The regen is keyed on the ticks she EATS: regular only while she tries to eat
+    // every tick. A meal interval above 1 would phase-lock it (see the constant).
+    expect(QUEEN_MEAL_INTERVAL_TICKS).toBe(1);
   });
 
   it('a full-HP queen never fed dies on the same tick at V66 as at V65 (tick 299)', () => {
@@ -194,7 +198,7 @@ describe('#375 V66 — the queen starves by losing HP', () => {
   });
 
   it('short famines heal back when she is fed long enough between them; without the time they add up', () => {
-    // Each famine: 50 unfed ticks = 5 HP. Fed 5 regen intervals between them she is
+    // Each famine: 50 unfed ticks = 5 HP. Fed 6 regen intervals between them she is
     // whole again; fed only one tick between them (never on a regen tick) she is not.
     const run = (fedTicks: number): { alive: boolean; hp: number } => {
       const { world, colony, q } = starvingWorld(SIM_VERSION_V66_QUEEN_STARVES_HP);
@@ -218,7 +222,7 @@ describe('#375 V66 — the queen starves by losing HP', () => {
     const healed = run(6 * QUEEN_FED_HP_REGEN_INTERVAL_TICKS);
     expect(healed.alive).toBe(true);
     expect(healed.hp).toBe(COMBAT_HP_QUEEN);
-    expect(run(1).alive).toBe(false); // 8 × 5 = 40 HP of famine, never healed
+    expect(run(1).alive).toBe(false); // 5 HP per famine, never healed: dies in the 6th
   });
 
   it('a queen fed at least every 9 ticks never loses HP', () => {
@@ -226,8 +230,8 @@ describe('#375 V66 — the queen starves by losing HP', () => {
     for (let t = 0; t < 900; t++) {
       if (t % 9 === 8) setColonyFoodForTest(world, colony, QUEEN_FOOD_PER_TICK);
       consume(world, colony);
+      expect(world.ants.hp[q], `tick ${t}`).toBe(COMBAT_HP_QUEEN);
     }
-    expect(world.ants.hp[q]).toBe(COMBAT_HP_QUEEN);
     expect(world.ants.alive[q]).toBe(1);
   });
 

@@ -1636,7 +1636,8 @@ export class GameScene extends Phaser.Scene {
 
     // Queen damage pulse. From V66 (#375) a starving queen loses HP too, so the
     // pulse and "Your queen is in danger." cover both causes. The caption re-arms
-    // once she has recovered (queen-danger.ts: fed and unhurt for a while).
+    // once she has recovered (queen-danger.ts: back at full HP (V66), fed, and unhurt
+    // for a while).
     const danger = advanceQueenDanger(this.queenDanger, this.world, playerColony);
     if (danger.pulse) triggerQueenDamagePulse(this.cameras.main);
     // Caption #9: queen damage (combat or starvation), once per danger spell.

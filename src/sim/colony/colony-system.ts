@@ -13,7 +13,8 @@
 //   tickFoodConsumption IS the concrete implementation of PRD §8a steps 3 AND 4.
 //   Feed success/failure is evaluated inline per entity (queen first, then each live larva).
 //   Each ant's hunger clock is `ants.lastMealTick` (#288, V50; src/sim/hunger.ts):
-//   On success (withdrawFood returns true):  lastMealTick = world.tick.
+//   On success (withdrawFood returns true):  lastMealTick = world.tick (and the V66
+//     queen regains 1 HP on regen ticks, up to her max — feedQueenOrDrain).
 //   On failure (withdrawFood returns false): kill the ant once ticks since its last
 //     meal reach its profile's starve-after (300). Pre-V50 this was a countdown
 //     reset to STARVATION_GRACE_TICKS and decremented per failed meal — the same
@@ -125,6 +126,7 @@ export function largestNurseryTileCount(colony: ColonyRecord): number {
 //
 // This IS the concrete implementation of steps 3 and 4 evaluated inline per entity.
 // Step 3 (feed):          meal due + withdrawFood success → lastMealTick = world.tick
+//                          (the queen from V66 also regains 1 HP on regen ticks)
 // Step 4 (starve-on-fail): withdrawFood failure → kill once ticks since meal ≥ starve-after
 //                          (the queen from V66: drain 1 HP per 10 failed ticks, kill at 0 HP)
 //

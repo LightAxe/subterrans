@@ -52,8 +52,8 @@ export interface QueenDangerStep {
 
 /**
  * Advance the tracker by one render frame. `hp` is the queen's combined HP now,
- * `fed` whether she ate on the last tick, `healed` whether she is back above the
- * re-arm HP threshold, `tick` the world tick.
+ * `fed` whether she ate on the last tick, `healed` whether she is back at full base
+ * HP (always true before V66), `tick` the world tick.
  */
 export function stepQueenDanger(
   state: QueenDangerState,

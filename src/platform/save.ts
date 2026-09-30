@@ -2178,6 +2178,17 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
         'worker',
       ]),
     ];
+    // #375 — the V66 queen window above holds only while her HP never exceeds
+    // COMBAT_HP_QUEEN (she spawns at it and regenerates only up to it).
+    if (
+      world.simVersion >= SIM_VERSION_V66_QUEEN_STARVES_HP &&
+      world.ants.alive[c.queenEntityId] === 1 &&
+      world.ants.hp[c.queenEntityId]! > COMBAT_HP_QUEEN
+    ) {
+      throw new Error(
+        `Invalid ants.hp[${c.queenEntityId}] (colony ${c.colonyId} queen): above COMBAT_HP_QUEEN`,
+      );
+    }
     for (const [id, starveAfter, what] of eaters) {
       if (world.ants.alive[id] !== 1) continue;
       const last = world.ants.lastMealTick[id]!;

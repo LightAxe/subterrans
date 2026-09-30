@@ -1507,8 +1507,8 @@ export const SIM_VERSION_V65_ALARM_INVASION = 65 as const;
  * keep their V65 starvation (death at their starve-after). The HUD shows the
  * queen's HP (render only). The drain is keyed on the existing hunger clock
  * (`ants.lastMealTick`) and the regen on world.tick, so there is no new serialized
- * field, command, world.rngState draw, entity-ID advance or tick-order change. A V65 save replays byte-identically. MIN_ACCEPTED is UNCHANGED
- * (V50).
+ * field, command, world.rngState draw, entity-ID advance or tick-order change. A
+ * V65 save replays byte-identically. MIN_ACCEPTED is UNCHANGED (V50).
  */
 export const SIM_VERSION_V66_QUEEN_STARVES_HP = 66 as const;
 export const LATEST_SIM_VERSION = SIM_VERSION_V66_QUEEN_STARVES_HP;

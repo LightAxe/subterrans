@@ -79,6 +79,9 @@ interface Run {
   /** Fighter-ticks a fighter in the enemy nest was aimed at the enemy queen (step
    *  10e's raidQueenTarget sets the aim; the plain hunt sets none). */
   aimedAtQueen: number;
+  /** The enemy queen's lowest HP over the run (0 once dead). From V66 (#375) a fed
+   *  queen heals, so the end state no longer shows a wound taken mid-run. */
+  enemyQueenMinHp: number;
 }
 
 function fighters(w: WorldState): number[] {
@@ -127,6 +130,7 @@ function run(sc: Scenario, split: 'none' | 'save' | 'copy', changeAt = -1): Run 
     stolenAtChange: -1,
     lostAtChange: -1,
     aimedAtQueen: 0,
+    enemyQueenMinHp: Number.MAX_SAFE_INTEGER,
   };
   for (let t = 0; t < TICKS; t++) {
     if (world.tick === SPLIT) {
@@ -147,6 +151,8 @@ function run(sc: Scenario, split: 'none' | 'save' | 'copy', changeAt = -1): Run 
     tick(world, log[world.tick] ?? []);
     let holding = 0;
     const q = world.colonies[ENEMY_COLONY_ID]!.queenEntityId;
+    const qHp = world.ants.alive[q] === 1 ? world.ants.hp[q]! : 0;
+    if (qHp < out.enemyQueenMinHp) out.enemyQueenMinHp = qHp;
     for (const id of fighters(world)) {
       if (world.ants.zone[id] === Zone.Underground) out.everUnderground = true;
       if (world.ants.subTask[id] === FightingSubState.Holding) holding += 1;
@@ -287,8 +293,7 @@ describe('V60 raid orders replay deterministically, across save/load and copy (#
       const e = a.world.colonies[ENEMY_COLONY_ID]!;
       const q = e.queenEntityId;
       const fresh = raidWorld(6000).world;
-      const hurt = a.world.ants.alive[q] !== 1 || a.world.ants.hp[q]! < fresh.ants.hp[q]!;
-      expect(hurt).toBe(true);
+      expect(a.enemyQueenMinHp).toBeLessThan(fresh.ants.hp[q]!); // hurt at some point
       expect(a.world.colonies[P]!.foodRaidedFp).toBe(0);
       expect(e.foodLostToRaidsFp).toBe(0);
     },
@@ -311,8 +316,7 @@ describe('V60 raid orders replay deterministically, across save/load and copy (#
       expect(a.aimedAtQueen).toBeGreaterThan(0);
       const q = a.world.colonies[ENEMY_COLONY_ID]!.queenEntityId;
       const fresh = raidWorld(0).world;
-      const hurt = a.world.ants.alive[q] !== 1 || a.world.ants.hp[q]! < fresh.ants.hp[q]!;
-      expect(hurt).toBe(true);
+      expect(a.enemyQueenMinHp).toBeLessThan(fresh.ants.hp[q]!); // hurt at some point
       expect(a.world.colonies[P]!.raidType).toBe(RaidType.Loot);
     },
     SLOW,
