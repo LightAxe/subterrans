@@ -17,7 +17,9 @@
 //   On failure (withdrawFood returns false): kill the ant once ticks since its last
 //     meal reach its profile's starve-after (300). Pre-V50 this was a countdown
 //     reset to STARVATION_GRACE_TICKS and decremented per failed meal — the same
-//     death tick.
+//     death tick. From V66 (#375) the queen instead loses 1 HP every
+//     QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS of failed meals and starves at 0 HP
+//     (feedQueenOrDrain) — at full HP, on the same tick.
 //   Both branches share the same if/else — the else IS step 4.
 //   Workers and fighters eat from V51 (#290 PR 4), after the queen and larvae —
 //   at home from the stores (above a queen reserve), away from their own load
@@ -31,10 +33,19 @@
 // No Math.floor, no floats, no division operator.
 
 import type { WorldState } from '../types.js';
-import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V51_UNIFIED_HUNGER } from '../types.js';
+import {
+  allocateEntityId,
+  INVALID_ENTITY_ID,
+  SIM_VERSION_V51_UNIFIED_HUNGER,
+  SIM_VERSION_V66_QUEEN_STARVES_HP,
+} from '../types.js';
 import type { ColonyRecord } from './colony-store.js';
 import type { ColonyId } from './colony-store.js';
-import { RECONCILE_INTERVAL_TICKS, NURSE_MIN_WORKERS } from '../constants.js';
+import {
+  RECONCILE_INTERVAL_TICKS,
+  NURSE_MIN_WORKERS,
+  QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
+} from '../constants.js';
 import {
   clampColonyFoodStores,
   createChamberStock,
@@ -113,6 +124,7 @@ export function largestNurseryTileCount(colony: ColonyRecord): number {
 // This IS the concrete implementation of steps 3 and 4 evaluated inline per entity.
 // Step 3 (feed):          meal due + withdrawFood success → lastMealTick = world.tick
 // Step 4 (starve-on-fail): withdrawFood failure → kill once ticks since meal ≥ starve-after
+//                          (the queen from V66: drain 1 HP per 10 failed ticks, kill at 0 HP)
 //
 // Queen processed first (CLNY-04); larvae processed in order (CLNY-05); then,
 // from V51, workers and fighters in `colony.workers` order (#288).
@@ -142,6 +154,30 @@ function feedOrStarve(
   } else if (sinceMeal >= profile.starveAfterTicks) {
     despawnAnt(world, id, { cause: 'starvation' }); // #235 broodFieldDirty is set inside for a larva
   }
+}
+
+/**
+ * The queen's meal from V66 (#375). She eats as `feedOrStarve` would (QUEEN_HUNGER:
+ * a meal due every tick); a failed meal no longer kills her outright at the
+ * starve-after. Instead she loses 1 HP (`ants.hp`; the home-ground combat buffer is
+ * not drained) each time the ticks since her last meal reach a multiple of
+ * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS, and dies of starvation (`despawnAnt`,
+ * 'starvation') at 0 HP. Fed at tick s and never again, a queen at h HP dies at
+ * s + h × 10: at full HP (30) the V65 tick s + 300. A meal stops the drain; the
+ * interval restarts from her new last meal. Nothing restores lost HP.
+ */
+function feedQueenOrDrain(world: WorldState, colony: ColonyRecord, id: number): void {
+  const ants = world.ants;
+  const sinceMeal = ticksSinceMeal(world, id);
+  if (sinceMeal < QUEEN_HUNGER.mealIntervalTicks) return;
+  if (withdrawFood(world, colony, QUEEN_HUNGER.mealFp)) {
+    ants.lastMealTick[id] = world.tick;
+    return;
+  }
+  if (sinceMeal % QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS !== 0) return;
+  const hp = ants.hp[id]! - 1;
+  ants.hp[id] = hp;
+  if (hp <= 0) despawnAnt(world, id, { cause: 'starvation' });
 }
 
 /**
@@ -200,15 +236,21 @@ function feedWorkerOrStarve(world: WorldState, colony: ColonyRecord, id: number)
  * PRD §4c lines 1052-1085, re-expressed on the per-kind hunger profiles (#288):
  * queen first (CLNY-04, QUEEN_HUNGER), then each live larva in `colony.larvae`
  * order (CLNY-05, LARVA_HUNGER), then from V51 each live worker and fighter in
- * `colony.workers` order (WORKER_HUNGER / FIGHTER_HUNGER). See `feedOrStarve`
- * and `feedWorkerOrStarve`.
+ * `colony.workers` order (WORKER_HUNGER / FIGHTER_HUNGER). See `feedOrStarve`,
+ * `feedQueenOrDrain` (the queen from V66, #375) and `feedWorkerOrStarve`.
  */
 export function tickFoodConsumption(world: WorldState, colony: ColonyRecord): void {
   const ants = world.ants;
 
-  // Queen (CLNY-04).
+  // Queen (CLNY-04). From V66 (#375) her starvation drains her HP instead.
   const queenId = colony.queenEntityId;
-  if (ants.alive[queenId] === 1) feedOrStarve(world, colony, queenId, QUEEN_HUNGER);
+  if (ants.alive[queenId] === 1) {
+    if (world.simVersion >= SIM_VERSION_V66_QUEEN_STARVES_HP) {
+      feedQueenOrDrain(world, colony, queenId);
+    } else {
+      feedOrStarve(world, colony, queenId, QUEEN_HUNGER);
+    }
+  }
 
   // Larvae (CLNY-05) — same per-entity contract.
   for (let i = 0; i < colony.larvae.length; i++) {

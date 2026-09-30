@@ -1,6 +1,8 @@
 // onboarding-captions.ts — S6: first-occurrence caption registry (light onboarding).
 //
-// Tracks which of the 10 first-occurrence captions have fired this session.
+// Tracks which of the first-occurrence captions have fired this session.
+// 'queenDamage' is re-armed by GameScene once the queen recovers (#375,
+// queen-danger.ts), so it shows once per danger spell rather than once per session.
 // All state is render-side; nothing persists to WorldState or saves.
 // Reset on every new round (including same-seed rematch) so each session
 // starts fresh (Q6 DEFAULT_ACCEPTED).
@@ -52,6 +54,8 @@ export function resetCaptions(): void {
  * that caption on overflow it would never display yet stay marked 'already shown'
  * — losing a first-occurrence onboarding caption forever. UIScene calls this when
  * a dropped caption carries a key so the trigger re-fires on the next occurrence.
+ * GameScene also calls it for 'queenDamage' once the queen recovers (#375,
+ * queen-danger.ts), so that caption shows once per danger spell.
  *
  * Recurring captions (e.g. spiderRampage) never populate `triggered`, so calling
  * this for one of them is a harmless no-op.

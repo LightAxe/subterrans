@@ -158,8 +158,22 @@ export const LARVA_FOOD_PER_TICK = 1;
 export const QUEEN_MEAL_INTERVAL_TICKS = 1;
 /** Queen: fp per meal (= QUEEN_FOOD_PER_TICK). */
 export const QUEEN_MEAL_FP = QUEEN_FOOD_PER_TICK;
-/** Queen: dies when a meal fails this many ticks after her last meal. */
+/**
+ * Queen: dies when a meal fails this many ticks after her last meal. From V66
+ * (#375) her starvation is a health drain instead (QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS);
+ * a full-HP queen still dies at this tick.
+ */
 export const QUEEN_STARVE_AFTER_TICKS = STARVATION_GRACE_TICKS;
+
+/**
+ * #375 (V66) — while the queen cannot eat she loses 1 HP each time the ticks since
+ * her last meal reach a multiple of this, and dies (starvation) at 0 HP. 10 ×
+ * COMBAT_HP_QUEEN (30) = QUEEN_STARVE_AFTER_TICKS (300), so a full-HP queen starves
+ * on the same tick as before V66 and a wounded one sooner (a queen at 6 HP lasts 60
+ * ticks). queen-starvation-drain.test.ts pins the product; save.ts validates the
+ * queen's hunger clock against it.
+ */
+export const QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS = 10;
 
 /** Larva: tries to eat every tick. */
 export const LARVA_MEAL_INTERVAL_TICKS = 1;

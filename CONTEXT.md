@@ -172,7 +172,12 @@ if it would leave the colony's food below the queen's share
 walks home to eat, then goes back to its rally point or post. Since **#363
 (simVersion V58)** a **starving** one — within 600 ticks of starvation
 (`FIGHTER_STARVING_TICKS`; not the hunger profile's lethal `'starving'` state) —
-walks home from a fight too, when home can feed it. A starved ant leaves
+walks home from a fight too, when home can feed it. Since **#375 (simVersion
+V66)** the **queen** starves by losing health: while she cannot eat she loses 1 HP
+every 10 ticks and dies of starvation at 0 HP, so a full-HP queen lasts the same
+300 ticks and a wounded one less. A meal stops the loss; lost HP does not come back.
+The HUD's queen bar is her HP. Larvae, workers and fighters still die outright at
+their starvation tick. A starved ant leaves
 no food behind. The spider keeps its own hunger clock and eats only its kills.
 _Avoid_: **upkeep**, **rations** (except for eating from a carried load), **stamina**.
 

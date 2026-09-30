@@ -50,7 +50,11 @@ export interface HungerProfile {
   readonly mealIntervalTicks: number;
   /** Food (fp) one meal draws. 0 for a creature that does not eat stored food. */
   readonly mealFp: number;
-  /** A failed meal at or past this many ticks since the last meal is fatal. */
+  /**
+   * A failed meal at or past this many ticks since the last meal is fatal. (The
+   * queen from V66, #375, starves by HP drain instead — colony-system.ts
+   * feedQueenOrDrain; at full HP on this same tick.)
+   */
   readonly starveAfterTicks: number;
 }
 
@@ -64,7 +68,11 @@ export function hungerState(ticksSinceMeal: number, profile: HungerProfile): Hun
   return 'fed';
 }
 
-/** The queen: 2 fp every tick; dies 300 ticks after her last meal. */
+/**
+ * The queen: 2 fp every tick; dies 300 ticks after her last meal. From V66 (#375)
+ * her starvation is an HP drain (colony-system.ts feedQueenOrDrain): a full-HP
+ * queen still dies 300 ticks after, a wounded one sooner.
+ */
 export const QUEEN_HUNGER: HungerProfile = {
   mealIntervalTicks: QUEEN_MEAL_INTERVAL_TICKS,
   mealFp: QUEEN_MEAL_FP,
@@ -196,7 +204,9 @@ export function ticksSinceMeal(world: WorldState, id: EntityId): number {
 /**
  * Between ticks (render, save dialog, tooling): how many more failed meals ant
  * `id` survives, i.e. the pre-V50 starvation countdown. `profile.starveAfterTicks`
- * right after a meal, one less per missed meal, 0 at death. Between ticks,
+ * right after a meal, one less per missed meal, 0 at death — except the queen from
+ * V66 (#375), who starves by HP drain and so, when wounded, dies while this is
+ * still above 0 (feedQueenOrDrain). Between ticks,
  * world.tick is the NEXT tick to simulate, so the last consumption step ran at
  * world.tick − 1.
  */

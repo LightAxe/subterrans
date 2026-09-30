@@ -1487,7 +1487,28 @@ export const SIM_VERSION_V64_AUTO_DEFENCE = 64 as const;
  * (V50).
  */
 export const SIM_VERSION_V65_ALARM_INVASION = 65 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V65_ALARM_INVASION;
+
+/**
+ * #375 (V66) — the queen starves by losing health. Up to V65 a queen who could not
+ * eat died outright once QUEEN_STARVE_AFTER_TICKS (300) passed since her last meal,
+ * whatever her HP, so the HUD's queen bar had to show hunger, and a queen at 6/30 HP
+ * read 100%. From V66 (every colony alike — CLNY-08), while she cannot eat she
+ * loses 1 HP (`ants.hp`, not the home-ground combat buffer) each time the ticks
+ * since her last meal reach a multiple of QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS (10),
+ * and dies at 0 HP — a starvation death (despawnAnt 'starvation', so queen_death
+ * still reports cause Starvation). A full-HP queen (COMBAT_HP_QUEEN 30) dies on the
+ * same tick as at V65; a wounded one sooner, and a hungry one hit in combat dies
+ * sooner too. A meal stops the drain and restarts the interval (ticks since meal
+ * restart from 1); lost HP does not come back — ants have never regenerated HP, and
+ * V66 does not change that. Larvae, workers and fighters keep their V65 starvation
+ * (death at their starve-after). The HUD shows the queen's HP (render only).
+ * The drain is keyed on the existing hunger clock (`ants.lastMealTick`), so there is
+ * no new serialized field, command, world.rngState draw, entity-ID advance or
+ * tick-order change. A V65 save replays byte-identically. MIN_ACCEPTED is UNCHANGED
+ * (V50).
+ */
+export const SIM_VERSION_V66_QUEEN_STARVES_HP = 66 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V66_QUEEN_STARVES_HP;
 
 /**
  * S2 — AI colony state machine states.

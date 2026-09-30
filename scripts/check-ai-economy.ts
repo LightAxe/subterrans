@@ -75,8 +75,13 @@ register(
 const { createScenario } = await import('../src/sim/scenario.js');
 const { tick } = await import('../src/sim/tick.js');
 const { GameOutcome } = await import('../src/sim/game-over.js');
-const { PLAYER_COLONY_ID, ENEMY_COLONY_ID, MATCH_TIMEOUT_TICKS, FOOD_PICKUP_AMOUNT } =
-  await import('../src/sim/constants.js');
+const {
+  PLAYER_COLONY_ID,
+  ENEMY_COLONY_ID,
+  MATCH_TIMEOUT_TICKS,
+  FOOD_PICKUP_AMOUNT,
+  QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
+} = await import('../src/sim/constants.js');
 const { runAIController } = await import('../src/render/ai-controller.js');
 const {
   colonyFoodTotal,
@@ -87,6 +92,7 @@ const {
 } = await import('../src/sim/food/food-api.js');
 const { ChamberType, AntTask, FightingSubState, PheromoneType } =
   await import('../src/sim/enums.js');
+const { SIM_VERSION_V66_QUEEN_STARVES_HP } = await import('../src/sim/types.js');
 const { isAlive } = await import('../src/sim/ant/ant-store.js');
 const { mealsUntilStarvation, QUEEN_HUNGER, workerHungerProfile } =
   await import('../src/sim/hunger.js');
@@ -411,11 +417,24 @@ function entranceDanger(world: WorldState, colonyId: number): number {
  * `lastMealTick` — so, read right after the death tick, a meals-until-starvation
  * of 0 or less means starvation and anything else means she was killed.
  * (Pre-V50 this read the equivalent `colony.queenStarvationTimer <= 0`.)
+ *
+ * From V66 (#375) starvation drains her HP instead, so a wounded queen starves
+ * before the clock runs out. The drain kills her only at step 3 of a tick on which
+ * she missed a meal and the ticks since her last meal reached a multiple of
+ * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS, and only when she went into that tick at
+ * 1 HP (`hpBefore`); combat runs later in the tick and a dead queen takes no
+ * blows. Any other death is a kill.
  */
-function queenDeathCause(world: WorldState, colony: ColonyRecord): string {
-  return mealsUntilStarvation(world, colony.queenEntityId, QUEEN_HUNGER) <= 0
-    ? 'Starvation'
-    : 'Killed';
+function queenDeathCause(world: WorldState, colony: ColonyRecord, hpBefore: number): string {
+  const qid = colony.queenEntityId;
+  if (world.simVersion >= SIM_VERSION_V66_QUEEN_STARVES_HP) {
+    // Between ticks: the death tick's consumption step ran at world.tick − 1.
+    const sinceMeal = world.tick - 1 - world.ants.lastMealTick[qid]!;
+    return sinceMeal > 0 && sinceMeal % QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS === 0 && hpBefore <= 1
+      ? 'Starvation'
+      : 'Killed';
+  }
+  return mealsUntilStarvation(world, qid, QUEEN_HUNGER) <= 0 ? 'Starvation' : 'Killed';
 }
 
 /**
@@ -554,6 +573,8 @@ function runSeed(seed: number): SeedResult {
     runAIController(world, ENEMY_COLONY_ID);
     if (BOTH_AI) runAIController(world, PLAYER_COLONY_ID);
     const enemyQueenAliveBefore = isAlive(world.ants, enemy.queenEntityId);
+    const enemyQueenHpBefore = world.ants.hp[enemy.queenEntityId]!;
+    const playerQueenHpBefore = world.ants.hp[player.queenEntityId]!;
     enemyBefore.length = 0;
     for (const id of enemy.workers) if (isAlive(world.ants, id)) enemyBefore.push(id);
     playerBefore.length = 0;
@@ -582,11 +603,11 @@ function runSeed(seed: number): SeedResult {
     const playerQueenAlive = isAlive(world.ants, player.queenEntityId);
     if (!enemyQueenAlive && res.enemyDeathTick === null) {
       res.enemyDeathTick = world.tick;
-      res.enemyDeathCause = queenDeathCause(world, enemy);
+      res.enemyDeathCause = queenDeathCause(world, enemy, enemyQueenHpBefore);
     }
     if (!playerQueenAlive && res.playerDeathTick === null) {
       res.playerDeathTick = world.tick;
-      res.playerDeathCause = queenDeathCause(world, player);
+      res.playerDeathCause = queenDeathCause(world, player, playerQueenHpBefore);
     }
 
     if (enemyQueenAlive) {

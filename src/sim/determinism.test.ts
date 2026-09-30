@@ -26,6 +26,7 @@ import {
 import { AntTask, PheromoneType, ForagingSubState, ChamberType, NursingSubState } from './enums.js';
 import {
   WORKER_LIFESPAN_TICKS,
+  COMBAT_HP_QUEEN,
   WORKER_BASE_SPEED,
   STARVATION_GRACE_TICKS,
   PLAYER_COLONY_ID,
@@ -427,8 +428,8 @@ describe('Phase 6 SC 1: queen → egg → larva → worker pipeline', () => {
 // ---------------------------------------------------------------------------
 
 describe('Phase 6 SC 2: starvation cascade', () => {
-  // Test 7: Unfed queen dies after STARVATION_GRACE_TICKS
-  it('Test 7: unfed queen dies after STARVATION_GRACE_TICKS + 1 ticks', () => {
+  // Test 7: an unfed full-HP queen dies on her STARVATION_GRACE_TICKS-th unfed tick
+  it('Test 7: unfed full-HP queen survives STARVATION_GRACE_TICKS − 1 ticks and dies on the next', () => {
     const world = createWorldState(42);
     const queenId = allocateEntityId(world);
     initAnt(world.ants, queenId, {
@@ -439,6 +440,7 @@ describe('Phase 6 SC 2: starvation cascade', () => {
       subTask: 0,
       speed: 0,
       lifespan: WORKER_LIFESPAN_TICKS,
+      hp: COMBAT_HP_QUEEN, // #375: from V66 she starves by HP; full HP = the same tick
     });
     world.colonies[1] = createColonyRecord(1, queenId);
     setPoolFoodForTest(world, world.colonies[1], 0); // no food — queen cannot eat
@@ -449,11 +451,12 @@ describe('Phase 6 SC 2: starvation cascade', () => {
       STARVATION_GRACE_TICKS,
     ); // timer at full grace
 
-    // Run STARVATION_GRACE_TICKS + 1 ticks — timer decrements by 1 each tick until <= 0 → death
-    for (let t = 0; t < STARVATION_GRACE_TICKS + 1; t++) {
+    // She survives STARVATION_GRACE_TICKS − 1 unfed ticks and dies on the next.
+    for (let t = 0; t < STARVATION_GRACE_TICKS - 1; t++) {
       tick(world, []);
     }
-
+    expect(world.ants.alive[queenId]).toBe(1);
+    tick(world, []);
     expect(world.ants.alive[queenId]).toBe(0);
     expect(world.colonies[1].defeated).toBe(true);
   });

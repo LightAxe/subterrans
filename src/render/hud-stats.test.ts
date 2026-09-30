@@ -19,7 +19,7 @@ import {
 import type { HudStats } from './hud-stats.js';
 import { createWorldState } from '../sim/types.js';
 import type { WorldState } from '../sim/types.js';
-import { allocateEntityId } from '../sim/types.js';
+import { allocateEntityId, SIM_VERSION_V66_QUEEN_STARVES_HP } from '../sim/types.js';
 import { initAnt } from '../sim/ant/ant-store.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
@@ -28,6 +28,7 @@ import {
   STARVATION_GRACE_TICKS,
   BASE_FOOD_STORAGE_CAPACITY,
   FOOD_CHAMBER_CAPACITY,
+  COMBAT_HP_QUEEN,
 } from '../sim/constants.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { QUEEN_HUNGER } from '../sim/hunger.js';
@@ -40,7 +41,13 @@ import {
 function setupWorld(): { world: WorldState; colony: ColonyRecord; queenId: number } {
   const world = createWorldState(64);
   const queenId = allocateEntityId(world);
-  initAnt(world.ants, queenId, { colonyId: 1, posX: 0, posY: 0, task: AntTask.Idle });
+  initAnt(world.ants, queenId, {
+    colonyId: 1,
+    posX: 0,
+    posY: 0,
+    task: AntTask.Idle,
+    hp: COMBAT_HP_QUEEN,
+  });
   const colony = createColonyRecord(1, queenId);
   colony.entrances = [];
   colony.rallyPoint = null;
@@ -126,38 +133,64 @@ describe('computeHudStats', () => {
     expect(s.foodCapacity).toBe(expected);
   });
 
-  it('queenHealthPct = 100 at full grace', () => {
+  // #375 — the bar is the queen's HP. From V66 starvation drains her HP, so hunger
+  // alone never moves it; a pre-V66 world (instant starvation) shows the lower of
+  // HP and meals-until-starvation.
+  it('queenHealthPct = 100 at full HP and fed', () => {
     const { world, colony, queenId } = setupWorld();
     setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, STARVATION_GRACE_TICKS);
     expect(computeHudStats(world, colony).queenHealthPct).toBe(100);
   });
 
-  it('queenHealthPct scales linearly', () => {
+  it('queenHealthPct is HP / COMBAT_HP_QUEEN (the issue repro: 6/30 reads 20, not 100)', () => {
     const { world, colony, queenId } = setupWorld();
-    setMealsUntilStarvationForTest(
-      world,
-      queenId,
-      QUEEN_HUNGER,
-      Math.floor(STARVATION_GRACE_TICKS / 2),
-    );
+    setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, STARVATION_GRACE_TICKS);
+    world.ants.hp[queenId] = 6;
+    expect(computeHudStats(world, colony).queenHealthPct).toBe(20);
+    world.ants.hp[queenId] = 15;
+    expect(computeHudStats(world, colony).queenHealthPct).toBe(50);
+    world.ants.hp[queenId] = 29;
+    expect(computeHudStats(world, colony).queenHealthPct).toBe(97);
+  });
+
+  it('V66: hunger alone does not move the bar (only the HP it drains does)', () => {
+    const { world, colony, queenId } = setupWorld();
+    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V66_QUEEN_STARVES_HP);
+    setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, 5);
+    expect(computeHudStats(world, colony).queenHealthPct).toBe(100);
+    world.ants.hp[queenId] = 12;
+    expect(computeHudStats(world, colony).queenHealthPct).toBe(40);
+  });
+
+  it('pre-V66: the bar shows the lower of HP and meals-until-starvation', () => {
+    const { world, colony, queenId } = setupWorld();
+    world.simVersion = SIM_VERSION_V66_QUEEN_STARVES_HP - 1;
+    setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, STARVATION_GRACE_TICKS >> 1);
+    expect(computeHudStats(world, colony).queenHealthPct).toBe(50); // hunger lower
+    world.ants.hp[queenId] = 6;
+    expect(computeHudStats(world, colony).queenHealthPct).toBe(20); // HP lower
+    setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, 0);
+    expect(computeHudStats(world, colony).queenHealthPct).toBe(0);
+  });
+
+  it('the home-ground combat buffer is not counted', () => {
+    const { world, colony, queenId } = setupWorld();
+    setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, STARVATION_GRACE_TICKS);
+    world.ants.hp[queenId] = 15;
+    world.ants.homeGroundBonusHp[queenId] = 10;
     expect(computeHudStats(world, colony).queenHealthPct).toBe(50);
   });
 
-  it('queenHealthPct = 0 when timer at or below 0', () => {
-    const { world, colony, queenId } = setupWorld();
-    setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, 0);
-    expect(computeHudStats(world, colony).queenHealthPct).toBe(0);
-    setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, -50);
-    expect(computeHudStats(world, colony).queenHealthPct).toBe(0);
-  });
-
-  it('queenHealthPct clamps to 100 when timer above grace', () => {
+  it('queenHealthPct clamps to [0, 100]', () => {
     const { world, colony, queenId } = setupWorld();
     setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, STARVATION_GRACE_TICKS * 5);
+    world.ants.hp[queenId] = COMBAT_HP_QUEEN * 2;
     expect(computeHudStats(world, colony).queenHealthPct).toBe(100);
+    world.ants.hp[queenId] = -4;
+    expect(computeHudStats(world, colony).queenHealthPct).toBe(0);
   });
 
-  it('queenHealthPct = 0 when queen is dead, even if timer > 0', () => {
+  it('queenHealthPct = 0 when queen is dead, even at full HP', () => {
     const { world, colony, queenId } = setupWorld();
     setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, STARVATION_GRACE_TICKS);
     world.ants.alive[queenId] = 0; // HUD fixture: stage a dead slot, not a sim death

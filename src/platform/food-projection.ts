@@ -71,7 +71,8 @@ export const PROJECTION_STRIPPED_ANT_KEYS: readonly string[] = [
  * Ticks until starvation for an ant whose hunger the sim tracks today (the
  * queen and larvae), or `null` for every other ant. The value is the pre-V50
  * countdown: STARVATION_GRACE_TICKS right after a successful meal, minus one per
- * failed meal; the ant dies when a failed meal takes it to 0. Since V50 (#290 PR
+ * failed meal; the ant dies when a failed meal takes it to 0 (the queen from V66,
+ * #375, dies of an HP drain instead, at the latest then). Since V50 (#290 PR
  * 2) it is derived from the count-up clock `ants.lastMealTick`
  * (`mealsUntilStarvation`), which must give the same number the PR 1 build read
  * off `queenStarvationTimer` / `starvationTimer`.
