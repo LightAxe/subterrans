@@ -16,6 +16,7 @@ import {
   LATEST_SIM_VERSION,
   SIM_VERSION_V50_LOCATED_FOOD,
   SIM_VERSION_V51_UNIFIED_HUNGER,
+  SIM_VERSION_V66_QUEEN_STARVES_HP,
   SIM_VERSION_V52_RAIDING,
   SIM_VERSION_V60_RAID_ORDERS,
 } from '../sim/types.js';
@@ -66,6 +67,8 @@ import {
   UNDERGROUND_GRID_WIDTH,
   UNDERGROUND_GRID_HEIGHT,
   PLAYER_COLONY_ID,
+  COMBAT_HP_QUEEN,
+  QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
 } from '../sim/constants.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { AntTask, ChamberType, FightingSubState, RaidType, isRaidType } from '../sim/enums.js';
@@ -2149,15 +2152,21 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   // the ant would never eat again, or never starve. (A worker's kind is read from
   // its task at the check, so one stood down from Fighting since its last meal
   // may be past its current kind's starve-after until step 3 next runs: the
-  // window uses the larger of the two.)
+  // window uses the larger of the two.) From V66 (#375) the queen starves by HP
+  // drain: at most COMBAT_HP_QUEEN drains, one per QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
+  // so that product is her window (today equal to her starve-after, 300).
   const workersEat = world.simVersion >= SIM_VERSION_V51_UNIFIED_HUNGER;
+  const queenStarveAfter =
+    world.simVersion >= SIM_VERSION_V66_QUEEN_STARVES_HP
+      ? COMBAT_HP_QUEEN * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS
+      : QUEEN_HUNGER.starveAfterTicks;
   const workerStarveAfter = Math.max(
     WORKER_HUNGER.starveAfterTicks,
     FIGHTER_HUNGER.starveAfterTicks,
   );
   for (const c of Object.values(world.colonies)) {
     const eaters: Array<[number, number, string]> = [
-      [c.queenEntityId, QUEEN_HUNGER.starveAfterTicks, 'queen'],
+      [c.queenEntityId, queenStarveAfter, 'queen'],
       ...c.larvae.map((id): [number, number, string] => [
         id,
         LARVA_HUNGER.starveAfterTicks,
@@ -2169,6 +2178,17 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
         'worker',
       ]),
     ];
+    // #375 — the V66 queen window above holds only while her HP never exceeds
+    // COMBAT_HP_QUEEN (she spawns at it and regenerates only up to it).
+    if (
+      world.simVersion >= SIM_VERSION_V66_QUEEN_STARVES_HP &&
+      world.ants.alive[c.queenEntityId] === 1 &&
+      world.ants.hp[c.queenEntityId]! > COMBAT_HP_QUEEN
+    ) {
+      throw new Error(
+        `Invalid ants.hp[${c.queenEntityId}] (colony ${c.colonyId} queen): above COMBAT_HP_QUEEN`,
+      );
+    }
     for (const [id, starveAfter, what] of eaters) {
       if (world.ants.alive[id] !== 1) continue;
       const last = world.ants.lastMealTick[id]!;

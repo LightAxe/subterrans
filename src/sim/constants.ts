@@ -154,12 +154,44 @@ export const LARVA_FOOD_PER_TICK = 1;
 // Workers and fighters eat from V51 (#290 PR 4): one meal every interval, from
 // the colony stores at home or from their own load away (hunger.ts).
 
-/** Queen: tries to eat every tick. */
+/**
+ * Queen: tries to eat every tick. The V66 fed regeneration (#375,
+ * QUEEN_FED_HP_REGEN_INTERVAL_TICKS) counts on it: she heals on the ticks she eats
+ * that are multiples of that interval, which are regular only while she eats every
+ * tick (queen-starvation-drain.test.ts pins this at 1).
+ */
 export const QUEEN_MEAL_INTERVAL_TICKS = 1;
 /** Queen: fp per meal (= QUEEN_FOOD_PER_TICK). */
 export const QUEEN_MEAL_FP = QUEEN_FOOD_PER_TICK;
-/** Queen: dies when a meal fails this many ticks after her last meal. */
+/**
+ * Queen: dies when a meal fails this many ticks after her last meal. From V66
+ * (#375) her starvation is a health drain instead (QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS);
+ * a full-HP queen still dies at this tick.
+ */
 export const QUEEN_STARVE_AFTER_TICKS = STARVATION_GRACE_TICKS;
+
+/**
+ * #375 (V66) — while the queen cannot eat she loses 1 HP each time the ticks since
+ * her last meal reach a multiple of this, and dies (starvation) at 0 HP. 10 ×
+ * COMBAT_HP_QUEEN (30) = QUEEN_STARVE_AFTER_TICKS (300), so a full-HP queen starves
+ * on the same tick as before V66 and a wounded one sooner (a queen at 6 HP lasts 60
+ * ticks). queen-starvation-drain.test.ts pins the product; save.ts validates the
+ * queen's hunger clock against it, so LOWERING this is a save wipe, not a bare
+ * retune (see COMBAT_HP_QUEEN).
+ */
+export const QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS = 10;
+
+/**
+ * #375 (V66) — while the queen is fed she regains 1 HP on each tick she eats whose
+ * number is a multiple of this, up to COMBAT_HP_QUEEN (her max): twice the drain
+ * rate, 1 → 30 HP in 145 ticks. Keyed on the ticks she eats, so it relies on
+ * QUEEN_MEAL_INTERVAL_TICKS = 1. Short hunger bursts heal back; a long famine still
+ * kills. Heals combat wounds too (a fighter's 4 per 5 ticks still outpaces it).
+ * Tuned by the #375 AI-economy sweep (PR #386): the AI's famines run 40–90 ticks
+ * with fed gaps of 60–150, and slower rates (10–200) left its queen starving 4–11
+ * times per 100 Normal seeds against V65's 1.
+ */
+export const QUEEN_FED_HP_REGEN_INTERVAL_TICKS = 5;
 
 /** Larva: tries to eat every tick. */
 export const LARVA_MEAL_INTERVAL_TICKS = 1;
@@ -1059,7 +1091,11 @@ export const COMBAT_DAMAGE_WORKER = 1 as const;
 export const COMBAT_DAMAGE_QUEEN = 6 as const;
 
 /** Base HP for the queen. Higher than workers so it takes a coordinated group of fighters
- *  to kill her. Flagged TBD for S6-Tune. */
+ *  to kill her. Flagged TBD for S6-Tune. #375 (V66): her starvation window is this ×
+ *  QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS, and save.ts validates a V66 queen's HP and
+ *  hunger clock against it — LOWERING it (or the drain interval) would make saves fail
+ *  to load: a queen above the new value, or one mid-famine past the shrunken window
+ *  (a save wipe; treat as a simVersion change, not a bare retune). */
 export const COMBAT_HP_QUEEN = 30 as const;
 
 // ---------------------------------------------------------------------------

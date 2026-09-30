@@ -51,6 +51,7 @@ import {
   FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP,
   BASE_FOOD_STORAGE_CAPACITY,
   PLAYER_COLONY_ID,
+  COMBAT_HP_QUEEN,
 } from '../constants.js';
 import { createUndergroundGrid, ugSet, UndergroundTileState } from '../terrain.js';
 import { FP_SHIFT } from '../fixed.js';
@@ -79,6 +80,7 @@ function setupWorldWithQueen(poolFp = 1000): { world: WorldState; colony: Colony
     posX: 256,
     posY: 256,
     task: AntTask.Idle,
+    hp: COMBAT_HP_QUEEN, // as createScenario spawns her; V66 starves her by HP (#375)
   });
 
   const colony = createColonyRecord(COLONY_ID, queenId);

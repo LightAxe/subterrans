@@ -38,6 +38,8 @@ import {
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
   MAX_ENTITIES,
+  COMBAT_HP_QUEEN,
+  QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
 } from '../sim/constants.js';
 import type { SimCommand } from '../sim/commands.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
@@ -61,7 +63,7 @@ import {
   setPoolFoodForTest,
 } from '../sim/food/food-test-utils.js';
 import { QUEEN_HUNGER } from '../sim/hunger.js';
-import { SIM_VERSION_V50_LOCATED_FOOD } from '../sim/types.js';
+import { SIM_VERSION_V50_LOCATED_FOOD, SIM_VERSION_V66_QUEEN_STARVES_HP } from '../sim/types.js';
 import { pheromoneKeyIsSurface } from '../sim/pheromone/pheromone-store.js';
 
 describe('save.ts (SCEN-04 + SCEN-06)', () => {
@@ -1555,6 +1557,32 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const s = serializeWorldState(w);
       const w2 = deserializeWorldState(s);
       expect(w2.tick).toBe(1_000_000);
+    });
+    it('#375 V66: a queen mid-famine is valid up to COMBAT_HP_QUEEN × drain interval since her meal', () => {
+      const w = createScenario(42);
+      expect(w.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V66_QUEEN_STARVES_HP);
+      // eslint-disable-next-line no-restricted-syntax -- test fixture: stage the world tick
+      w.tick = 1000;
+      for (const c of Object.values(w.colonies)) {
+        setMealsUntilStarvationForTest(w, c.queenEntityId, QUEEN_HUNGER, 300);
+        for (const id of c.workers) w.ants.lastMealTick[id] = w.tick - 1;
+      }
+      const q = w.colonies[PLAYER_COLONY_ID]!.queenEntityId;
+      w.ants.hp[q] = 1; // her last drain is due on the next tick
+      w.ants.lastMealTick[q] = w.tick - COMBAT_HP_QUEEN * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS;
+      expect(() => deserializeWorldState(serializeWorldState(w))).not.toThrow();
+      w.ants.lastMealTick[q] -= 1;
+      expect(() => deserializeWorldState(serializeWorldState(w))).toThrow(/lastMealTick/);
+    });
+    it('#375 V66: rejects a live queen above COMBAT_HP_QUEEN (the queen window assumes the cap)', () => {
+      const w = createScenario(42);
+      const q = w.colonies[PLAYER_COLONY_ID]!.queenEntityId;
+      w.ants.hp[q] = COMBAT_HP_QUEEN;
+      expect(() => deserializeWorldState(serializeWorldState(w))).not.toThrow();
+      w.ants.hp[q] = COMBAT_HP_QUEEN + 1;
+      expect(() => deserializeWorldState(serializeWorldState(w))).toThrow(/above COMBAT_HP_QUEEN/);
+      w.simVersion = SIM_VERSION_V66_QUEEN_STARVES_HP - 1; // pre-V66: not checked
+      expect(() => deserializeWorldState(serializeWorldState(w))).not.toThrow();
     });
     it('#290 accepts tick 2^31 − 1 and rejects tick 2^31 (int32 tick domain for Int32 tick columns)', () => {
       const w = createScenario(42);

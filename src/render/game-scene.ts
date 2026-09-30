@@ -213,6 +213,7 @@ import {
   resetGatheringWarningState,
 } from './enemy-gathering.js';
 import { checkAndTrigger, resetCaptions, type CaptionKey } from './onboarding-captions.js';
+import { advanceQueenDanger, createQueenDangerState } from './queen-danger.js';
 // Stage 3b controls rework (issue #18, #3) — first-use navigation hints.
 import {
   triggerReactiveHint,
@@ -798,7 +799,8 @@ export class GameScene extends Phaser.Scene {
 
   // S6 — render-side scratch (per-session, reset in resetSessionState).
   private lastProcessedEventTick = -1; // tick-based cursor for consumeEventsForRender
-  private prevQueenCombinedHp: number | null = null; // queen HP tracking for damage pulse
+  // #375 — queen HP tracking for the damage pulse and the re-arming danger caption.
+  private queenDanger = createQueenDangerState();
   private queenStarvationTriggered = false; // starvation onset caption/pulse guard
   // #290 PR 6 — raid captions: last-seen player raid counters + per-caption
   // throttle. Re-baselined in finishBoot (fresh or loaded world).
@@ -1514,7 +1516,7 @@ export class GameScene extends Phaser.Scene {
     this.lastShadowDiffTick.clear();
     // S6 — reset per-session render-side scratch.
     this.lastProcessedEventTick = -1;
-    this.prevQueenCombinedHp = null;
+    this.queenDanger = createQueenDangerState();
     this.queenStarvationTriggered = false;
     this.contestedGlowFrames.clear();
     this.undergroundGlowFrames.clear();
@@ -1632,24 +1634,16 @@ export class GameScene extends Phaser.Scene {
     if (!playerColony) return;
     const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9 | null;
 
-    // Queen damage pulse.
-    const queenId = playerColony.queenEntityId;
-    const hp = this.world.ants.hp[queenId] ?? 0;
-    const bonusHp = this.world.ants.homeGroundBonusHp[queenId] ?? 0;
-    const combinedHp = hp + bonusHp;
-    if (
-      this.prevQueenCombinedHp !== null &&
-      combinedHp < this.prevQueenCombinedHp &&
-      this.world.tick > QUEEN_DAMAGE_SUPPRESS_TICKS
-    ) {
-      triggerQueenDamagePulse(this.cameras.main);
-      // Caption #9: first queen damage.
-      const captionText = checkAndTrigger('queenDamage');
-      if (captionText && uiScene) {
-        uiScene.showCaption(captionText, this.layout.w / 2, this.layout.h / 2 - 40, 'queenDamage');
-      }
+    // Queen damage pulse. From V66 (#375) a starving queen loses HP too, so the
+    // pulse and "Your queen is in danger." cover both causes. The caption re-arms
+    // once she has recovered (queen-danger.ts: back at full HP (V66), fed, and unhurt
+    // for a while).
+    const danger = advanceQueenDanger(this.queenDanger, this.world, playerColony);
+    if (danger.pulse) triggerQueenDamagePulse(this.cameras.main);
+    // Caption #9: queen damage (combat or starvation), once per danger spell.
+    if (danger.caption && uiScene) {
+      uiScene.showCaption(danger.caption, this.layout.w / 2, this.layout.h / 2 - 40, 'queenDamage');
     }
-    this.prevQueenCombinedHp = combinedHp;
 
     // Starvation onset. The queen's meals-until-starvation is STARVATION_GRACE_TICKS
     // (300) while she is fed and drops only when she fails to eat; below it means
