@@ -32,8 +32,8 @@ import {
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import type { WorldState } from '../sim/types.js';
 import { ChamberType } from '../sim/enums.js';
-import { FP_SHIFT } from '../sim/fixed.js';
 import { colonyPoolTileX } from '../sim/food/food-api.js';
+import { chamberCenterTile } from './chamber-tiles.js';
 import { loadSettings } from '../platform/settings.js';
 
 // ---------------------------------------------------------------------------
@@ -274,10 +274,8 @@ export function undergroundNestCenterPx(
   if (colony === undefined) return null;
   for (const ch of colony.chambers) {
     if (ch.chamberType !== ChamberType.Queen) continue;
-    return {
-      x: ((ch.posX >> FP_SHIFT) + ch.width / 2) * TILE_SIZE_PX,
-      y: ((ch.posY >> FP_SHIFT) + ch.height / 2) * TILE_SIZE_PX,
-    };
+    const c = chamberCenterTile(ch);
+    return { x: c.tileX * TILE_SIZE_PX, y: c.tileY * TILE_SIZE_PX };
   }
   const entrances = colony.entrances ?? [];
   const entrance = entrances.find((e) => e.isOpen) ?? entrances[0];

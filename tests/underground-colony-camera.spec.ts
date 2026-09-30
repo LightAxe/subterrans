@@ -19,12 +19,24 @@ import { test, expect, type Page } from '@playwright/test';
 import { activeView, clickCanvasRect, settleToPlaying, waitForUiHook } from './helpers/boot.js';
 import { COLONY_TOGGLE_RECT, VIEW_TOGGLE_RECT } from './helpers/geometry.js';
 import { TILE_SIZE_PX } from '../src/render/sprites.js';
+import { UNDERGROUND_WORLD_PX_W } from '../src/render/camera.js';
 
 interface CameraState {
   activeView: 'surface' | 'underground';
   undergroundColonyId: number;
-  surface: { centerX: number; centerY: number; zoom: number };
-  underground: { centerX: number; centerY: number; zoom: number };
+  /** viewW: the visible world width (world px) at the camera's zoom — the
+   *  logical viewport over the zoom, read from the game (not the canvas's
+   *  backing-store size, which a device pixel ratio would scale). */
+  surface: { centerX: number; centerY: number; zoom: number; viewW: number };
+  underground: { centerX: number; centerY: number; zoom: number; viewW: number };
+}
+
+/** Where the camera clamp lets a centre at `x` sit in a world `worldW` px wide,
+ *  with `viewW` px of it visible (camera-adapter.ts clampCameraView): centred
+ *  when the whole world fits the view, else held half a view in from each edge. */
+function clampedCenter(x: number, viewW: number, worldW: number): number {
+  if (worldW <= viewW) return worldW / 2;
+  return Math.max(viewW / 2, Math.min(worldW - viewW / 2, x));
 }
 
 interface TestHook {
@@ -84,26 +96,32 @@ for (const [first, back] of [
         [],
     );
     expect(doors.length).toBeGreaterThan(0);
-    const enemyDoorX = (doors[0]!.tileX + 0.5) * TILE_SIZE_PX;
-    // The canvas's logical width, for half the visible world's width at a zoom.
-    const canvasW = await page.evaluate(() => document.querySelector('canvas')!.width);
+    // The entrance the camera looks for: the first open one, else the first.
+    const door = doors.find((d) => d.isOpen) ?? doors[0]!;
+    const enemyDoorX = (door.tileX + 0.5) * TILE_SIZE_PX;
 
     // Underground, on the player's own nest (the camera X-linked from the surface).
     await clickCanvasRect(page, VIEW_TOGGLE_RECT);
     await expect.poll(() => activeView(page)).toBe('underground');
     const own = await cameraState(page);
-    const halfView = canvasW / 2 / own.underground.zoom;
+    const viewW = own.underground.viewW;
     // The enemy's entrance is nowhere near the player's view to begin with.
-    expect(Math.abs(own.underground.centerX - enemyDoorX)).toBeGreaterThan(halfView);
+    expect(Math.abs(own.underground.centerX - enemyDoorX)).toBeGreaterThan(viewW / 2);
 
     // First look at the enemy's underground: centred on its nest.
     await toggleColony(page, first);
     await expect.poll(() => undergroundLabel(page)).toBe('Enemy Colony');
     const enemy = await cameraState(page);
     expect(enemy.undergroundColonyId).not.toBe(own.undergroundColonyId);
-    // Its entrance column is in view, away from the edge (the clamp may hold the
-    // camera short of centring it exactly at the world's edge).
-    expect(Math.abs(enemy.underground.centerX - enemyDoorX)).toBeLessThan(halfView - TILE_SIZE_PX);
+    // Centred on its entrance column (a fresh game: no chambers yet), exactly, as
+    // far as the clamp allows at the world's edge; at the same "shaft at the top"
+    // depth a first look at the player's own nest has.
+    expect(enemy.underground.centerX).toBe(
+      clampedCenter(enemyDoorX, viewW, UNDERGROUND_WORLD_PX_W),
+    );
+    expect(enemy.underground.centerY).toBe(own.underground.centerY);
+    // And so its entrance is in view.
+    expect(Math.abs(enemy.underground.centerX - enemyDoorX)).toBeLessThan(viewW / 2);
     // Zoom and the surface camera are untouched.
     expect(enemy.underground.zoom).toBe(own.underground.zoom);
     expect(enemy.surface).toEqual(own.surface);

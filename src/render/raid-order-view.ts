@@ -278,9 +278,33 @@ export function raidBadgeStackLiftWorldPx(zoom: number): number {
 }
 
 /**
+ * #378 — the world-px box the badge for the rally tile at (wx, wy) covers at
+ * camera zoom `zoom`: RAID_BADGE_SCREEN_PX on screen, centred over the tile to a
+ * whole screen pixel (the odd 19-px badge over the even 16-px tile at 1x would
+ * otherwise sit half a pixel off the grid, its letter cells blurring across pixel
+ * edges at exactly the zoom it is for), 1 screen px above it. Zoomed out it reaches
+ * well past the tile (40 world px above it at 0.5x), so it is culled by this box,
+ * not by the tile's.
+ */
+export function raidBadgeWorldRect(
+  wx: number,
+  wy: number,
+  zoom: number,
+): { x: number; y: number; w: number; h: number } {
+  const k = worldPxPerScreenPx(zoom);
+  const side = RAID_BADGE_SCREEN_PX * k;
+  return {
+    x: wx + Math.floor((TILE_SIZE_PX / k - RAID_BADGE_SCREEN_PX) / 2) * k,
+    y: wy - side - RAID_BADGE_GAP_SCREEN_PX * k,
+    w: side,
+    h: side,
+  };
+}
+
+/**
  * Draw the raid-order badge for the rally tile whose top-left world pixel is
  * (wx, wy): a dark square centred just above the tile holding the order's
- * letter, RAID_BADGE_SCREEN_PX on screen at camera zoom `zoom`.
+ * letter, RAID_BADGE_SCREEN_PX on screen at camera zoom `zoom` (raidBadgeWorldRect).
  */
 export function drawRaidOrderBadge(
   gfx: GfxLike,
@@ -294,14 +318,9 @@ export function drawRaidOrderBadge(
 ): void {
   const o = raidOrderOption(type);
   const k = worldPxPerScreenPx(zoom);
-  const side = RAID_BADGE_SCREEN_PX * k;
   const cell = RAID_BADGE_CELL_SCREEN_PX * k;
   const inset = RAID_BADGE_BORDER_SCREEN_PX * k;
-  // Centred over the tile to a whole screen pixel: the odd 19-px badge over the
-  // even 16-px tile at 1x would otherwise sit half a pixel off the grid, and its
-  // letter cells would blur across pixel edges at exactly the zoom it is for.
-  const bx = wx + Math.floor((TILE_SIZE_PX / k - RAID_BADGE_SCREEN_PX) / 2) * k;
-  const by = wy - side - RAID_BADGE_GAP_SCREEN_PX * k;
+  const { x: bx, y: by, w: side } = raidBadgeWorldRect(wx, wy, zoom);
   gfx.fillStyle(0x101010, 0.9 * alpha);
   gfx.fillRect(bx, by, side, side);
   gfx.fillStyle(o.badgeColor, alpha);

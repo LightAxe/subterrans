@@ -82,6 +82,7 @@ import {
   setViewportSize,
   getViewportWidth,
   getViewportHeight,
+  viewWorldWidth,
 } from './camera-adapter.js';
 import { CameraController } from './camera-controller.js';
 import {
@@ -196,6 +197,7 @@ import {
   rallyTargetsEnemyEntrance,
   resetRaidCaptionState,
 } from './raid-captions.js';
+import { chamberAnchorTile } from './chamber-tiles.js';
 import {
   RAID_ORDER_CAPTION_SUPERSEDE_KEY,
   activeRaidOrder,
@@ -402,14 +404,16 @@ declare global {
        *  (touch-smoke.spec.ts): reads viewState, mutates nothing, crosses no
        *  sim/render boundary. Dev-build only. */
       getActiveZoom(): number;
-      /** #378 — the two cameras' centres (world px) and zooms, the active view and
-       *  the colony whose underground is on show, so a spec can assert where a
-       *  view/colony toggle put the camera. Reads viewState only. Dev-build only. */
+      /** #378 — the two cameras' centres (world px), zooms and visible world width
+       *  (world px, `viewW` — the logical viewport over the zoom, what the clamp
+       *  uses), the active view and the colony whose underground is on show, so a
+       *  spec can assert where a view/colony toggle put the camera. Reads viewState
+       *  only. Dev-build only. */
       getCameraState?(): {
         activeView: 'surface' | 'underground';
         undergroundColonyId: number;
-        surface: { centerX: number; centerY: number; zoom: number };
-        underground: { centerX: number; centerY: number; zoom: number };
+        surface: { centerX: number; centerY: number; zoom: number; viewW: number };
+        underground: { centerX: number; centerY: number; zoom: number; viewW: number };
       };
       /** True while any pause reason ('user' Space, 'menu', …) holds the loop.
        *  Render-side observability for the #311 same-frame Space burst e2e:
@@ -745,7 +749,12 @@ export class GameScene extends Phaser.Scene {
         ).zoom,
       getCameraState: () => {
         const vs = this.viewState;
-        const cam = (v: CameraView) => ({ centerX: v.centerX, centerY: v.centerY, zoom: v.zoom });
+        const cam = (v: CameraView) => ({
+          centerX: v.centerX,
+          centerY: v.centerY,
+          zoom: v.zoom,
+          viewW: viewWorldWidth(v.zoom),
+        });
         return {
           activeView: vs.activeView,
           undergroundColonyId: vs.activeUndergroundColonyId,
@@ -1684,8 +1693,8 @@ export class GameScene extends Phaser.Scene {
           (ch) => ch.chamberType === ChamberType.Queen,
         );
         if (queenChamber) {
-          const queenTileX = queenChamber.posX >> 8;
-          const queenTileY = queenChamber.posY >> 8;
+          // The flash aims from the Queen chamber's anchor (top-left) tile.
+          const { tileX: queenTileX, tileY: queenTileY } = chamberAnchorTile(queenChamber);
           const direction = inferFlashDirection(
             queenTileX,
             queenTileY,
