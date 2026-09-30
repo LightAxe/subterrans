@@ -43,7 +43,26 @@ export const RAID_REACH_WINDOW_SIDE = 2 * RAID_REACH_WINDOW_RADIUS + 1;
 const RAID_REACH_WINDOW_CELLS = RAID_REACH_WINDOW_SIDE * RAID_REACH_WINDOW_SIDE;
 import { createSurfaceMovementCache, type SurfaceMovementCache } from './surface-features.js';
 
+/** #373 (V65) — one colony's retreat field (ant/idle-reserve.ts computeNestRetreat):
+ *  valid only while `tick` equals world.tick. `dist` is each tile's tunnel distance
+ *  from the nearest intruder (-1 unreached); `label` the index of the part of the
+ *  nest it is in, among the parts with a retreat tile (-1 none); `dir` its step
+ *  (0..3, N/E/S/W) toward that part's retreat tile (-1 on the tile, or none);
+ *  `targetDist[part]` the retreat tile's `dist`; `qx`/`qy` the BFS queue. */
+export interface NestRetreatField {
+  tick: number;
+  dist: Int32Array;
+  label: Int32Array;
+  dir: Int32Array;
+  qx: Int32Array;
+  qy: Int32Array;
+  targetDist: number[];
+}
+
 export interface ScratchArena {
+  /** #373 (V65) — colonyId → its retreat field (ant/idle-reserve.ts), rebuilt at step
+   *  15b on every tick its nest is invaded; stamped with that tick. */
+  nestRetreat: Map<number, NestRetreatField>;
   /** combat.ts — sweep-and-pair sort buffers + spider on-tile list. */
   combat: {
     liveIdx: number[];
@@ -254,6 +273,7 @@ export function getScratch(world: WorldState): ScratchArena {
   let a = SCRATCH.get(world);
   if (a === undefined) {
     a = {
+      nestRetreat: new Map(),
       combat: {
         liveIdx: [],
         keyBySlot: new Int32Array(0),

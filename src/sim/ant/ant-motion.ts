@@ -755,3 +755,33 @@ export function tileSaturatedFor(
   probe[0] = 0; // leave the probe clear: every call stamps 1 on a clean cell
   return saturated;
 }
+
+/**
+ * #373 (V65) — move ant `id` one step of its speed in cardinal direction `d`
+ * (0..3: N, E, S, W — DIR_DX/DIR_DY) through the underground grid it is in. A
+ * cardinal step, so the underground passability guard reduces to the tile it
+ * crosses into: if that tile is not enterable for its task, it stays where it is
+ * (for a retreating shelterer a tile dug or marked since this tick's field was built
+ * cannot be, but the guard keeps the step honest). ant-movement.ts calls it with the
+ * direction idle-reserve.ts shelterRetreatDir returns.
+ */
+export function stepCardinalUnderground(world: WorldState, id: number, d: number): void {
+  const ants = world.ants;
+  const grid = world.undergroundGrids[ants.currentGridColonyId[id]!];
+  if (grid === undefined) return;
+  const speed = ants.speed[id]!;
+  const prevX = ants.posX[id]!;
+  const prevY = ants.posY[id]!;
+  const posX = prevX + DIR_DX[d]! * speed;
+  const posY = prevY + DIR_DY[d]! * speed;
+  const nx = posX >> FP_SHIFT;
+  const ny = posY >> FP_SHIFT;
+  if (
+    (nx !== prevX >> FP_SHIFT || ny !== prevY >> FP_SHIFT) &&
+    !canEnterUndergroundTile(grid, nx, ny, ants.task[id]! as AntTask)
+  ) {
+    return;
+  }
+  ants.posX[id] = posX;
+  ants.posY[id] = posY;
+}

@@ -741,7 +741,8 @@ export const SIM_VERSION_V41_DEATH_CHOKEPOINT = 41 as const;
  *
  * What the alarm costs the player is the point of the lever: via (2) step 10a
  * reassigns none of the colony's Idle workers, so it neither promotes them into
- * foraging nor recruits them as fighters, and via (3) none of the colony's own
+ * foraging nor recruits them as fighters (from V65, #373, it does recruit
+ * fighters — see the V65 note), and via (3) none of the colony's own
  * civilians in its own nest goes back out.
  * Safety versus income, one toggle, no per-ant control.
  *
@@ -1433,7 +1434,60 @@ export const SIM_VERSION_V63_AI_DEEP_QUEEN = 63 as const;
  * MIN_ACCEPTED is UNCHANGED (V50).
  */
 export const SIM_VERSION_V64_AUTO_DEFENCE = 64 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V64_AUTO_DEFENCE;
+
+/**
+ * #373 (V65) — the colony alarm during an invasion. Up to V64 the alarm made an
+ * invasion worse: its civilians could not be recruited as fighters, so shifting the
+ * ratio toward fighters did nothing, and they sheltered at the shaft top the
+ * invaders come down. From V65 (every colony alike — CLNY-08):
+ *   - The ratio always wins. While the alarm sounds, step 10a still recruits Idle
+ *     workers into FIGHTING when the ratio asks for more fighters, sheltering ones
+ *     included (the V34 skip of a worker on the flee timer no longer applies to
+ *     them). It recruits them into nothing else: foraging, digging and nursing wait
+ *     for the all-clear, as before. The new fighters have the fighters' orders (a
+ *     rally, or, with none, the V64 automatic defence of a breached nest); step
+ *     15b's reassignment guard ends their shelter the same tick. An EMPTY forager
+ *     sheltering below (the alarm recalls searchers home and holds them at the
+ *     shaft top) counts as a sheltering worker and is recruited too, its parked
+ *     leash wave restored; a carrier is not. The alarm governs
+ *     only the civilians left.
+ *   - Shelter away from the invaders (ant/idle-reserve.ts, the shelter retreat).
+ *     While an enemy ant is below
+ *     ground in a colony's nest, its SHELTERERS (workers held underground on the flee
+ *     timer: under the alarm, or after a V34 flee) walk by tunnel path to the chamber
+ *     tile farthest from the invaders — one per connected part of the nest — if it
+ *     is farther from them than where they stand; otherwise they stay put (so on a
+ *     looped nest one can stop in a tunnel already farther than the chamber). They stay
+ *     sheltering (no poke-out) until the nest is clear; a shelterer at the shaft top
+ *     with nowhere to retreat keeps the V34 poke-out. Workers not sheltering
+ *     (already deep: wanderers, nurses, carriers) and the queen do not move. With no
+ *     intruder in the nest nothing changes for a shelterer at the shaft top: it
+ *     waits there. The way to the chamber never runs through or beside an
+ *     invader: where it would, the shelterer holds; one already beside an invader
+ *     steps away from it first — but one on an invader's own tile holds, since every
+ *     way out passes beside it. So in a nest with one shaft, invaders coming down
+ *     it onto the shelterers at its top leave them holding there; the retreat
+ *     matters once the invaders have moved on from the shaft top, or where the
+ *     nest has other ways in, loops or side chambers. While the
+ *     nest is invaded shelterers below ground neither claim a tile nor are bumped.
+ *   - After the invasion a shelterer that retreated is below the shaft-top row,
+ *     where the poke-out could never let it out; once its timer runs out it stops
+ *     sheltering where it stands (an Idle worker below ground, like any other).
+ *     The rule is keyed on the row, so it applies to ANY shelterer below row 0 at
+ *     V65. Outside a retreat none is there in play (the descent and the alarm's
+ *     hold put a shelterer on row 0, the occupancy-exempt shaft top), and before
+ *     V65 such an ant was re-armed forever when no entrance was at its column.
+ *   - Recruiting under the alarm does not lose a fighter to the dig slot: with no
+ *     digger at work, a Mark's carve from the fight share is skipped (no digger
+ *     would be recruited into it). The persisted computedAllocation.dig (the HUD's)
+ *     still reads 1 for the Mark, as before.
+ * No new serialized field, command, world.rngState draw, entity-ID advance or
+ * tick-order change (the retreat field is per-tick scratch built at step 15b and
+ * read at step 16). A V64 save replays byte-identically. MIN_ACCEPTED is UNCHANGED
+ * (V50).
+ */
+export const SIM_VERSION_V65_ALARM_INVASION = 65 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V65_ALARM_INVASION;
 
 /**
  * S2 — AI colony state machine states.

@@ -43,6 +43,8 @@ const PUBLIC_FUNCTIONS = [
   'invaderHuntStep', // V59 (#364) — the invader hunt step, pinned by its unit test
   'updateBlockaders', // V60 (#352) — step 10c2, consumed by tick.ts
   'releaseBlockaderToSpider', // V60 (#352) — step 10d, consumed by tick.ts
+  'shelterRetreatDir', // V65 (#373) — the shelter retreat step, pinned by its unit tests
+  'shelterPassesThroughFriends', // V65 (#373) — occupancy pass-through rule, pinned by its unit test
 ] as const;
 
 describe('ant-system barrel public API (#212)', () => {
@@ -52,7 +54,7 @@ describe('ant-system barrel public API (#212)', () => {
     });
   }
 
-  it('exports EXACTLY the 34 public functions (no accidental widening or narrowing)', () => {
+  it('exports EXACTLY the 36 public functions (no accidental widening or narrowing)', () => {
     const exportedFns = Object.keys(barrel)
       .filter((k) => typeof (barrel as Record<string, unknown>)[k] === 'function')
       .sort();

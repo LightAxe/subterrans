@@ -382,12 +382,27 @@ derives from the ratio — not the same thing).
 **Colony alarm** / **all-clear** (`SetColonyAlarm`, `ColonyRecord.alarmActive`):
 The player's recall-to-nest stance. While the alarm sounds, every SURFACE civilian
 of that colony flees underground as though its own tile were dangerous and stays
-sheltered; the all-clear ends it. Sheltering workers are skipped by allocation, so
-an alarmed colony neither forages nor can recruit those workers as fighters.
+sheltered; the all-clear ends it. An alarmed colony puts no worker to foraging,
+digging or nursing. Up to V64 it recruited no fighters either; from **V65** (#373)
+the **behavior ratio** always wins: Idle workers, sheltering ones included, are still
+recruited as fighters when the ratio asks for them (as are empty foragers the alarm
+holds below), and the alarm governs only the civilians left.
 _Avoid_: **kill alarm** — that is the unrelated V34 signal a cross-colony kill
 deposits on the DangerTrail grid (`KILL_ALARM_DANGER_DEPOSIT`), which the sim
 raises by itself and the player never touches. Say "colony alarm" for the stance
 and "kill alarm" for the pheromone pulse; never bare "alarm" where both could read.
+
+**Shelter retreat** (simVersion V65, #373):
+While an enemy ant is below ground in a colony's nest, its **shelterers** (workers
+holding underground on the flee timer — at the shaft top under the colony alarm or
+after a flee) walk by tunnel path to the chamber farthest from the invaders, one per
+connected part of the nest, unless they already stand farther from them. The way
+there never runs through or beside an invader; where it would, they hold. While they
+retreat they keep sheltering; once the nest is clear, any shelterer below the
+shaft-top row stops sheltering where it stands. A shelterer left at the shaft top
+keeps the ordinary poke-out. Workers not sheltering and the queen do not move for
+it. With no intruder inside, shelterers wait at the shaft top as before.
+_Avoid_: **flee** (that is the surface dash to an entrance), **evacuate**.
 
 ## AI & difficulty
 

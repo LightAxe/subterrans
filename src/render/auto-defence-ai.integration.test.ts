@@ -35,7 +35,7 @@ function run(intruderCount: number): {
   fighters: number;
 } {
   const world = createScenario(11, 'Normal');
-  expect(world.simVersion).toBe(SIM_VERSION_V64_AUTO_DEFENCE);
+  expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V64_AUTO_DEFENCE);
   world.spider = null;
   const enemy = world.colonies[E]!;
   const ee = enemy.entrances.find((en) => en.isOpen)!;

@@ -80,6 +80,7 @@ import {
   pickCardinalStep,
   pickSurfaceDetour,
   packStep,
+  stepCardinalUnderground,
   unpackStepDx,
   unpackStepDy,
 } from './ant-motion.js';
@@ -93,6 +94,8 @@ import {
   idleMusterPassesThroughFriends,
   idleMustersHome,
   idleWalksHome,
+  shelterPassesThroughFriends,
+  shelterRetreatDir,
 } from './idle-reserve.js';
 import { clearRecentTiles, isRecentTile, pushRecentTile } from './ant-store.js';
 import { fighterIsHauling, fighterIsLooting, looterStepDir } from './ant-raid.js';
@@ -232,7 +235,13 @@ export function tickAntMovement(
     // step 15b clears it (all-clear / safe route) or re-arms it. Sheltering ants
     // hold at the shaft they dove into; held homebound foragers hold on the
     // surface at the danger boundary.
-    if (fleePhase > 0) continue;
+    // #373 (V65): except a shelterer retreating from invaders in its nest, which
+    // takes its retreat step (and nothing else: no dispatch, no zone transition).
+    if (fleePhase > 0) {
+      const retreat = shelterRetreatDir(world, id);
+      if (retreat >= 0) stepCardinalUnderground(world, id, retreat);
+      continue;
+    }
 
     // Issue #27 — carrier wait state holds the ant in place until the wake
     // check in tickForagerActions clears the flag (a chamber became
@@ -2022,6 +2031,10 @@ function claimsNoTile(world: WorldState, id: number): boolean {
   }
   // #322 (V49): nor does an idle worker mustering home under the alarm.
   if (idleMusterPassesThroughFriends(world, id)) return true;
+  // #373 (V65): nor does a shelterer below ground while its nest is invaded. Bumped
+  // like any ant, one filing down a one-wide shaft or tunnel past a friend standing
+  // still there was pushed back off its tile every tick and never got by.
+  if (shelterPassesThroughFriends(world, id)) return true;
   // V51 (#290 PR 4, D11): nor does a hungry fighter walking home to eat. Bumped
   // like any ant, one leaving a crowded rally stepped onto a tile a fed friend
   // held and was pushed back every tick, until it starved a tile from open ground.
