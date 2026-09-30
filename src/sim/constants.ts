@@ -176,7 +176,8 @@ export const QUEEN_STARVE_AFTER_TICKS = STARVATION_GRACE_TICKS;
  * COMBAT_HP_QUEEN (30) = QUEEN_STARVE_AFTER_TICKS (300), so a full-HP queen starves
  * on the same tick as before V66 and a wounded one sooner (a queen at 6 HP lasts 60
  * ticks). queen-starvation-drain.test.ts pins the product; save.ts validates the
- * queen's hunger clock against it.
+ * queen's hunger clock against it, so LOWERING this is a save wipe, not a bare
+ * retune (see COMBAT_HP_QUEEN).
  */
 export const QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS = 10;
 
@@ -1090,7 +1091,11 @@ export const COMBAT_DAMAGE_WORKER = 1 as const;
 export const COMBAT_DAMAGE_QUEEN = 6 as const;
 
 /** Base HP for the queen. Higher than workers so it takes a coordinated group of fighters
- *  to kill her. Flagged TBD for S6-Tune. */
+ *  to kill her. Flagged TBD for S6-Tune. #375 (V66): her starvation window is this ×
+ *  QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS, and save.ts validates a V66 queen's HP and
+ *  hunger clock against it — LOWERING it (or the drain interval) would make saves fail
+ *  to load: a queen above the new value, or one mid-famine past the shrunken window
+ *  (a save wipe; treat as a simVersion change, not a bare retune). */
 export const COMBAT_HP_QUEEN = 30 as const;
 
 // ---------------------------------------------------------------------------

@@ -114,7 +114,7 @@ describe('#375 V66 — a world saved mid-drain continues byte-identically', () =
       if (t % 5 === 0) expect(hashWorldState(loaded), `tick ${t}`).toBe(hashWorldState(world));
     }
     const healedHp = world.ants.hp[pq];
-    expect(healedHp).toBeGreaterThan(5);
+    expect(healedHp).toBe(5 + 6); // regen ticks 155, 160, …, 180
     expect(loaded.ants.hp[pq]).toBe(healedHp);
     const lastMeal = world.ants.lastMealTick[pq]!;
     let deathA = -1;

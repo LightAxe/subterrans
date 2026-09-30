@@ -16,8 +16,8 @@
 // save/copy lands mid-order.
 //
 // A per-tick harness hook (`before`) may reset state the log cannot express (the
-// Deny scenario keeps the player's stores full; the Spoil and change scenarios
-// keep the enemy fed). It is a pure function of the world, applied identically in
+// Deny scenario keeps the player's stores full; the Spoil, Loot-with-nothing and
+// change scenarios keep the enemy fed). It is a pure function of the world, applied identically in
 // every run, before the tick. It re-sets those fields (pool food, chamber stock,
 // meal ticks) after a load or copy too, so runs C and D do not by themselves prove
 // that they round-trip — their own save tests do.
@@ -311,6 +311,9 @@ describe('V60 raid orders replay deterministically, across save/load and copy (#
           return log;
         },
         midOrder: inEnemyNest,
+        // Keep her fed so only the fighters can hurt her (unfed, the 2000 fp pool
+        // runs dry near tick 1000 and starvation alone would lower her HP).
+        before: feedEnemy,
       };
       const a = replayed(sc);
       expect(a.aimedAtQueen).toBeGreaterThan(0);
