@@ -11,6 +11,8 @@ import {
   captionHoldMs,
   captionTotalMs,
   yieldedHoldMs,
+  captionFadeInMs,
+  CAPTION_FADE_IN_MS,
   CAPTION_HOLD_MS,
   CAPTION_YIELD_FLOOR_MS,
   type CaptionRequest,
@@ -187,5 +189,133 @@ describe('recurringCaptionMayEnter (#290 PR 6)', () => {
     admitCaption(g, evt('queen damage'));
     if (recurringCaptionMayEnter(g)) admitCaption(g, evt('raid news'));
     expect(admitCaption(g, evt('rally raid')).queued?.text).toBe('rally raid');
+  });
+});
+
+describe('#378 — a newer version of a caption replaces the older one', () => {
+  const KEY = 'raidOrder';
+  const order = (text: string): CaptionRequest => ({ ...evt(text), supersedeKey: KEY });
+
+  it('on screen: the newer version takes the active slot at once, cutting the old one short', () => {
+    const s = createCaptionQueueState();
+    const blockade = order('Raiding: Blockade.');
+    const assault = order('Raiding: Assault.');
+    expect(admitCaption(s, blockade)).toEqual({ begin: blockade });
+    const r = admitCaption(s, assault);
+    expect(r).toEqual({ begin: assault, replacedActive: blockade });
+    expect(s.active).toBe(assault);
+    expect(s.pending).toBeNull();
+    // It then finishes like any caption: nothing old is promoted after it.
+    expect(completeCaption(s)).toEqual({});
+    expect(s.active).toBeNull();
+  });
+
+  it('pending: the newer version swaps in and keeps that place in line', () => {
+    const s = createCaptionQueueState();
+    const other = evt('The enemy is attacking your hive.');
+    const deny = order('Raiding: Deny.');
+    const spoil = order('Raiding: Spoil.');
+    admitCaption(s, other);
+    expect(admitCaption(s, deny)).toEqual({ queued: deny });
+    expect(admitCaption(s, spoil)).toEqual({ queued: spoil, replacedPending: deny });
+    expect(s.active).toBe(other); // the other caption is not cut short
+    expect(s.pending).toBe(spoil);
+    expect(completeCaption(s)).toEqual({ begin: spoil });
+  });
+
+  it('a different caption waiting behind the old version still waits — no longer: the new one keeps the old schedule', () => {
+    const s = createCaptionQueueState();
+    const loot = order('Raiding: Loot.');
+    const invasion = evt('The enemy is attacking your hive.');
+    const assault = order('Raiding: Assault.');
+    admitCaption(s, loot);
+    admitCaption(s, invasion);
+    expect(admitCaption(s, assault)).toEqual({
+      begin: assault,
+      replacedActive: loot,
+      keepSchedule: true,
+    });
+    expect(s.pending).toBe(invasion);
+    expect(completeCaption(s)).toEqual({ begin: invasion });
+  });
+
+  it('with nothing waiting, the newer version gets a fresh lifetime (no keepSchedule)', () => {
+    const s = createCaptionQueueState();
+    admitCaption(s, order('a'));
+    expect(admitCaption(s, order('b')).keepSchedule).toBeUndefined();
+    // An older version waiting too is cleared, and then nothing else waits.
+    const s2 = createCaptionQueueState();
+    s2.active = order('a');
+    s2.pending = order('b');
+    expect(admitCaption(s2, order('c')).keepSchedule).toBeUndefined();
+  });
+
+  it('an older version both on screen and waiting is replaced in both slots', () => {
+    const s = createCaptionQueueState();
+    const a = order('a');
+    const b = order('b');
+    const c = order('c');
+    s.active = a;
+    s.pending = b; // not reachable through admitCaption, but the rule still holds
+    expect(admitCaption(s, c)).toEqual({ begin: c, replacedActive: a, replacedPending: b });
+    expect(s.active).toBe(c);
+    expect(s.pending).toBeNull();
+  });
+
+  it('only the same key supersedes: other keys and keyless captions queue as before', () => {
+    const s = createCaptionQueueState();
+    const raid = order('Raiding: Deny.');
+    const otherKey: CaptionRequest = { ...evt('x'), supersedeKey: 'somethingElse' };
+    admitCaption(s, raid);
+    expect(admitCaption(s, otherKey)).toEqual({ queued: otherKey });
+    // A keyless event behind an occupied pending slot still overflows.
+    expect(admitCaption(s, evt('y'))).toEqual({ dropped: evt('y') });
+    expect(s.active).toBe(raid);
+  });
+
+  it('a keyless caption never replaces a keyed one, nor a keyed one a keyless one', () => {
+    const s = createCaptionQueueState();
+    const plain = evt('Raiding: Deny.'); // same words, no key
+    const keyed = order('Raiding: Assault.');
+    admitCaption(s, plain);
+    expect(admitCaption(s, keyed)).toEqual({ queued: keyed });
+    expect(s.active).toBe(plain);
+    const s2 = createCaptionQueueState();
+    admitCaption(s2, keyed);
+    expect(admitCaption(s2, plain)).toEqual({ queued: plain });
+    expect(s2.active).toBe(keyed);
+  });
+
+  it('a first-use hint waiting behind the old version does not hold the newer one to its schedule', () => {
+    const s = createCaptionQueueState();
+    const loot = order('Raiding: Loot.');
+    const hint = fu('zoom');
+    const deny = order('Raiding: Deny.');
+    admitCaption(s, loot);
+    admitCaption(s, hint);
+    // Events outrank hints: the order caption gets a full lifetime; the hint waits.
+    expect(admitCaption(s, deny)).toEqual({ begin: deny, replacedActive: loot });
+    expect(s.pending).toBe(hint);
+  });
+
+  it('a first-use hint on screen is not cut short, and a keyed caption still evicts a pending hint', () => {
+    const s = createCaptionQueueState();
+    const hint = fu('tabNudge');
+    const hint2 = fu('pinchNudge');
+    const raid = order('Raiding: Loot.');
+    admitCaption(s, hint);
+    admitCaption(s, hint2);
+    expect(admitCaption(s, raid)).toEqual({ queued: raid, droppedFirstUse: hint2 });
+    expect(s.active).toBe(hint);
+  });
+});
+
+describe('#378 — captionFadeInMs', () => {
+  it('is the full fade-in from 0, only the rest of it from part-way, at least 1 ms', () => {
+    expect(captionFadeInMs(0)).toBe(CAPTION_FADE_IN_MS);
+    expect(captionFadeInMs(0.5)).toBe(Math.round(CAPTION_FADE_IN_MS / 2));
+    expect(captionFadeInMs(1)).toBe(1);
+    expect(captionFadeInMs(-3)).toBe(CAPTION_FADE_IN_MS); // clamped
+    expect(captionFadeInMs(7)).toBe(1);
   });
 });

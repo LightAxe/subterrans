@@ -622,9 +622,10 @@ export function drawSurfaceEntities(
       // Center square accent.
       gfx.fillRect(wx + 6, wy + 6, 4, 4);
       // #352 — on an enemy entrance (V60) a badge above the tile names the raid
-      // order: L(oot) / D(eny) / S(poil) / B(lockade) / A(ssault).
+      // order: L(oot) / D(eny) / S(poil) / B(lockade) / A(ssault). #378: sized in
+      // screen px, so it is drawn for this camera's zoom.
       const order = activeRaidOrder(curr, PLAYER_COLONY_ID);
-      if (order !== null) drawRaidOrderBadge(gfx, wx, wy, order);
+      if (order !== null) drawRaidOrderBadge(gfx, wx, wy, order, cam.zoom);
     }
   }
 

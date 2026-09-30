@@ -7,7 +7,8 @@
 // the "what happens to this request" decision, so the policy is unit-testable.
 //
 // Policy (locked in the grill):
-//   - The currently-displaying caption is NEVER preempted (it finishes its fade).
+//   - The currently-displaying caption is NEVER preempted (it finishes its fade)
+//     — except by a newer version of itself (#378, below).
 //   - Pending capacity = 1.
 //   - Event captions outrank first-use hints.
 //   - A duplicate first-use (same hintId already active OR pending) is coalesced
@@ -17,6 +18,18 @@
 //     anything is already pending.
 //   - A dropped/coalesced first-use is NOT reported as "begun", so UIScene never
 //     marks it shown and it can re-trigger later (Codex R1#9).
+//   - #378: captions that share a `supersedeKey` are versions of one message (the
+//     raid order the player just gave). A newer one REPLACES an older one instead
+//     of queueing behind it: an older one waiting in `pending` is swapped out in
+//     place (it keeps that queue position), and an older one on screen is cut
+//     short — the newer one takes over the active slot at once. Nothing else
+//     moves: a different caption waiting in `pending` still waits, now behind the
+//     newer version — and, if it is an event caption, no longer than it would
+//     have: the newer version then takes over the old one's remaining time on
+//     screen (`keepSchedule`) instead of starting a fresh one, so a burst of order
+//     switches never holds back, say, an invasion warning. With nothing waiting,
+//     or only a first-use hint (events outrank hints), it gets a full lifetime.
+//     Captions without a key are untouched by this rule.
 
 import type { CaptionKey } from './onboarding-captions.js';
 
@@ -40,6 +53,10 @@ export interface CaptionRequest {
   /** #372 — full-opacity hold (ms) between the fade-in and fade-out; absent:
    *  CAPTION_HOLD_MS. For a long caption that must be read (the gathering warning). */
   holdMs?: number;
+  /** #378 — a caption that is the latest version of a message: it replaces an
+   *  older caption with the same key, on screen or pending, instead of queueing
+   *  behind it (see the policy above). Absent: an ordinary caption. */
+  supersedeKey?: string;
 }
 
 /** Default full-opacity hold of a caption (ms), between its 300 ms fade-in and
@@ -72,6 +89,16 @@ export function yieldedHoldMs(req: CaptionRequest, heldMs: number): number | nul
   const hold = captionHoldMs(req);
   if (hold <= CAPTION_HOLD_MS) return null;
   return Math.max(0, Math.min(hold, CAPTION_YIELD_FLOOR_MS) - heldMs);
+}
+
+/**
+ * #378 — the fade-in (ms) of a caption that starts at opacity `fromAlpha` (0, or
+ * that of the older version it replaced): only the rest of the way up, at the
+ * usual rate, and at least 1 ms (a tween needs a duration).
+ */
+export function captionFadeInMs(fromAlpha: number): number {
+  const a = Math.max(0, Math.min(1, fromAlpha));
+  return Math.max(1, Math.round(CAPTION_FADE_IN_MS * (1 - a)));
 }
 
 /** Total visible lifetime (ms) of `req`: fade-in + hold + fade-out. */
@@ -121,6 +148,18 @@ export interface AdmitResult {
   dropped?: CaptionRequest;
   /** A pending first-use evicted by an incoming higher-priority event. */
   droppedFirstUse?: CaptionRequest;
+  /** #378 — the on-screen caption the incoming one (same supersedeKey) cut short:
+   *  `begin` (the newer version) takes its place on screen. */
+  replacedActive?: CaptionRequest;
+  /** #378 — with `replacedActive`: a different EVENT caption is waiting in
+   *  `pending`, so the newer version keeps the old one's remaining time on screen
+   *  (UIScene swaps the words on the same Text, its fades and hold running on)
+   *  rather than starting a fresh lifetime that would hold that event back longer.
+   *  A waiting first-use hint does not get this: events outrank hints. */
+  keepSchedule?: boolean;
+  /** #378 — the pending caption the incoming one (same supersedeKey) replaced in
+   *  place (`queued` is the newer version). It never displayed. */
+  replacedPending?: CaptionRequest;
 }
 
 function sameFirstUse(a: CaptionRequest | null, b: CaptionRequest): boolean {
@@ -138,6 +177,28 @@ export function admitCaption(state: CaptionQueueState, req: CaptionRequest): Adm
   if (state.active === null) {
     state.active = req;
     return { begin: req };
+  }
+
+  // #378 — a newer version of the caption on screen cuts it short and takes its
+  // place (an older version pending too is superseded); a newer version of the
+  // pending caption replaces it in place.
+  const key = req.supersedeKey;
+  if (key !== undefined) {
+    if (state.active.supersedeKey === key) {
+      const result: AdmitResult = { begin: req, replacedActive: state.active };
+      state.active = req;
+      if (state.pending?.supersedeKey === key) {
+        result.replacedPending = state.pending;
+        state.pending = null;
+      }
+      if (state.pending?.source === 'event') result.keepSchedule = true;
+      return result;
+    }
+    if (state.pending?.supersedeKey === key) {
+      const replaced = state.pending;
+      state.pending = req;
+      return { queued: req, replacedPending: replaced };
+    }
   }
 
   // Coalesce a duplicate first-use against whatever is active or already pending

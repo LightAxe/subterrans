@@ -54,6 +54,7 @@ function makeViewState(
     undergroundCamera: makeCameraView(160, 160),
     undergroundVisited: true,
     activeUndergroundColonyId: colonyId,
+    undergroundCenterByColony: new Map(),
     showPheromoneOverlay: true,
   };
 }

@@ -27,7 +27,7 @@ import type { WorldState, SpiderState } from '../sim/types.js';
 import { createWorldState } from '../sim/types.js';
 import { sgSet, SurfaceTileState } from '../sim/terrain.js';
 import { initAnt } from '../sim/ant/ant-store.js';
-import { AntTask, FightingSubState, ForagingSubState } from '../sim/enums.js';
+import { AntTask, FightingSubState, ForagingSubState, RaidType } from '../sim/enums.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import {
   PLAYER_COLONY_ID,
@@ -52,6 +52,7 @@ import {
 } from './sprites.js';
 import { COLOR_BARREN_EARTH } from './terrain-atlas.js';
 import { makeCameraView, type CameraView } from './camera-adapter.js';
+import { RAID_BADGE_SCREEN_PX } from './raid-order-view.js';
 
 // ---------------------------------------------------------------------------
 // MockGfx — spy recorder implementing GfxLike
@@ -1174,6 +1175,34 @@ describe('drawSurfaceEntities — rally-point marker', () => {
     const cam = makeCamera(5, 5);
     drawSurfaceEntities(gfx, sprites, world, world, 0, cam);
     expect(rallyRects(gfx).length).toBe(0);
+  });
+
+  // #378 — the raid-order badge over a rally on an enemy entrance is sized in screen
+  // px: drawSurfaceEntities must hand it the camera's zoom.
+  it('#378: the raid-order badge on an enemy entrance is the same size on screen at every zoom', () => {
+    addPlayerColony({ tileX: 5, tileY: 5 });
+    world.colonies[PLAYER_COLONY_ID]!.raidType = RaidType.Blockade;
+    const enemyId = PLAYER_COLONY_ID + 1;
+    const enemy = createColonyRecord(enemyId, 888);
+    enemy.entrances = [{ entranceId: 1, surfaceTileX: 5, surfaceTileY: 5, isOpen: true }];
+    enemy.rallyPoint = null;
+    enemy.digFlowFieldDirty = false;
+    enemy.priorityFoodPileId = null;
+    world.colonies[enemyId] = enemy;
+    for (const zoom of [0.5, 1, 2]) {
+      const g = new MockGfx();
+      const cam = makeCamera(5, 5);
+      cam.zoom = zoom;
+      cam.targetZoom = zoom;
+      drawSurfaceEntities(g, sprites, world, world, 0, cam);
+      // The badge's dark square is the fillRect right after its 0x101010 fill.
+      const i = g.calls.findIndex((c) => c.method === 'fillStyle' && c.args[0] === 0x101010);
+      expect(i).toBeGreaterThanOrEqual(0);
+      const square = g.calls[i + 1]!;
+      expect(square.method).toBe('fillRect');
+      expect((square.args[2] as number) * zoom).toBeCloseTo(RAID_BADGE_SCREEN_PX, 9);
+      expect((square.args[3] as number) * zoom).toBeCloseTo(RAID_BADGE_SCREEN_PX, 9);
+    }
   });
 
   // Phase 09.1-05 Task 1: structural regression guard. The fight-target marker

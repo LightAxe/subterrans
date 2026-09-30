@@ -196,7 +196,12 @@ import {
   rallyTargetsEnemyEntrance,
   resetRaidCaptionState,
 } from './raid-captions.js';
-import { activeRaidOrder, raidOrderCaption, raidOrderOfRally } from './raid-order-view.js';
+import {
+  RAID_ORDER_CAPTION_SUPERSEDE_KEY,
+  activeRaidOrder,
+  raidOrderCaption,
+  raidOrderOfRally,
+} from './raid-order-view.js';
 import { TILE_SIZE_PX } from './sprites.js';
 import {
   createRampageCaptionState,
@@ -295,6 +300,15 @@ interface UIScenePhase9 {
     captionKey?: CaptionKey,
     holdMs?: number,
   ): boolean;
+  // #378 — a caption that replaces an older one with the same supersedeKey (on
+  // screen or pending) instead of queueing behind it: the raid-order caption.
+  /** Returns false iff the caption queue dropped the caption (overflow). */
+  showSupersedingCaption(
+    text: string,
+    screenX: number,
+    screenY: number,
+    supersedeKey: string,
+  ): boolean;
   // Stage 3b (issue #18, #3) — display a one-time first-use navigation hint via
   // the shared caption queue. UIScene satisfies first-use-hints' FirstUseHintSink.
   showFirstUseHint(id: HintFirstUseId, text: string): void;
@@ -324,6 +338,22 @@ interface UIScenePhase9 {
   yieldLongCaption?(): void;
   /** #372 — Dev/E2E-only: each caption's final hold (ms) and whether it gave way. */
   captionHolds?(): { text: string; holdMs: number; yielded: boolean }[];
+  /** #378 — Dev/E2E-only: the open raid menu's hovered order + description line. */
+  raidMenuState?(): { hovered: number | null; description: string | null } | null;
+  /** #378 — Dev/E2E-only: the raid menu description line's box, or null. */
+  raidMenuDescriptionRect?(): { x: number; y: number; w: number; h: number } | null;
+  /** #378 — Dev/E2E-only: captions a newer version replaced, oldest first. */
+  captionsReplaced?(): string[];
+  /** #378 — Dev/E2E-only: the caption on screen and the one waiting (null: none),
+   *  and the text of every caption Text alive in the scene. */
+  captionQueueTexts?(): {
+    active: string | null;
+    pending: string | null;
+    onScreen: string[];
+    textsCreated: number;
+  };
+  /** #378 — Dev/E2E-only: stop/restart UIScene's clock (caption fades and holds). */
+  freezeCaptionClock?(frozen: boolean): void;
 }
 
 // Re-export GamePhase for Plan 07 and other consumers
@@ -372,6 +402,15 @@ declare global {
        *  (touch-smoke.spec.ts): reads viewState, mutates nothing, crosses no
        *  sim/render boundary. Dev-build only. */
       getActiveZoom(): number;
+      /** #378 — the two cameras' centres (world px) and zooms, the active view and
+       *  the colony whose underground is on show, so a spec can assert where a
+       *  view/colony toggle put the camera. Reads viewState only. Dev-build only. */
+      getCameraState?(): {
+        activeView: 'surface' | 'underground';
+        undergroundColonyId: number;
+        surface: { centerX: number; centerY: number; zoom: number };
+        underground: { centerX: number; centerY: number; zoom: number };
+      };
       /** True while any pause reason ('user' Space, 'menu', …) holds the loop.
        *  Render-side observability for the #311 same-frame Space burst e2e:
        *  reads pauseReasons, mutates nothing, crosses no boundary. */
@@ -393,6 +432,24 @@ declare global {
       /** #372 — each caption this round, oldest first: the final full-opacity hold
        *  scheduled for it (ms) and whether it gave way. Dev-build only. */
       getCaptionHolds?(): { text: string; holdMs: number; yielded: boolean }[];
+      /** #378 — the text of every caption a newer version of it replaced this
+       *  round (cut short on screen or swapped out while waiting), oldest first. */
+      getCaptionsReplaced?(): string[];
+      /** #378 — the caption queue now: the caption on screen and the one waiting
+       *  behind it (null: none), per the queue policy; and `onScreen`, the text of
+       *  every caption Text actually alive in UIScene. Dev-build only. */
+      getCaptionQueue?(): {
+        active: string | null;
+        pending: string | null;
+        onScreen: string[];
+        /** Caption Texts created this session (a kept-schedule swap adds none). */
+        textsCreated: number;
+      };
+      /** #378 — stop (true) or restart (false) UIScene's clock, which runs the
+       *  caption fades and holds, so a spec can keep a caption up while it gives
+       *  the next command on a machine of any speed. The sim is not touched.
+       *  Dev-build only. */
+      freezeCaptionClock?(frozen: boolean): void;
       /** #290 PR 6 — issue a player rally on (tileX, tileY) through the exact
        *  enqueue the surface Command tap uses (handleSetRallyPoint): a command, not
        *  a state write, so the drain, the caption hook and the sim all run as for
@@ -423,6 +480,13 @@ declare global {
       getEnemyEntrances?(): Array<{ tileX: number; tileY: number; isOpen: boolean }>;
       /** #352 — the context menu's state (visible, which menu, its top-left). */
       getContextMenu?(): { visible: boolean; kind: string; screenX: number; screenY: number };
+      /** #378 — the open raid menu as UIScene last drew it: the hovered order
+       *  (RaidType; null: none — always null for a touch pointer) and the
+       *  description line (null: none); null while no raid menu is up. */
+      getRaidMenu?(): { hovered: number | null; description: string | null } | null;
+      /** #378 — the raid menu description line's box (canvas px) as last drawn,
+       *  or null while it is not shown. Dev-build only. */
+      getRaidMenuDescriptionRect?(): { x: number; y: number; w: number; h: number } | null;
     };
   }
 }
@@ -679,11 +743,32 @@ export class GameScene extends Phaser.Scene {
           ? this.viewState.surfaceCamera
           : this.viewState.undergroundCamera
         ).zoom,
+      getCameraState: () => {
+        const vs = this.viewState;
+        const cam = (v: CameraView) => ({ centerX: v.centerX, centerY: v.centerY, zoom: v.zoom });
+        return {
+          activeView: vs.activeView,
+          undergroundColonyId: vs.activeUndergroundColonyId,
+          surface: cam(vs.surfaceCamera),
+          underground: cam(vs.undergroundCamera),
+        };
+      },
       isPaused: (): boolean => isPausedByAny(this.pauseReasons),
       alarmHotkeyAccepts: (): number => this.alarmHotkeyAccepts,
       getTick: (): number => this.world?.tick ?? -1,
       getCaptionsShown: (): string[] => this.getUIScene()?.captionsShown?.() ?? [],
       getCaptionHolds: () => this.getUIScene()?.captionHolds?.() ?? [],
+      getCaptionsReplaced: () => this.getUIScene()?.captionsReplaced?.() ?? [],
+      getCaptionQueue: () =>
+        this.getUIScene()?.captionQueueTexts?.() ?? {
+          active: null,
+          pending: null,
+          onScreen: [],
+          textsCreated: 0,
+        },
+      freezeCaptionClock: (frozen: boolean): void => {
+        this.getUIScene()?.freezeCaptionClock?.(frozen);
+      },
       rallyPlayerAt: (tileX: number, tileY: number): boolean =>
         this.world !== undefined &&
         !handleSetRallyPoint(
@@ -733,6 +818,8 @@ export class GameScene extends Phaser.Scene {
           tileY: e.surfaceTileY,
           isOpen: e.isOpen,
         })),
+      getRaidMenu: () => this.getUIScene()?.raidMenuState?.() ?? null,
+      getRaidMenuDescriptionRect: () => this.getUIScene()?.raidMenuDescriptionRect?.() ?? null,
       getContextMenu: () => ({
         visible: contextMenuState.visible,
         kind: contextMenuState.kind,
@@ -1145,7 +1232,8 @@ export class GameScene extends Phaser.Scene {
       if (!this.keyEvents.claim(event) || event.repeat) return;
       if (!this.canAcceptWorldHotkey()) return;
       if (this.viewState.activeView !== 'underground') return;
-      toggleUndergroundColony(this.viewState);
+      // #378 — also moves the underground camera to the colony it switches to.
+      toggleUndergroundColony(this.viewState, this.world);
       // Toggling the active colony retargets where a Dig/Command lands, so it
       // must abort any pending gesture eagerly — same as selectTool on a tool
       // change. Otherwise a same-frame keydown-X batched before a queued
@@ -2004,13 +2092,20 @@ export class GameScene extends Phaser.Scene {
         // one per drained batch (finalRallyInBatch — the last rally wins), and a
         // re-pick of the order already in force sends no command at all
         // (UIScene.dispatchRaidMenuClick), so each caption is a distinct change the
-        // player made through the two-click menu. The queue never evicts for it: an
-        // overflow drops the newcomer, and a dropped one-shot is un-marked so it
-        // can fire again (caption-queue.ts, UIScene.showCaption).
+        // player made through the two-click menu. The queue never evicts another
+        // caption for it: an overflow drops the newcomer. #378: but a newer order
+        // caption replaces an older one still on screen or waiting (its
+        // supersedeKey), so a quick switch never leaves the old order's words up
+        // while the new one queues behind them (caption-queue.ts).
         const order = rally === null ? null : raidOrderOfRally(this.world, PLAYER_COLONY_ID, rally);
         if (order !== null) {
           if (uiScene)
-            uiScene.showCaption(raidOrderCaption(order), this.layout.w / 2, this.layout.h - 80);
+            uiScene.showSupersedingCaption(
+              raidOrderCaption(order),
+              this.layout.w / 2,
+              this.layout.h - 80,
+              RAID_ORDER_CAPTION_SUPERSEDE_KEY,
+            );
         } else if (rally !== null) {
           const key: CaptionKey = rallyTargetsEnemyEntrance(
             this.world,
@@ -2686,8 +2781,10 @@ export class GameScene extends Phaser.Scene {
         // (Food priority is deliberately NOT previewed through draw-surface — that would paint a
         // queued mark in the full committed tint. The ghost overlay below carries the queued cue.)
       );
-      // Stage 3a: pending-command ghosts (surface rally) above the entity layer.
-      if (showPreview) drawGhostDelta(overlayGfx, ghostDelta, 'surface', PLAYER_COLONY_ID);
+      // Stage 3a: pending-command ghosts (surface rally) above the entity layer. #378: the
+      // queued raid-order badge is sized in screen px, so it takes the camera zoom.
+      if (showPreview)
+        drawGhostDelta(overlayGfx, ghostDelta, 'surface', PLAYER_COLONY_ID, cam.zoom);
     } else {
       this.recordDrawLayer('terrain');
       this.updatePheromoneLayer(cam, 'underground', dotMode); // #236 PR1 — cached persistent layer

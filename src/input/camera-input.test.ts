@@ -75,6 +75,7 @@ function makeViewState(
     undergroundCamera: makeCameraView(centerX, centerY),
     undergroundVisited: false,
     activeUndergroundColonyId: PLAYER_COLONY_ID,
+    undergroundCenterByColony: new Map(),
     showPheromoneOverlay: true,
   };
 }

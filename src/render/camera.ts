@@ -9,8 +9,8 @@
 // pan / zoom math lives in camera-adapter.ts.
 //
 // This file is in src/render/ — no Phaser imports, no DOM globals. It imports the
-// pure adapter, sim world dimensions, and persisted settings only. Fully testable
-// under Node + Vitest.
+// pure adapter, sim world dimensions, persisted settings, and (#378) read-only sim
+// types/helpers to find a colony's nest. Fully testable under Node + Vitest.
 
 import { TILE_SIZE_PX } from './sprites.js';
 import {
@@ -30,6 +30,10 @@ import {
   UNDERGROUND_GRID_HEIGHT,
 } from '../sim/constants.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
+import type { WorldState } from '../sim/types.js';
+import { ChamberType } from '../sim/enums.js';
+import { FP_SHIFT } from '../sim/fixed.js';
+import { colonyPoolTileX } from '../sim/food/food-api.js';
 import { loadSettings } from '../platform/settings.js';
 
 // ---------------------------------------------------------------------------
@@ -107,6 +111,14 @@ export interface ViewState {
    */
   activeUndergroundColonyId: ColonyId;
   /**
+   * #378 — where the underground camera was (world px) when the player last left
+   * each colony's underground view with the colony toggle, keyed by colony. The
+   * toggle restores it on the way back; a colony not yet looked at has none and
+   * the camera centres on its nest instead (toggleUndergroundColony). Cleared by
+   * resetViewState; mutated in place.
+   */
+  undergroundCenterByColony: Map<ColonyId, { centerX: number; centerY: number }>;
+  /**
    * Issue #114 — render-only flag controlling whether the player's pheromone
    * overlay is drawn. Hydrated from persisted settings on create/reset; toggled
    * by the P key and the pause-menu Settings sub-screen.
@@ -154,6 +166,7 @@ export function createViewState(startTileX: number, startTileY: number): ViewSta
     // 09.1 Chunk 2 — fresh boot always starts looking at the player's own
     // underground so the first Tab to underground shows "Your Colony".
     activeUndergroundColonyId: PLAYER_COLONY_ID,
+    undergroundCenterByColony: new Map(),
     // Issue #114 — hydrate the pheromone overlay flag from persisted settings.
     showPheromoneOverlay: loadSettings().pheromoneOverlay,
   };
@@ -190,6 +203,8 @@ export function resetViewState(viewState: ViewState, startTileX: number, startTi
   // 09.1 Chunk 2 — restart always re-anchors the underground view on the
   // player's own grid. Save files do not persist which enemy nest was inspected.
   viewState.activeUndergroundColonyId = PLAYER_COLONY_ID;
+  // #378 — a new round (or a load) has looked at no colony's nest yet.
+  viewState.undergroundCenterByColony.clear();
   // Issue #114 — re-read the persisted overlay preference.
   viewState.showPheromoneOverlay = loadSettings().pheromoneOverlay;
 }
@@ -237,18 +252,80 @@ export function toggleView(viewState: ViewState): void {
 }
 
 // ---------------------------------------------------------------------------
-// toggleUndergroundColony — 09.1 Chunk 2
+// toggleUndergroundColony — 09.1 Chunk 2 (+ #378 camera)
 // ---------------------------------------------------------------------------
+
+/**
+ * #378 — the world-pixel point the underground camera centres on to show
+ * `colonyId`'s nest, or null when the colony has nothing to find (no such colony,
+ * or none of the below). In order:
+ *   1. its Queen chamber's centre — the heart of the nest;
+ *   2. else the column of its first open entrance, else of its first entrance,
+ *      else of its entrance pool (the colony's start column), at the "shaft at
+ *      the top" depth a first underground visit uses (initialUndergroundCenterYPx).
+ * Colony-agnostic (CLNY-08): the same rule for the player's colony and any other.
+ * Pure; the caller clamps.
+ */
+export function undergroundNestCenterPx(
+  world: WorldState,
+  colonyId: ColonyId,
+): { x: number; y: number } | null {
+  const colony = world.colonies[colonyId];
+  if (colony === undefined) return null;
+  for (const ch of colony.chambers) {
+    if (ch.chamberType !== ChamberType.Queen) continue;
+    return {
+      x: ((ch.posX >> FP_SHIFT) + ch.width / 2) * TILE_SIZE_PX,
+      y: ((ch.posY >> FP_SHIFT) + ch.height / 2) * TILE_SIZE_PX,
+    };
+  }
+  const entrances = colony.entrances ?? [];
+  const entrance = entrances.find((e) => e.isOpen) ?? entrances[0];
+  const column = entrance !== undefined ? entrance.surfaceTileX : colonyPoolTileX(world, colony);
+  if (column < 0) return null;
+  return { x: tileCenterPx(column), y: initialUndergroundCenterYPx() };
+}
 
 /**
  * toggleUndergroundColony — flip `activeUndergroundColonyId` between the player's
  * colony and the enemy's colony. Binary toggle (09.1 has exactly 2 colonies).
  *
- * The caller (game-scene.ts X-keybind handler) must gate dispatch on
- * `activeView === 'underground'`. Mutates in place so UIScene / input handlers
- * that captured a ViewState reference keep seeing the update.
+ * #378 — and move the underground camera to the colony it switches to. Each
+ * colony's view keeps its own spot, the way the surface and underground views
+ * keep theirs across Tab: the camera's centre is remembered for the colony being
+ * left (undergroundCenterByColony) and the one being entered gets its remembered
+ * centre back, so peeking at the enemy and toggling back returns the player to
+ * exactly where they were working in their own nest. A colony not looked at yet
+ * (none remembered) is shown centred on its nest (undergroundNestCenterPx); if
+ * it has none to find, or no `world` is given, the camera stays where it is (only
+ * clamped). Zoom is untouched (it belongs to the underground view); the move
+ * settles like a view toggle (in-flight zoom-lerp cancelled, clamped). Nothing
+ * here names a colony but the flip itself. A remembered spot is only ever written
+ * by this toggle: a Tab or minimap trip in between does not update it, so toggling
+ * back returns to where the player last left that colony's view.
+ *
+ * The callers (game-scene.ts X-keybind handler, ui-scene.ts colony-toggle button)
+ * must gate dispatch on `activeView === 'underground'`. Mutates in place so
+ * UIScene / input handlers that captured a ViewState reference keep seeing the
+ * update.
  */
-export function toggleUndergroundColony(viewState: ViewState): void {
-  viewState.activeUndergroundColonyId =
-    viewState.activeUndergroundColonyId === PLAYER_COLONY_ID ? ENEMY_COLONY_ID : PLAYER_COLONY_ID;
+export function toggleUndergroundColony(viewState: ViewState, world?: WorldState): void {
+  const leaving = viewState.activeUndergroundColonyId;
+  const entering = leaving === PLAYER_COLONY_ID ? ENEMY_COLONY_ID : PLAYER_COLONY_ID;
+  const cam = viewState.undergroundCamera;
+  viewState.undergroundCenterByColony.set(leaving, { centerX: cam.centerX, centerY: cam.centerY });
+  const remembered = viewState.undergroundCenterByColony.get(entering);
+  const nest =
+    remembered === undefined && world !== undefined
+      ? undergroundNestCenterPx(world, entering)
+      : null;
+  if (remembered !== undefined) {
+    cam.centerX = remembered.centerX;
+    cam.centerY = remembered.centerY;
+  } else if (nest !== null) {
+    cam.centerX = nest.x;
+    cam.centerY = nest.y;
+  }
+  settleEnteringView(cam, UNDERGROUND_WORLD_PX_W, UNDERGROUND_WORLD_PX_H);
+  viewState.activeUndergroundColonyId = entering;
 }
