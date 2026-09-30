@@ -1451,7 +1451,8 @@ export const SIM_VERSION_V64_AUTO_DEFENCE = 64 as const;
  *     shaft top) counts as a sheltering worker and is recruited too, its parked
  *     leash wave restored; a carrier is not. The alarm governs
  *     only the civilians left.
- *   - Shelter away from the invaders (nest-retreat.ts). While an enemy ant is below
+ *   - Shelter away from the invaders (ant/idle-reserve.ts, the shelter retreat).
+ *     While an enemy ant is below
  *     ground in a colony's nest, its SHELTERERS (workers held underground on the flee
  *     timer: under the alarm, or after a V34 flee) walk by tunnel path to the chamber
  *     tile farthest from the invaders — one per connected part of the nest — if it

@@ -43,7 +43,7 @@ export const RAID_REACH_WINDOW_SIDE = 2 * RAID_REACH_WINDOW_RADIUS + 1;
 const RAID_REACH_WINDOW_CELLS = RAID_REACH_WINDOW_SIDE * RAID_REACH_WINDOW_SIDE;
 import { createSurfaceMovementCache, type SurfaceMovementCache } from './surface-features.js';
 
-/** #373 (V65) — one colony's retreat field (nest-retreat.ts computeNestRetreat):
+/** #373 (V65) — one colony's retreat field (ant/idle-reserve.ts computeNestRetreat):
  *  valid only while `tick` equals world.tick. `dist` is each tile's tunnel distance
  *  from the nearest intruder (-1 unreached); `label` the index of the part of the
  *  nest it is in, among the parts with a retreat tile (-1 none); `dir` its step
@@ -60,7 +60,7 @@ export interface NestRetreatField {
 }
 
 export interface ScratchArena {
-  /** #373 (V65) — colonyId → its retreat field (nest-retreat.ts), rebuilt at step
+  /** #373 (V65) — colonyId → its retreat field (ant/idle-reserve.ts), rebuilt at step
    *  15b on every tick its nest is invaded; stamped with that tick. */
   nestRetreat: Map<number, NestRetreatField>;
   /** combat.ts — sweep-and-pair sort buffers + spider on-tile list. */

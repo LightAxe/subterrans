@@ -80,6 +80,7 @@ import {
   pickCardinalStep,
   pickSurfaceDetour,
   packStep,
+  stepCardinalUnderground,
   unpackStepDx,
   unpackStepDy,
 } from './ant-motion.js';
@@ -93,9 +94,10 @@ import {
   idleMusterPassesThroughFriends,
   idleMustersHome,
   idleWalksHome,
+  shelterPassesThroughFriends,
+  shelterRetreatDir,
 } from './idle-reserve.js';
 import { clearRecentTiles, isRecentTile, pushRecentTile } from './ant-store.js';
-import { shelterPassesThroughFriends, shelterRetreatDir } from '../nest-retreat.js';
 import { fighterIsHauling, fighterIsLooting, looterStepDir } from './ant-raid.js';
 import {
   blockaderBarredFromShaft,
@@ -237,7 +239,7 @@ export function tickAntMovement(
     // takes its retreat step (and nothing else: no dispatch, no zone transition).
     if (fleePhase > 0) {
       const retreat = shelterRetreatDir(world, id);
-      if (retreat >= 0) stepShelterRetreat(world, id, retreat);
+      if (retreat >= 0) stepCardinalUnderground(world, id, retreat);
       continue;
     }
 
@@ -1911,34 +1913,6 @@ export function tickAntMovement(
   // POST-PASS: resolve same-colony occupancy after every ant has moved and
   // zone-transitioned. See resolveSameColonyOccupancy for semantics.
   resolveSameColonyOccupancy(world);
-}
-
-/**
- * #373 (V65) — move shelterer `id` one step of `speed` along retreat direction `d`
- * (nest-retreat.ts shelterRetreatDir) through its own nest. A cardinal step, so
- * the underground passability guard reduces to the tile it crosses into: blocked
- * (a tile dug or marked since the field was built this tick cannot be, but the
- * guard keeps the step honest) → it stays where it is.
- */
-function stepShelterRetreat(world: WorldState, id: number, d: number): void {
-  const ants = world.ants;
-  const grid = world.undergroundGrids[ants.currentGridColonyId[id]!];
-  if (grid === undefined) return;
-  const speed = ants.speed[id]!;
-  const prevX = ants.posX[id]!;
-  const prevY = ants.posY[id]!;
-  const posX = prevX + DIR_DX[d]! * speed;
-  const posY = prevY + DIR_DY[d]! * speed;
-  const nx = posX >> FP_SHIFT;
-  const ny = posY >> FP_SHIFT;
-  if (
-    (nx !== prevX >> FP_SHIFT || ny !== prevY >> FP_SHIFT) &&
-    !canEnterUndergroundTile(grid, nx, ny, ants.task[id]! as AntTask)
-  ) {
-    return;
-  }
-  ants.posX[id] = posX;
-  ants.posY[id] = posY;
 }
 
 // ---------------------------------------------------------------------------
