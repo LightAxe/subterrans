@@ -173,7 +173,7 @@ The CLI replays the recorded inputLog from seed and byte-compares the result aga
 
 ## Playtrace upload (issue #122 / ADR 0013)
 
-End-of-game survey overlay with a replay-data upload that ships ticked (opt-out, #295 — measured at ≤ 26 KB gzipped per round by `npm run measure:playtrace-size`) and an optional contact email (#303). The envelope is `schemaVersion` 3 (adds `difficulty` and `survey.email`); F9 snapshots are `DEBUG_SNAPSHOT_VERSION` 3, which stamps a per-command `drainTick` so a replay regroups commands by the batch the sim actually drained (#296, `src/platform/input-log-replay.ts`). **Disabled by default** — the survey overlay and the pause menu's "Quit & feedback" row are hidden when the `VITE_PLAYTRACE_ENDPOINT` env var is unset or empty, and `npm run build` produces a bundle with the feature off.
+End-of-game survey overlay with a replay-data upload that ships ticked (opt-out, #295 — measured at ≤ 26 KB gzipped for rounds up to 24 000 ticks, the pre-V67 match cap, by `npm run measure:playtrace-size`; from V67 (#376) a round has no length limit and the upload's downgrade chain keeps a longer one under the 5 MB cap) and an optional contact email (#303). The envelope is `schemaVersion` 3 (adds `difficulty` and `survey.email`); F9 snapshots are `DEBUG_SNAPSHOT_VERSION` 3, which stamps a per-command `drainTick` so a replay regroups commands by the batch the sim actually drained (#296, `src/platform/input-log-replay.ts`). **Disabled by default** — the survey overlay and the pause menu's "Quit & feedback" row are hidden when the `VITE_PLAYTRACE_ENDPOINT` env var is unset or empty, and `npm run build` produces a bundle with the feature off.
 
 To exercise the upload flow on localhost without standing up the website's Lambda + S3 stack:
 

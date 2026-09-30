@@ -12,7 +12,10 @@
 //   - New structural event over cap: evict oldest combat_kill, append new.
 //   - New combat_kill over cap: evict oldest combat_kill, append new.
 //   - Over cap with no combat_kill to evict: drop and increment
-//     droppedStructuralCount. Expected to stay 0 in a 7-minute round.
+//     droppedStructuralCount. Expected to stay 0 in a 7-minute round; from
+//     V67 (#376) a round has no time limit, and one that runs for hours can
+//     fill the buffer with structural events, after which new ones (queen_death
+//     included) are dropped.
 
 import type { WorldState } from './types.js';
 import type { ColonyId } from './colony/colony-store.js';
@@ -148,8 +151,9 @@ export type SimEvent =
   | {
       // S5 (V22) — tiebreak condition reached (timeout or stalemate).
       // Emitted by checkTiebreaks() in game-over.ts when both queens survive
-      // to MATCH_TIMEOUT_TICKS or all food is exhausted below the stalemate
-      // threshold. deriveRoundEndReason() reads this to populate the playtrace
+      // to MATCH_TIMEOUT_TICKS (worlds before V67 only — #376 removed the
+      // timeout) or all food is exhausted below the stalemate threshold.
+      // deriveRoundEndReason() reads this to populate the playtrace
       // roundEndReason field.
       tick: number;
       type: 'round_end';

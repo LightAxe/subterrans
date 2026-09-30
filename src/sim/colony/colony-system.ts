@@ -501,10 +501,12 @@ export function checkPendingChambers(world: WorldState): void {
       // Issue #59 — bail on entity-id cap. Chamber creation is bounded in
       // practice (low chamber count per colony), so reaching this with the
       // counter at MAX_ENTITIES means the world is structurally saturated.
-      // Leaving the PendingChamber in place lets it complete on a later
-      // tick when entity-id space frees up (same as if the dig hadn't
-      // finished). Worst case the player sees their excavated chamber not
-      // commit — degraded but consistent, not corrupted.
+      // The PendingChamber stays in place (same as if the dig hadn't
+      // finished), but entity IDs are never recycled (#233), so once the cap
+      // is reached it stays pending for the rest of the match: the player
+      // sees their excavated chamber not commit — degraded but consistent,
+      // not corrupted. From V67 (#376, no match timeout) a long enough match
+      // can reach the cap.
       const chamberId = allocateEntityId(world);
       if (chamberId === INVALID_ENTITY_ID) continue;
 

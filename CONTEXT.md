@@ -53,6 +53,10 @@ _Avoid_: team, faction; **nest** (nest = the dug-out physical area, not the colo
 
 **Queen**:
 The single egg-laying ant per colony. Her death is that colony's loss condition.
+Since **#376 (simVersion V67)** a match has no time limit: it goes on until a queen
+dies (or, rarely, a stalemate: no food on the map and both colonies starving). Before
+V67 a match with both queens alive at tick 24 000 (20 minutes) ended there, won by
+the colony with more workers (a draw on equal counts).
 Since **#299 (simVersion V40)** her tile never displaces a same-colony worker.
 _Avoid_: mother.
 

@@ -278,7 +278,8 @@ export const SIM_VERSION_V21_REPRODUCTION = 21 as const;
  * Wires difficulty into four AI constants previously hardcoded to Normal-tier index.
  * Applies a per-difficulty brood modifier to AI colony egg interval (below the V21 150-tick
  * surplus floor, hard-clamped at MIN_EGG_INTERVAL_TICKS=100).
- * Adds Timeout and Stalemate tiebreak conditions (checkTiebreaks in game-over.ts).
+ * Adds Timeout and Stalemate tiebreak conditions (checkTiebreaks in game-over.ts;
+ * V67 removes the Timeout).
  * Pre-V22 saves load with difficulty='Normal'; all V22-gated paths fall back to Normal-tier
  * behaviour for byte-identical replay of pre-V22 recordings.
  */
@@ -1511,7 +1512,30 @@ export const SIM_VERSION_V65_ALARM_INVASION = 65 as const;
  * V65 save replays byte-identically. MIN_ACCEPTED is UNCHANGED (V50).
  */
 export const SIM_VERSION_V66_QUEEN_STARVES_HP = 66 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V66_QUEEN_STARVES_HP;
+
+/**
+ * #376 (V67) — no match timeout. Up to V66, when both queens were still alive at
+ * MATCH_TIMEOUT_TICKS (24 000 ticks, 20 minutes), step 18's checkTiebreaks ended the
+ * match: a Victory, Defeat or MutualDestruction by living worker count, with a
+ * round_end 'TimeoutTiebreak' event. Nothing on screen counted down to it, so the
+ * result came without warning. From V67 there is no time limit: a match with both
+ * queens alive goes on until one dies (checkQueenDeath). The Stalemate tiebreak (no
+ * food on the map and both colonies starving) is unchanged; past tick 24 000 it can
+ * now fire where the Timeout used to take priority over it. Nothing replaces the
+ * Timeout: two colonies that neither kill nor starve each other's queen play on —
+ * until, hours in, entity IDs run out (they are never recycled; MAX_ENTITIES, #233):
+ * from then on no egg, food pile, chamber or entrance can be made, so the match
+ * eventually ends in a starving queen or the Stalemate.
+ * The gate reads only world.simVersion and world.tick, so before tick 24 000 V66 and
+ * V67 run the same code. From there a V67 world skips the Timeout: where a V66 match
+ * ended with a TimeoutTiebreak, tick() returns None — or, if the Stalemate condition
+ * holds, MutualDestruction with a StalemateTiebreak round_end. There is no
+ * new serialized field, command, world.rngState draw, entity-ID advance or
+ * tick-order change. A V66 save replays byte-identically and still ends at
+ * MATCH_TIMEOUT_TICKS. MIN_ACCEPTED is UNCHANGED (V50).
+ */
+export const SIM_VERSION_V67_NO_MATCH_TIMEOUT = 67 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V67_NO_MATCH_TIMEOUT;
 
 /**
  * S2 — AI colony state machine states.
@@ -1678,8 +1702,8 @@ export interface WorldState {
    *  22 = S5 difficulty tier system. Adds `difficulty` field. Wires difficulty
    *       into AI constants (tierIndex vs NORMAL_TIER_INDEX), applies a brood-
    *       production modifier to AI colony egg intervals, and enables Timeout
-   *       and Stalemate tiebreak conditions. Pre-V22 saves load with
-   *       difficulty='Normal' and replay byte-identically.
+   *       and Stalemate tiebreak conditions (V67 removes the Timeout). Pre-V22
+   *       saves load with difficulty='Normal' and replay byte-identically.
    *
    * Round-trips through copyWorldState and save/load.
    */

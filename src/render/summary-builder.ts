@@ -152,6 +152,8 @@ export function buildOutcomeAttribution(
     if (ev.type === 'round_end') {
       const { reason } = ev.payload;
       if (reason === 'TimeoutTiebreak') {
+        // Worlds before V67 only: from V67 (#376) the sim never emits a
+        // TimeoutTiebreak, so a new game never shows this copy.
         const { playerWorkerCount, aiWorkerCount } = ev.payload;
         let narrative: string;
         if (playerWorkerCount > aiWorkerCount) {

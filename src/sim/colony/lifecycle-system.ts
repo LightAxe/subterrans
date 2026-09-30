@@ -178,11 +178,13 @@ export function tickQueenEggProduction(world: WorldState, colony: ColonyRecord):
   //
   // Issue #59 — bail on -1 sentinel. allocateEntityId returns
   // INVALID_ENTITY_ID when world.nextEntityId reaches MAX_ENTITIES;
-  // egg-laying is the only unbounded allocator in the sim, so this is
-  // where the soft population cap manifests. Skipping the lay leaves
-  // the queen ready to retry next tick (food / queen-home gates re-fire
-  // each tick anyway), so once the cap relaxes (entity death) laying
-  // resumes naturally.
+  // egg-laying is the sim's biggest allocator (food and corpse piles,
+  // chambers and entrances take IDs too), so this is where the population
+  // cap manifests. Skipping the lay leaves the queen ready to retry next
+  // tick (food / queen-home gates re-fire each tick anyway), but entity IDs
+  // are never recycled (#233), so once the cap is reached no colony lays
+  // again for the rest of the match. From V67 (#376, no match timeout) a
+  // long enough match can reach it.
   const eggId = allocateEntityId(world);
   if (eggId === INVALID_ENTITY_ID) return;
 

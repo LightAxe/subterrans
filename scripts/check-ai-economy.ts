@@ -1,5 +1,5 @@
 // scripts/check-ai-economy.ts
-// Issue #297 — full-match AI-economy acceptance harness.
+// Issue #297 — long-horizon (24 000-tick) AI-economy acceptance harness.
 //
 // The sibling gate `check-foraging-survival.ts` runs the *no-command* scenario
 // (it never calls `runAIController`) over a 2000-tick horizon. That arm is blind
@@ -8,8 +8,8 @@
 // passive player "wins" 61/100 seeds on Normal without issuing a single command.
 //
 // This harness runs the REAL matchup — `runAIController(world, ENEMY_COLONY_ID)`
-// every tick against a passive player — out to MATCH_TIMEOUT_TICKS, and reports
-// per seed and in aggregate:
+// every tick against a passive player — out to tick 24 000 (HORIZON_TICKS), and
+// reports per seed and in aggregate:
 //   - enemy queen alive at tick 12 000 and 24 000, and the tick she died
 //   - peak enemy worker count
 //   - highest AI state reached + the tick it first reached WarFooting / Invading
@@ -78,7 +78,6 @@ const { GameOutcome } = await import('../src/sim/game-over.js');
 const {
   PLAYER_COLONY_ID,
   ENEMY_COLONY_ID,
-  MATCH_TIMEOUT_TICKS,
   FOOD_PICKUP_AMOUNT,
   QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
 } = await import('../src/sim/constants.js');
@@ -134,9 +133,20 @@ function parseStrArg(name: string, fallback: string): string {
   return fallback;
 }
 
+/**
+ * The default run length, and the late liveness checkpoint: 24 000 ticks, the
+ * pre-V67 match cap (MATCH_TIMEOUT_TICKS), kept so reports stay comparable. From
+ * V67 (#376) a match has no time limit, so a seed with both queens alive here is
+ * simply still playing. Even before V67 a default run never saw the timeout: the
+ * loop makes exactly 24 000 tick() calls and step 18 last runs with world.tick at
+ * 23 999, while the timeout needed 24 000 (the 24 001st call). Pass a larger
+ * --ticks to see what happens after it.
+ */
+const HORIZON_TICKS = 24_000;
+
 const SEEDS = parseNumArg('seeds', 30);
 const SEED_START = parseNumArg('seed-start', 0);
-const TICKS = parseNumArg('ticks', MATCH_TIMEOUT_TICKS);
+const TICKS = parseNumArg('ticks', HORIZON_TICKS);
 const DIFFICULTY_ARG = parseStrArg('difficulty', 'Normal');
 const BOTH_AI = process.argv.slice(2).includes('--both-ai');
 const REPORT_ONLY = BOTH_AI || process.argv.slice(2).includes('--report-only');
@@ -191,8 +201,7 @@ const AI_STATE_RANK: Record<AIState, number> = {
 };
 
 const CHECKPOINT_12K = 12_000;
-/** The match cap itself — derived so it cannot silently decouple from the sim. */
-const CHECKPOINT_24K = MATCH_TIMEOUT_TICKS;
+const CHECKPOINT_24K = HORIZON_TICKS;
 
 interface SeedResult {
   seed: number;
@@ -203,7 +212,8 @@ interface SeedResult {
   playerAliveAt24k: boolean | null;
   playerDeathTick: number | null;
   /** #327 — first tick tick() reported a GameOutcome other than None (the match
-   *  ended: a queen died, a stalemate, or the timeout); null if it never ended. */
+   *  ended: a queen died or a stalemate — there is no timeout from V67, #376);
+   *  null if it never ended. */
   matchEndTick: number | null;
   /** Why each queen died — 'Starvation' | 'Killed' | '-' (see queenDeathCause). */
   enemyDeathCause: string;
@@ -409,9 +419,9 @@ function entranceDanger(world: WorldState, colonyId: number): number {
  * combat loop actually fired.
  *
  * Read from the queen's hunger clock rather than the `queen_death` telemetry
- * event: the event carries no colonyId, and `world.events` is a capped ring
- * (PLAYTRACE_EVENT_CAP_PER_ROUND) that a full 24 000-tick match overflows, so
- * late queen deaths are simply missing from it. The clock is exact —
+ * event: the event carries no colonyId (and `world.events` is a capped buffer,
+ * PLAYTRACE_EVENT_CAP_PER_ROUND, that a run of hours can fill with structural
+ * events, after which later queen deaths are dropped). The clock is exact —
  * `tickFoodConsumption` only kills the queen on a failed meal once ticks since
  * her last meal reach QUEEN_STARVE_AFTER_TICKS, and every successful meal resets
  * `lastMealTick` — so, read right after the death tick, a meals-until-starvation
@@ -865,8 +875,9 @@ console.log(
     `@24k: ${playerAlive24k}/${SEEDS} (${pct(playerAlive24k, SEEDS)})`,
 );
 // #327 — the harness plays on past game over, so an AI queen that starves AFTER
-// the match ended (the passive player's queen already dead, a stalemate, or the
-// timeout under a longer --ticks) is counted like one that lost a live match.
+// the match ended (the passive player's queen already dead, or a stalemate) is
+// counted like one that lost a live match. (Before V67 the timeout also ended a
+// match run past 24 000 ticks with --ticks; from V67, #376, there is none.)
 // Split them by the tick tick() first reported an outcome: a death on that tick
 // is what ended the match, so it counts as live.
 const enemyDeathsLive = results.filter(

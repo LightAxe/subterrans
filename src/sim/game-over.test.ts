@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { GameOutcome, checkQueenDeath, checkTiebreaks } from './game-over.js';
-import { createWorldState, allocateEntityId, SIM_VERSION_V22_DIFFICULTY } from './types.js';
+import {
+  createWorldState,
+  allocateEntityId,
+  LATEST_SIM_VERSION,
+  SIM_VERSION_V22_DIFFICULTY,
+  SIM_VERSION_V66_QUEEN_STARVES_HP,
+  SIM_VERSION_V67_NO_MATCH_TIMEOUT,
+} from './types.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import { initAnt } from './ant/ant-store.js';
 import { AntTask } from './enums.js';
@@ -299,5 +306,66 @@ describe('checkTiebreaks (S5 V22)', () => {
     world.tick = MATCH_TIMEOUT_TICKS;
     world.ants.alive[queen2] = 0;
     expect(checkTiebreaks(world, 1 as ColonyId)).toBe(GameOutcome.None);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #376 (V67) — no match timeout
+// ---------------------------------------------------------------------------
+
+describe('#376 V67 — checkTiebreaks has no Timeout', () => {
+  const V66 = SIM_VERSION_V66_QUEEN_STARVES_HP; // the last version with the Timeout
+
+  it('new worlds are created at V67 or later', () => {
+    expect(createWorldState(1).simVersion).toBe(LATEST_SIM_VERSION);
+    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(SIM_VERSION_V67_NO_MATCH_TIMEOUT);
+  });
+
+  it.each([
+    MATCH_TIMEOUT_TICKS,
+    MATCH_TIMEOUT_TICKS + 1,
+    MATCH_TIMEOUT_TICKS * 10,
+    0x7fffffff, // the save loader's largest tick
+  ])('V67: both queens alive at tick %i → None, no round_end event', (t) => {
+    const { world, addWorker } = makeV22WorldWith2Colonies();
+    world.simVersion = SIM_VERSION_V67_NO_MATCH_TIMEOUT;
+    world.tick = t;
+    addWorker(1);
+    addWorker(1);
+    addWorker(2); // 2 player vs 1 AI: a V66 world would call this a Victory
+    expect(checkTiebreaks(world, 1 as ColonyId)).toBe(GameOutcome.None);
+    expect(world.events.some((e) => e.type === 'round_end')).toBe(false);
+  });
+
+  it('V66 (the last version with the Timeout): the same world at MATCH_TIMEOUT_TICKS → Victory', () => {
+    const { world, addWorker } = makeV22WorldWith2Colonies();
+    world.simVersion = V66;
+    world.tick = MATCH_TIMEOUT_TICKS;
+    addWorker(1);
+    addWorker(1);
+    addWorker(2);
+    expect(checkTiebreaks(world, 1 as ColonyId)).toBe(GameOutcome.Victory);
+    const ev = world.events.find((e) => e.type === 'round_end');
+    expect(ev?.type === 'round_end' && ev.payload.reason).toBe('TimeoutTiebreak');
+  });
+
+  it('V66: one tick before MATCH_TIMEOUT_TICKS is still None (the cap is unchanged)', () => {
+    const { world } = makeV22WorldWith2Colonies();
+    world.simVersion = V66;
+    world.tick = MATCH_TIMEOUT_TICKS - 1;
+    expect(checkTiebreaks(world, 1 as ColonyId)).toBe(GameOutcome.None);
+  });
+
+  it('V67: past the old cap the Stalemate tiebreak still fires (the Timeout no longer pre-empts it)', () => {
+    const { world } = makeV22WorldWith2Colonies();
+    world.simVersion = SIM_VERSION_V67_NO_MATCH_TIMEOUT;
+    world.tick = MATCH_TIMEOUT_TICKS + 500;
+    setPilesForTest(world, []);
+    setPoolFoodForTest(world, world.colonies[1]!, 0);
+    setPoolFoodForTest(world, world.colonies[2]!, 0);
+    expect(checkTiebreaks(world, 1 as ColonyId)).toBe(GameOutcome.MutualDestruction);
+    const ends = world.events.filter((e) => e.type === 'round_end');
+    expect(ends).toHaveLength(1);
+    expect(ends[0]!.type === 'round_end' && ends[0]!.payload.reason).toBe('StalemateTiebreak');
   });
 });

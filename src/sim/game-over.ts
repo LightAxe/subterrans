@@ -4,6 +4,7 @@
 // S2: two-pass loop for MutualDestruction; reads aiState for aiStateAtTime; full inferCause.
 // S5 (V22): checkTiebreaks — Timeout (both queens survive to MATCH_TIMEOUT_TICKS) and
 //           Stalemate (all surface food gone + both colonies below STALEMATE_FOOD_THRESHOLD_FP).
+// #376 (V67): no Timeout — a match with both queens alive has no time limit.
 
 export const GameOutcome = {
   None: 0,
@@ -13,7 +14,7 @@ export const GameOutcome = {
 } as const;
 export type GameOutcome = (typeof GameOutcome)[keyof typeof GameOutcome];
 
-import type { WorldState, AIState } from './types.js';
+import { SIM_VERSION_V67_NO_MATCH_TIMEOUT, type WorldState, type AIState } from './types.js';
 import type { ColonyId, ColonyRecord } from './colony/colony-store.js';
 import { emitEvent } from './telemetry.js';
 import { FP_SHIFT } from './fixed.js';
@@ -225,7 +226,8 @@ function livingWorkerCount(world: WorldState, colonyId: ColonyId): number {
  * S5 (V22) — Check tiebreak conditions when both queens are still alive.
  * Must be called from tick.ts step 18 after checkQueenDeath returns None.
  *
- * Timeout: both queens survive to MATCH_TIMEOUT_TICKS; winner by living worker count.
+ * Timeout (before V67 only): both queens survive to MATCH_TIMEOUT_TICKS; winner by living
+ *   worker count. From V67 (#376) there is no time limit.
  * Stalemate: all surface food piles depleted AND both colonies below STALEMATE_FOOD_THRESHOLD_FP.
  *
  * Returns GameOutcome.None if no tiebreak condition is met.
@@ -252,8 +254,8 @@ export function checkTiebreaks(world: WorldState, playerColonyId: ColonyId): Gam
   }
   if (aiColonyId === null || aiColony === null) return GameOutcome.None;
 
-  // --- Timeout: both queens alive at the match time cap ---
-  if (world.tick >= MATCH_TIMEOUT_TICKS) {
+  // --- Timeout: both queens alive at the match time cap (before V67 only, #376) ---
+  if (world.simVersion < SIM_VERSION_V67_NO_MATCH_TIMEOUT && world.tick >= MATCH_TIMEOUT_TICKS) {
     const playerWorkers = livingWorkerCount(world, playerColonyId);
     const aiWorkers = livingWorkerCount(world, aiColonyId);
     emitEvent(world, {

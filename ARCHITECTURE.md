@@ -328,7 +328,7 @@ The principles above are the rules; this section maps what the codebase actually
 - **Spider** (`spider.ts`) — a neutral predator with a hunger clock, a telegraphed hunt reticle, chase / rampage / feed states, and danger-pheromone deposition; clamped to stay a margin inside the playfield.
 - **AI state machine** (`ai-state.ts`) — the enemy colony moves through Peacetime → WarFooting → Probing → Invading → Recovery. The FSM *transitions* themselves (`advanceAIState`) run **in-sim** — tick step 18b, after the game-over check — so a tick()-only replay of the input log *reproduces* them rather than reading them back: nothing records them (the render-side `SyncAIState` echo that once mirrored the record into the log was retired in #258, and `src/render/ai-controller-replay-parity.integration.test.ts` pins the parity). Only the *policy* that issues commands lives in `src/render/ai-controller.ts`: it reads sim state and enqueues the same `SimCommand`s a player would (Principle 1 — same colony systems for player and AI).
 - **Difficulty** (`scenario.ts`, `ai-state.ts`) — `Easy | Normal | Hard`, chosen at boot; tunes AI thresholds, spider hunger, and the egg interval.
-- **Win / loss** (`game-over.ts`) — single-queen survival: `Victory` / `Defeat` / `MutualDestruction`, with difficulty tiebreaks.
+- **Win / loss** (`game-over.ts`) — single-queen survival: `Victory` / `Defeat` / `MutualDestruction`, decided when a queen dies, plus a Stalemate tiebreak (no food on the map and both colonies starving). There is no time limit from simVersion V67 (#376); before V67 a Timeout tiebreak ended a match with both queens alive at tick 24 000 by living worker count.
 
 ### Platform — `src/platform/`
 
