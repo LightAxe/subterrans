@@ -94,6 +94,7 @@ import {
   idleMusterPassesThroughFriends,
   idleMustersHome,
   idleWalksHome,
+  rampageShelterDashRoutes,
   shelterPassesThroughFriends,
   shelterRetreatDir,
 } from './idle-reserve.js';
@@ -460,12 +461,21 @@ export function tickAntMovement(
       const ftx = ants.targetPosX[id]!;
       const posX = ants.posX[id]!;
       const posY = ants.posY[id]!;
-      const step = pickCardinalStep(
-        ants,
-        id,
-        (ftx >> FP_SHIFT) - (posX >> FP_SHIFT),
-        (ants.targetPosY[id]! >> FP_SHIFT) - (posY >> FP_SHIFT),
-      );
+      // #377 (V68) — an idle worker going in from the spider's rampage walks the
+      // surface goal field to the entrance step 15b chose for it (idle-reserve.ts
+      // rampageShelterDashRoutes); off the field it keeps the straight line.
+      const routed = rampageShelterDashRoutes(world, id)
+        ? entranceRoutedStep(world, posX, posY, ftx, ants.targetPosY[id]!)
+        : OFF_GOAL_FIELD;
+      const step =
+        routed !== OFF_GOAL_FIELD
+          ? routed
+          : pickCardinalStep(
+              ants,
+              id,
+              (ftx >> FP_SHIFT) - (posX >> FP_SHIFT),
+              (ants.targetPosY[id]! >> FP_SHIFT) - (posY >> FP_SHIFT),
+            );
       dx = unpackStepDx(step);
       dy = unpackStepDy(step);
     } else if (chamberTargetX !== -1 && !chamberFoodUnreachable) {
@@ -2031,6 +2041,10 @@ function claimsNoTile(world: WorldState, id: number): boolean {
   }
   // #322 (V49): nor does an idle worker mustering home under the alarm.
   if (idleMusterPassesThroughFriends(world, id)) return true;
+  // #377 (V68): nor one dashing in from the spider's rampage. The reserve funnels
+  // down one goal-field path to its door; bumped sideways off it, one could land
+  // within the spider's chase range.
+  if (rampageShelterDashRoutes(world, id)) return true;
   // #373 (V65): nor does a shelterer below ground while its nest is invaded. Bumped
   // like any ant, one filing down a one-wide shaft or tunnel past a friend standing
   // still there was pushed back off its tile every tick and never got by.

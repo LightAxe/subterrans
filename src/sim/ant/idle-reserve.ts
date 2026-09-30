@@ -10,6 +10,11 @@
 // #373 (V65): the shelter retreat (its section at the end of this file) is read
 // by step 16 too.
 //
+// #377 (V68): the rampage shelter — while the spider is on a rampage, idle workers
+// go in (pickRampageShelterEntrance; step 16 walks them there by path,
+// rampageShelterDashRoutes) and stay in; step 10a reads rampageShelterActive to
+// keep them recruitable.
+//
 // One hook runs INSIDE step 16 rather than at 15b: holdAlarmedCivilianAtShaft
 // (C1, V42), which movement's ascent calls so the colony alarm can keep a
 // civilian from climbing out. It writes the same flee column this pass owns, so
@@ -20,14 +25,23 @@
 // DangerTrail grid sees danger = 0 everywhere (no flee, plain milling).
 //
 // Determinism: flee/mill decisions are pure functions of the serialized
-// pheromone grids, ant positions, and `fleeShelterUntilTick`. The mill wander is
-// a hash of (tick-bucket ^ antId) — no world.rngState draw.
+// pheromone grids, ant positions, and `fleeShelterUntilTick` (from V68 also the
+// spider's saved state, world.tick and world.difficulty, and the surface goal
+// fields, a cache derived from the saved terrain). The mill wander is a hash of
+// (tick-bucket ^ antId) — no world.rngState draw.
 
 import {
   SIM_VERSION_V55_ROUTED_HOMING,
   SIM_VERSION_V65_ALARM_INVASION,
+  SIM_VERSION_V68_RAMPAGE_SHELTER,
   type WorldState,
 } from '../types.js';
+import { spiderOnRampage } from '../spider.js';
+import {
+  SURFACE_GOAL_UNREACHED,
+  stepTowardReachable,
+  surfaceGoalDistance,
+} from '../surface-routing.js';
 import { isInChamberFootprint, type ColonyId, type ColonyRecord } from '../colony/colony-store.js';
 import { getScratch, type NestRetreatField } from '../scratch.js';
 import { AntTask, ForagingSubState, PheromoneType } from '../enums.js';
@@ -46,11 +60,14 @@ import {
   SURFACE_GRID_HEIGHT,
   SPIDER_SCATTER_RADIUS_TILES,
   FLEE_HOMEBOUND_PUSH_THROUGH_TILES,
+  SPIDER_CHASE_TRIGGER_RADIUS,
 } from '../constants.js';
 import {
   canEnterSurfaceTile,
   canEnterUndergroundTile,
   isDescentBlocked,
+  unpackStepDx,
+  unpackStepDy,
   DIR_DX,
   DIR_DY,
 } from './ant-motion.js';
@@ -433,6 +450,14 @@ function setFleeTarget(
  * a player ant sheltered inside the ENEMY nest would poke out against its own
  * colony's entrances, find none at that column, and be held there. Fighters are
  * not civilians and keep movement's existing rule.
+ *
+ * #377 (V68): while the spider is on a rampage an IDLE worker is held the same
+ * way, alarm or not (rampageShelterActive), so an idle worker that surfaces from
+ * below — a carrier that has just banked its load, a matured larva, a worker the
+ * #373 retreat released below — stays in instead of climbing out into the hunt
+ * and fleeing back down. A forager still climbs out to work (the alarm alone holds
+ * it). (This hold also makes the poke-out's rampage hold, below, belt and braces:
+ * an Idle shelterer the poke-out let out would be held here the same tick.)
  */
 export function holdAlarmedCivilianAtShaft(
   world: WorldState,
@@ -445,9 +470,178 @@ export function holdAlarmedCivilianAtShaft(
   if (task !== AntTask.Idle && task !== AntTask.Foraging) return false;
   if (ants.speed[id]! <= 0) return false; // brood (and the queen)
   const colony = world.colonies[ants.colonyId[id]!];
-  if (colony?.alarmActive !== true) return false;
+  if (colony?.alarmActive !== true && !(task === AntTask.Idle && rampageShelterActive(world))) {
+    return false;
+  }
   ants.fleeShelterUntilTick[id] = world.tick + SHELTER_COOLDOWN_TICKS;
   return true;
+}
+
+/**
+ * #377 (V68) — idle workers shelter from the spider: it is on a rampage
+ * (spider.ts spiderOnRampage — out hunting hungry, until it eats or dies) and the
+ * world is V68 or later. Read by step 10a (sheltering idle workers stay
+ * recruitable), step 15b (idle surface workers go in, idle shelterers stay in)
+ * and step 16 (the routed dash, the hold at the shaft). The spider does not move
+ * or change state between those steps (it ticks at 17.5), so all three read the
+ * same answer within a tick. Always false below V68.
+ */
+export function rampageShelterActive(world: WorldState): boolean {
+  return world.simVersion >= SIM_VERSION_V68_RAMPAGE_SHELTER && spiderOnRampage(world);
+}
+
+/**
+ * #377 (V68) — the entrance an Idle surface worker at (tileX, tileY) goes down to
+ * shelter from the spider's rampage, or null (it holds). With m the worker's
+ * Manhattan distance from the spider, of its colony's OPEN entrances:
+ *  - not one whose surface tile reads real danger (DangerTrail at FLEE_THRESHOLD
+ *    or more — the spider is on it, beside it or just left it, or an enemy killed
+ *    there: the V34 flee's own rule, pickNearestSafeEntrance) — unless the spider
+ *    stands on the worker's own tile (m = 0): then any way out beats staying, and
+ *    a door beside it reads the spider's own danger;
+ *  - out of the spider's chase range (m > SPIDER_CHASE_TRIGGER_RADIUS, R: the
+ *    Manhattan distance, through walls, at which it turns to chase an ant —
+ *    spider.ts findChaseTarget), not one whose way there passes within that range
+ *    of it, the door included. With d the worker's path distance to the door (the
+ *    surface goal field seeded at it) and ds the spider's Manhattan distance to
+ *    the door, that is tested as
+ *        m + ds <= d + 2 * R,
+ *    which every spider within R of a point P on a shortest path satisfies
+ *    (m <= path(W,P) + R, ds <= R + path(P,E)); the test errs toward excluding,
+ *    and the worker then holds, out of range (it may hold one whose actual route
+ *    would have kept clear, e.g. a tile out of range after a diagonal). So the
+ *    entrance the spider is camping or about to reach is never chosen, nor one it
+ *    stands in the way of. With the spider standing still, a door allowed stays
+ *    allowed as the worker walks its way (m + ds - d never falls along a shortest
+ *    path), and its way never comes within range. (Parity: m + ds has d's parity, so the values next to the bound
+ *    are d + 2R, excluded, and d + 2R + 2, the first allowed.)
+ *  - within its chase range ("cornered", 1 <= m <= R), every way passes within
+ *    range, so the worker must only not walk toward the spider: not a door whose
+ *    next step (stepTowardReachable, the step step 16 takes it) lands nearer the
+ *    spider than it stands. Re-chosen every tick, its steps never end nearer the
+ *    spider (a diagonal, taken an axis at a time at half a tile a tick, may pass a
+ *    tile nearer for a tick); with the spider standing still it turns to another
+ *    door, or holds, once its way turns toward it. (With m = 0 every step leads
+ *    away, and the door's danger is not read; one tile out, at m = 1, it is again,
+ *    so a worker that ran from under the spider toward a door an enemy kill has
+ *    flagged holds there.)
+ *  - of the rest, the nearest by path; ties to the lower entranceId.
+ * A worker standing on one of the entrances goes down it, whatever the tests say,
+ * unless the descent there is blocked (isDescentBlocked: the #165 blockade, a
+ * Rampaging spider on it): movement's descent is this tick's, before the bite.
+ * A worker cut off from an entrance (unreachable on the goal field) skips it.
+ *
+ * Inlined scan like pickNearestSafeEntrance (per worker per tick, no allocation;
+ * at most MAX_ENTRANCES_PER_COLONY entrances). The goal fields are the cached
+ * per-tile surface fields (surface-routing.ts: one BFS per entrance tile, kept
+ * until the cache is cleared).
+ */
+function pickRampageShelterEntrance(
+  world: WorldState,
+  colony: ColonyRecord,
+  entrances: readonly NestEntrance[],
+  tileX: number,
+  tileY: number,
+  dangerGrid: PheromoneGrid | undefined,
+): NestEntrance | null {
+  const spider = world.spider;
+  if (spider === null) return null; // unreachable under rampageShelterActive
+  const sx = spider.posX >> FP_SHIFT;
+  const sy = spider.posY >> FP_SHIFT;
+  const apart = Math.abs(tileX - sx) + Math.abs(tileY - sy);
+  let best: NestEntrance | null = null;
+  let bestDist = -1;
+  for (let e = 0; e < entrances.length; e++) {
+    const ent = entrances[e]!;
+    if (!ent.isOpen) continue;
+    const ex = ent.surfaceTileX;
+    const ey = ent.surfaceTileY;
+    // Standing on it: it goes down this tick (movement's descent follows its step),
+    // whatever the danger round it, unless the descent is blocked there.
+    if (tileX === ex && tileY === ey) {
+      if (!isDescentBlocked(world, AntTask.Idle, true, colony, ex, ey)) return ent;
+      continue;
+    }
+    if (apart > 0 && entranceDanger(dangerGrid, ent) >= FLEE_THRESHOLD) continue;
+    const dist = surfaceGoalDistance(world, tileX, tileY, ex, ey);
+    if (dist === SURFACE_GOAL_UNREACHED) continue;
+    if (apart > SPIDER_CHASE_TRIGGER_RADIUS) {
+      // Out of its chase range: the way there passes within it.
+      const spiderDist = Math.abs(sx - ex) + Math.abs(sy - ey);
+      if (apart + spiderDist <= dist + 2 * SPIDER_CHASE_TRIGGER_RADIUS) continue;
+    } else if (apart > 0) {
+      // Cornered: the next step there lands nearer the spider.
+      const step = stepTowardReachable(world, tileX, tileY, ex, ey);
+      const nextX = tileX + unpackStepDx(step);
+      const nextY = tileY + unpackStepDy(step);
+      if (Math.abs(nextX - sx) + Math.abs(nextY - sy) < apart) continue;
+    }
+    if (
+      bestDist < 0 ||
+      dist < bestDist ||
+      (dist === bestDist && best !== null && ent.entranceId < best.entranceId)
+    ) {
+      bestDist = dist;
+      best = ent;
+    }
+  }
+  return best;
+}
+
+/**
+ * #377 (V68) — point an Idle surface worker at the entrance it shelters down
+ * (pickRampageShelterEntrance) and return true; step 16 walks it there by the
+ * surface goal field (rampageShelterDashRoutes). With none, return false and hold
+ * it: clear its target — unless it stands within the spider's scatter radius of
+ * the reticle, where it keeps the away target step 13e just wrote (as the mill
+ * and the muster do), so it is not left standing where the strike lands. A
+ * dasher's way in is not checked against the reticle (only against the spider).
+ *
+ * A worker holding stays where it is even if its own tile reads real danger (an
+ * enemy kill beside it): the V34 flee would take it to a door past the spider.
+ */
+function setRampageShelterTarget(
+  world: WorldState,
+  colony: ColonyRecord,
+  id: number,
+  entrances: readonly NestEntrance[],
+  tileX: number,
+  tileY: number,
+  dangerGrid: PheromoneGrid | undefined,
+): boolean {
+  const ants = world.ants;
+  const ent = pickRampageShelterEntrance(world, colony, entrances, tileX, tileY, dangerGrid);
+  if (ent !== null) {
+    ants.targetPosX[id] = tileCenter(ent.surfaceTileX);
+    ants.targetPosY[id] = tileCenter(ent.surfaceTileY);
+    return true;
+  }
+  const reticle = world.scatterReticleTile;
+  if (
+    reticle === null ||
+    Math.abs(tileX - reticle.x) + Math.abs(tileY - reticle.y) > SPIDER_SCATTER_RADIUS_TILES
+  ) {
+    ants.targetPosX[id] = -1;
+    ants.targetPosY[id] = -1;
+  }
+  return false;
+}
+
+/**
+ * #377 (V68) — `id` is an Idle worker dashing in from the spider's rampage: on the
+ * surface, flee phase 0, of a colony whose alarm is off, with the entrance step
+ * 15b chose (setRampageShelterTarget) as its target. Step 16 walks it there by the
+ * surface goal field seeded at that entrance rather than the V34 flee dash's
+ * straight line, which a wall between it and the door would pin; and it claims no
+ * tile in the same-colony occupancy pass (ant-movement.ts claimsNoTile), so no
+ * friend bumps it sideways off its way. Always false below V68.
+ */
+export function rampageShelterDashRoutes(world: WorldState, id: number): boolean {
+  const ants = world.ants;
+  if (ants.task[id] !== AntTask.Idle || ants.zone[id] !== ZONE_SURFACE) return false;
+  if (ants.fleeShelterUntilTick[id] !== 0 || ants.targetPosX[id] === -1) return false;
+  if (world.colonies[ants.colonyId[id]!]?.alarmActive === true) return false;
+  return rampageShelterActive(world);
 }
 
 /**
@@ -468,6 +662,17 @@ export function holdAlarmedCivilianAtShaft(
  *   >0 surface      → re-check each tick: dash (0) once a safe entrance appears,
  *                     release (-1) if no longer homebound, else re-arm the hold
  *
+ * #377 (V68), while the spider is on a rampage and the colony's alarm is off, an
+ * IDLE surface worker takes the rampage shelter's rules instead of the mill and the
+ * V34 danger flee:
+ *   -1 → 0 dashing (pickRampageShelterEntrance found a door; step 16 walks it
+ *          there by path), or stays -1 holding (none)
+ *    0 → re-picks every tick; -1 holding once no door is left
+ *   >0 underground → the poke-out re-arms an Idle shelterer while the rampage
+ *          lasts, alarm or not (a forager keeps the alarm-or-danger poke-out)
+ * An Idle worker climbing up from below is held at the shaft top as a shelterer
+ * (holdAlarmedCivilianAtShaft).
+ *
  * #297 (V38) adds the two exits the surface hold was missing, so it is bounded by
  * the THREAT rather than unbounded in time:
  *   - doorstep — the carrier is within FLEE_HOMEBOUND_PUSH_THROUGH_TILES of an own
@@ -482,6 +687,9 @@ export function holdAlarmedCivilianAtShaft(
 export function tickIdleReserveAndFlee(world: WorldState): void {
   const ants = world.ants;
   const tick = world.tick;
+  // #377 (V68) — the spider is on a rampage: idle workers go in and stay in (see
+  // SIM_VERSION_V68_RAMPAGE_SHELTER). The same for every colony. Always false below V68.
+  const rampage = rampageShelterActive(world);
 
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
@@ -503,6 +711,10 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
     // behaviour — see the V42 note in types.ts).
     // #322 (V49) — the alarm musters civilians home instead of freezing them.
     const alarmed = colony.alarmActive === true;
+    // #377 (V68) — this colony's idle surface workers take the rampage shelter's
+    // way in. Not while its alarm sounds: the alarm already brings every civilian
+    // in and keeps its own V42/V49 rules for how.
+    const rampageShelters = rampage && !alarmed;
     // #373 (V65) — an enemy ant is below ground in this colony's nest and it has a
     // shelterer below: build this tick's retreat field (read here and by step 16).
     // Always false below V65.
@@ -583,6 +795,16 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
           continue;
         }
         if (task !== AntTask.Idle && task !== AntTask.Foraging) continue;
+        if (rampageShelters && task === AntTask.Idle) {
+          // #377 (V68) — the spider is on a rampage: go in, by path, down the
+          // nearest entrance whose way keeps out of its reach (dash, phase 0), or
+          // hold where it stands. Replaces the milling and the V34 danger flee for
+          // an Idle worker while the rampage lasts.
+          if (setRampageShelterTarget(world, colony, id, entrances, tileX, tileY, dangerGrid)) {
+            ants.fleeShelterUntilTick[id] = 0;
+          }
+          continue;
+        }
         const danger = dangerGrid !== undefined ? phGet(dangerGrid, tileX, tileY) : 0;
         if (alarmed || danger >= FLEE_THRESHOLD) {
           // Flee toward the nearest SAFE open entrance (skipping camped ones): a
@@ -673,6 +895,13 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
                 doorstepPush || releaseOnLocalAllClear(world, dangerGrid, tileX, tileY)
                   ? -1
                   : tick + 1;
+            }
+          } else if (rampageShelters && task === AntTask.Idle) {
+            // #377 (V68) — an Idle worker dashing in from the rampage re-chooses its
+            // entrance every tick (the spider moves); with none left it stops
+            // dashing and holds (phase -1 next tick re-chooses too).
+            if (!setRampageShelterTarget(world, colony, id, entrances, tileX, tileY, dangerGrid)) {
+              ants.fleeShelterUntilTick[id] = -1;
             }
           } else {
             const danger = dangerGrid !== undefined ? phGet(dangerGrid, tileX, tileY) : 0;
@@ -789,7 +1018,9 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
               dangerGrid !== undefined
                 ? phGet(dangerGrid, exit.surfaceTileX, exit.surfaceTileY)
                 : 0;
-            if (!alarmed && surfaceDanger < FLEE_THRESHOLD) {
+            // #377 (V68): an Idle shelterer stays in while the spider is on a
+            // rampage, alarm or not; a forager keeps the alarm-or-danger poke-out.
+            if (!alarmed && !(rampage && task === AntTask.Idle) && surfaceDanger < FLEE_THRESHOLD) {
               ants.fleeShelterUntilTick[id] = -1; // all-clear → resume (ascend + mill)
               // #209 PR C (V35) — clear the stale camped-entrance SURFACE flee
               // target that survived descent + shelter. On this release tick the

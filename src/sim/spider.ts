@@ -1017,6 +1017,27 @@ function feedRetreatCoord(k: number, sign: number, size: number, margin: number)
   return end;
 }
 
+/**
+ * #377 — the spider is ON A RAMPAGE: out hunting hungry, from the moment it grows
+ * hungry until it eats (any kill resets its hunger: step 3 below) or dies. That is
+ * the window the rampage caption warns about (render/recurring-captions.ts). The
+ * `Rampaging` state is only its entrance-camping part: the camper diverts to chase
+ * any ant that comes near, and after a chase that does not end in a meal it goes
+ * back to camping, hunting or chasing, still hungry, until it eats.
+ *
+ * Hungry reads exactly as the Patrolling case below decides it: past the
+ * start-of-match grace, and hungerTicks at the tier's threshold. A Feeding spider
+ * has just eaten (its hunger is 0) and hunts nothing. Pure: reads only the spider's
+ * saved state, world.tick and world.difficulty; no version gate (callers gate).
+ * Read before step 17.5, it is the spider as the previous tick left it.
+ */
+export function spiderOnRampage(world: WorldState): boolean {
+  const spider = world.spider;
+  if (spider === null || spider.state === 'Feeding') return false;
+  if (world.tick < SPIDER_GRACE_TICKS) return false;
+  return hungerState(spider.hungerTicks, SPIDER_HUNGER[tierIndex(world.difficulty)]) !== 'fed';
+}
+
 // ---------------------------------------------------------------------------
 // tickSpiderV23 — hunger-gated meandering surface predator (#146/#147 redesign).
 // No lair orbit; slow meander while sated, fast lunge while hunting/chasing.

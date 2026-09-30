@@ -1,0 +1,1210 @@
+// #377 (V68) — idle workers shelter from a spider rampage.
+//
+// While the spider is on a rampage (out hunting hungry, until it eats or dies —
+// spiderOnRampage), every colony's Idle workers on the surface go in by the nearest
+// entrance whose way keeps out of the spider's reach, and stay in until it is over;
+// Idle shelterers stay recruitable. Nothing else changes (foragers, fighters, nurses,
+// the alarm's civilians), and nothing at all below V68.
+//
+// The state-space audit (worker × spider × alarm × where the spider is × ratio) runs
+// every case through tick() at V67 and at V68 and checks the V68 outcome is the
+// rule's where one applies, and exactly V67's everywhere else. The rules are pinned
+// through tick() below it.
+import { describe, it, expect } from 'vitest';
+import { tick } from './tick.js';
+import { createScenario } from './scenario.js';
+import {
+  allocateEntityId,
+  copyWorldState,
+  LATEST_SIM_VERSION,
+  SIM_VERSION_V67_NO_MATCH_TIMEOUT,
+  SIM_VERSION_V68_RAMPAGE_SHELTER,
+} from './types.js';
+import type { SpiderBehaviorState, WorldState } from './types.js';
+import { initAnt } from './ant/ant-store.js';
+import { killAnt } from './ant-death.js';
+import { addChamberForTest } from './food/food-test-utils.js';
+import { rampageShelterActive } from './ant/ant-system.js';
+import { rampageShelterDashRoutes } from './ant/idle-reserve.js';
+import { spiderOnRampage } from './spider.js';
+import { depositDangerCross } from './pheromone/danger.js';
+import { pheromoneGridKey } from './pheromone/pheromone-store.js';
+import { canEnterSurfaceTile } from './ant/ant-motion.js';
+import {
+  AntTask,
+  ChamberType,
+  FightingSubState,
+  ForagingSubState,
+  PheromoneType,
+} from './enums.js';
+import { Zone, UndergroundTileState, ugSet } from './terrain.js';
+import { FP_SHIFT, FP_ONE } from './fixed.js';
+import {
+  PLAYER_COLONY_ID,
+  ENEMY_COLONY_ID,
+  WORKER_BASE_SPEED,
+  WORKER_LIFESPAN_TICKS,
+  SHELTER_COOLDOWN_TICKS,
+  SPIDER_DANGER_DEPOSIT,
+  SPIDER_GRACE_TICKS,
+  SPIDER_HUNGER_THRESHOLD_TICKS,
+  FOOD_PICKUP_AMOUNT,
+} from './constants.js';
+
+const P = PLAYER_COLONY_ID;
+const E = ENEMY_COLONY_ID;
+const V67 = SIM_VERSION_V67_NO_MATCH_TIMEOUT;
+const V68 = SIM_VERSION_V68_RAMPAGE_SHELTER;
+/** Seed 7: the player's entrance, and the spider's lair (far from both colonies). */
+const DOOR = { x: 24, y: 64 } as const;
+const LAIR = { x: 67, y: 117 } as const;
+/** Row of the nest's tunnel (the shaft runs down to it). */
+const TUNNEL_Y = 3;
+/** Past the start-of-match grace, so a hungry spider hunts. */
+const T0 = SPIDER_GRACE_TICKS + 500;
+/** Hungry on Normal. */
+const HUNGRY = SPIDER_HUNGER_THRESHOLD_TICKS[1] + 10;
+const center = (t: number): number => (t << FP_SHIFT) + (FP_ONE >> 1);
+
+/**
+ * A quiet seed-7 world at tick T0: no AI, no starting workers, a 0:0 ratio, and a
+ * player nest with a shaft under its open entrance down to a tunnel along TUNNEL_Y
+ * and a chamber at its east end. The spider is at its lair, sated.
+ */
+function quiet(version: number, at = T0): WorldState {
+  const world = createScenario(7, 'Normal');
+  world.simVersion = version;
+  world.aiState = [];
+  for (const cid of [P, E]) {
+    const colony = world.colonies[cid]!;
+    for (const id of [...colony.workers]) killAnt(world, id, null, null, 'Spider');
+    colony.targetRatio = { forage: 0, fight: 0 };
+  }
+  world.tick = at;
+  const colony = world.colonies[P]!;
+  const grid = world.undergroundGrids[P]!;
+  for (let y = 0; y <= TUNNEL_Y; y++) ugSet(grid, DOOR.x, y, UndergroundTileState.Open);
+  for (let x = DOOR.x - 4; x <= DOOR.x + 12; x++)
+    ugSet(grid, x, TUNNEL_Y, UndergroundTileState.Open);
+  for (let y = 2; y <= 4; y++) {
+    for (let x = DOOR.x + 10; x < DOOR.x + 13; x++) ugSet(grid, x, y, UndergroundTileState.Open);
+  }
+  addChamberForTest(world, colony, {
+    chamberId: allocateEntityId(world),
+    chamberType: ChamberType.Nursery,
+    posX: (DOOR.x + 10) << FP_SHIFT,
+    posY: 2 << FP_SHIFT,
+    width: 3,
+    height: 3,
+  });
+  colony.digFlowFieldDirty = true;
+  const sp = world.spider!;
+  sp.posX = LAIR.x << FP_SHIFT;
+  sp.posY = LAIR.y << FP_SHIFT;
+  sp.hungerTicks = 0;
+  sp.nextHuntTick = at + 100_000; // no density hunt in these short runs
+  return world;
+}
+
+function spawn(
+  world: WorldState,
+  colonyId: number,
+  x: number,
+  y: number,
+  zone: number,
+  task: number = AntTask.Idle,
+  subTask = 0,
+): number {
+  const id = allocateEntityId(world);
+  initAnt(world.ants, id, {
+    colonyId,
+    posX: center(x),
+    posY: center(y),
+    task: task as AntTask,
+    subTask,
+    speed: WORKER_BASE_SPEED,
+    lifespan: WORKER_LIFESPAN_TICKS,
+    lastMealTick: world.tick,
+    zone: zone as Zone,
+  });
+  world.ants.currentGridColonyId[id] = colonyId;
+  const colony = world.colonies[colonyId]!;
+  colony.workers.push(id);
+  colony.workerCount += 1;
+  return id;
+}
+
+/** The DangerTrail a spider standing at (x, y) leaves (one tick's cross), on every
+ *  colony's surface grid — as seedDangerPheromone deposits it. */
+function spiderDanger(world: WorldState, x: number, y: number): void {
+  for (const cid of [P, E]) {
+    const grid = world.pheromoneGrids[pheromoneGridKey(cid, PheromoneType.DangerTrail, 'surface')];
+    if (grid !== undefined) {
+      depositDangerCross(grid, x, y, SPIDER_DANGER_DEPOSIT, SPIDER_DANGER_DEPOSIT >> 1);
+    }
+  }
+}
+
+/** What the spider is doing. */
+type Spider =
+  | 'none' // no spider
+  | 'sated' // Patrolling, fed
+  | 'feeding' // Feeding
+  | 'grace' // hungry, but in the start-of-match grace
+  | 'rampaging' // hungry, camping (or walking to) the player's entrance
+  | 'chasing' // hungry, Chasing (its target gone)
+  | 'hungryPatrol'; // hungry, Patrolling (about to pick a hunt)
+
+const ON_RAMPAGE: ReadonlySet<Spider> = new Set(['rampaging', 'chasing', 'hungryPatrol']);
+
+/** Put the spider at (x, y) doing `s` (with the DangerTrail it leaves there). */
+function setSpider(world: WorldState, s: Spider, x: number, y: number): void {
+  if (s === 'none') {
+    world.spider = null;
+    return;
+  }
+  const sp = world.spider!;
+  const state: SpiderBehaviorState =
+    s === 'feeding'
+      ? 'Feeding'
+      : s === 'rampaging'
+        ? 'Rampaging'
+        : s === 'chasing'
+          ? 'Chasing'
+          : 'Patrolling';
+  sp.state = state;
+  sp.posX = x << FP_SHIFT;
+  sp.posY = y << FP_SHIFT;
+  sp.hungerTicks = s === 'sated' || s === 'feeding' ? 0 : HUNGRY;
+  sp.rampageTargetColonyId = s === 'rampaging' ? P : -1;
+  sp.rampageEntranceId = -1;
+  sp.rampageStartTick = world.tick;
+  sp.rampageKillsThisRampage = 0;
+  sp.chaseTargetAntId = -1;
+  sp.chaseStartTick = world.tick;
+  sp.feedAwayTileX = x;
+  sp.feedAwayTileY = y;
+  sp.feedArrivedTick = world.tick;
+  if (s !== 'feeding') spiderDanger(world, x, y);
+}
+
+const tileX = (w: WorldState, id: number): number => w.ants.posX[id]! >> FP_SHIFT;
+const tileY = (w: WorldState, id: number): number => w.ants.posY[id]! >> FP_SHIFT;
+const fingerprint = (w: WorldState, id: number): string => {
+  const a = w.ants;
+  return [
+    a.alive[id],
+    a.task[id],
+    a.subTask[id],
+    a.zone[id],
+    tileX(w, id),
+    tileY(w, id),
+    a.fleeShelterUntilTick[id],
+    a.targetPosX[id],
+    a.targetPosY[id],
+    a.foodCarrying[id],
+  ].join(',');
+};
+
+// ---------------------------------------------------------------------------
+// The state-space audit
+// ---------------------------------------------------------------------------
+
+/** The player worker: where it stands, and as what. */
+type Worker =
+  | 'idleNear' // Idle on the surface, 3 tiles from the door
+  | 'idleFar' // Idle on the surface, 20 tiles from the door
+  | 'idleOnDoor' // Idle on the surface, on the entrance tile
+  | 'idleDasher' // Idle on the surface, 3 tiles out, dashing in (V34 flee, phase 0)
+  | 'shelterer' // Idle below at the shaft top, its shelter timer running out now
+  | 'atShaft' // Idle below at the shaft top, not sheltering (it would climb out)
+  | 'deep' // Idle below in the chamber, not sheltering
+  | 'searcher' // Foraging, SearchingFood, on the surface 3 tiles out
+  | 'carrier' // Foraging, CarryingFood, on the surface 6 tiles out
+  | 'returner' // Foraging, ReturningToNest (empty), on the surface 6 tiles out
+  | 'forageShelterer' // Foraging, ReturningToNest, sheltering at the shaft top
+  | 'forageAtShaft' // Foraging, SearchingFood, below at the shaft top (it climbs out)
+  | 'fighter' // a sentry on the surface by the door
+  | 'nurse'; // Nursing, below in the chamber
+
+/** Where the spider is, relative to the door and the worker. */
+type Where =
+  | 'far' // at its lair, far from both
+  | 'atDoor' // on the entrance tile
+  | 'onPath' // between the worker and the door
+  | 'behind' // beyond the worker, away from the door, out of chase range
+  | 'close' // within chase range of the worker, off its way in
+  | 'besidePath' // three rows off the worker's way in, out of its chase range
+  | 'edge' // exactly SPIDER_CHASE_TRIGGER_RADIUS from the worker (it is cornered)
+  | 'wayEdge' // out of range, exactly on the way test's bound (m + ds = d + 2R)
+  | 'wayOut' // out of range, just outside that bound (m + ds = d + 2R + 2: parity)
+  // Cornered (within chase range), the worker's next step in must not land nearer
+  // the spider than it stands.
+  | 'cornerPath' // m = 2, beside the way in: the next step lands 1 from it
+  | 'cornerOff' // m = 2, off to the side: the next step lands 3 from it
+  | 'adjacentAway' // m = 1, on the far side from the door: it runs
+  | 'adjacentAhead' // m = 1, between it and the door: the next step is its tile
+  | 'onWorker'; // m = 0, on the worker's own tile: every way leads away
+
+/** Where the spider's position matters only to an idle worker: the others run the
+ *  three that change what their door and exit read. */
+const ALL_WHERES: Where[] = [
+  'far',
+  'atDoor',
+  'onPath',
+  'behind',
+  'close',
+  'besidePath',
+  'edge',
+  'wayEdge',
+  'wayOut',
+  'cornerPath',
+  'cornerOff',
+  'adjacentAway',
+  'adjacentAhead',
+  'onWorker',
+];
+const SOME_WHERES: Where[] = ['far', 'atDoor', 'close'];
+
+type Alarm = 'on' | 'off';
+/** The behaviour ratio: nothing to recruit for, or all fighters. */
+type Ratio = 'none' | 'fight';
+
+/** What V68 must do in this case, or 'same' (exactly V67). */
+type Expect =
+  | 'same'
+  | 'in' // it heads in (flee phase 0 at the door), or is already down sheltering
+  | 'hold' // it holds on the surface: no target, not fleeing
+  | 'stays' // a shelterer stays in (re-armed) where V67 lets it out
+  | 'held' // an idle worker at the shaft top is held there as a shelterer
+  | 'recruit'; // a shelterer is recruited as a fighter
+
+const FAR_WORKER = { x: 44, y: 64 } as const;
+const NEAR_WORKER = { x: 27, y: 64 } as const;
+
+/** The spider's tile for `where`, given the worker's surface tile (near or far). */
+function spiderTile(where: Where, far: boolean): { x: number; y: number } {
+  switch (where) {
+    case 'far':
+      return LAIR;
+    case 'atDoor':
+      return DOOR;
+    case 'onPath':
+      return far ? { x: 34, y: 64 } : { x: 25, y: 64 };
+    case 'behind':
+      return far ? { x: 50, y: 64 } : { x: 33, y: 64 };
+    case 'close':
+      return far ? { x: 44, y: 67 } : { x: 27, y: 67 };
+    case 'besidePath':
+      return far ? { x: 34, y: 67 } : { x: 25, y: 67 };
+    case 'edge':
+      return far ? { x: 44, y: 68 } : { x: 27, y: 68 };
+    case 'wayEdge':
+      return far ? { x: 40, y: 68 } : { x: 26, y: 68 };
+    case 'wayOut':
+      return far ? { x: 40, y: 69 } : { x: 26, y: 69 };
+    case 'cornerPath':
+      return far ? { x: 43, y: 65 } : { x: 26, y: 65 };
+    case 'cornerOff':
+      return far ? { x: 44, y: 66 } : { x: 27, y: 66 };
+    case 'adjacentAway':
+      return far ? { x: 45, y: 64 } : { x: 28, y: 64 };
+    case 'adjacentAhead':
+      return far ? { x: 43, y: 64 } : { x: 26, y: 64 };
+    case 'onWorker':
+      return far ? FAR_WORKER : NEAR_WORKER;
+  }
+}
+
+function expected(w: Worker, s: Spider, a: Alarm, where: Where, ratio: Ratio): Expect {
+  if (!ON_RAMPAGE.has(s)) return 'same';
+  switch (w) {
+    case 'idleNear':
+    case 'idleFar':
+    case 'idleDasher':
+    case 'idleOnDoor':
+      // Recruited as a fighter at step 10a (before 15b) on both versions; and under
+      // the alarm the alarm governs its civilians exactly as at V67.
+      if (ratio === 'fight' || a === 'on') return 'same';
+      // On the door it goes down, unless a Rampaging spider on it blocks the descent
+      // (a Chasing or Patrolling one does not: the descent comes before the bite).
+      if (w === 'idleOnDoor') return where === 'atDoor' && s === 'rampaging' ? 'hold' : 'in';
+      // The door itself reads the spider's danger (atDoor; onPath, cornered, beside
+      // it), or the way passes within its chase range (besidePath, and wayEdge on
+      // the bound), or — cornered — the next step lands nearer the spider than the
+      // worker stands (cornerPath, adjacentAhead).
+      if (where === 'atDoor' || where === 'onPath' || where === 'besidePath') return 'hold';
+      if (where === 'wayEdge' || where === 'cornerPath' || where === 'adjacentAhead') return 'hold';
+      // 'far', 'behind' and 'wayOut' keep out of its chase range; 'close', 'edge',
+      // 'cornerOff', 'adjacentAway' and 'onWorker' are cornered, and the next step
+      // leads no nearer the spider: it runs.
+      return 'in';
+    case 'shelterer':
+      if (a === 'off' && ratio === 'fight') return 'recruit';
+      if (a === 'on' || ratio === 'fight') return 'same';
+      // V67 keeps it in too while the spider's danger reads over the shaft (the
+      // spider on the door, or beside it).
+      return where === 'atDoor' || where === 'onPath' ? 'same' : 'stays';
+    case 'atShaft':
+      // Under the alarm V67 holds it too (C1); the fight ratio recruits it on both.
+      return a === 'off' && ratio === 'none' ? 'held' : 'same';
+    default:
+      return 'same';
+  }
+}
+
+const AUDIT_TICKS = 8;
+
+/** A pristine quiet() world per (version, tick), copied into one reused world per
+ *  version for each case (copyWorldState leaves the copy exactly like a fresh one,
+ *  #340) — a createScenario per case would make the audit minutes long. */
+const templates = new Map<string, WorldState>();
+const scratchWorlds = new Map<number, WorldState>();
+function freshQuiet(version: number, at: number): WorldState {
+  const key = `${version}:${at}`;
+  let tpl = templates.get(key);
+  if (tpl === undefined) {
+    tpl = quiet(version, at);
+    templates.set(key, tpl);
+  }
+  let dst = scratchWorlds.get(version);
+  if (dst === undefined) {
+    dst = createScenario(7, 'Normal');
+    scratchWorlds.set(version, dst);
+  }
+  copyWorldState(tpl, dst);
+  return dst;
+}
+
+interface Run {
+  frames: string[];
+  task1: number;
+  zone1: number;
+  phase1: number;
+  target1: [number, number];
+}
+
+function runCase(version: number, w: Worker, s: Spider, a: Alarm, where: Where, ratio: Ratio): Run {
+  const world = freshQuiet(version, s === 'grace' ? SPIDER_GRACE_TICKS - 500 : T0);
+  const colony = world.colonies[P]!;
+  colony.alarmActive = a === 'on';
+  // A 0:0 ratio would stand the lone sentry down to Idle (V40) on the first tick,
+  // making the fighter row an idle worker's: it keeps its fight demand either way.
+  colony.targetRatio =
+    ratio === 'fight' || w === 'fighter' ? { forage: 0, fight: 10 } : { forage: 0, fight: 0 };
+  const far = w === 'idleFar';
+  const sp = spiderTile(where, far);
+  setSpider(world, s, sp.x, sp.y);
+  const ay = DOOR.y;
+  let id: number;
+  switch (w) {
+    case 'idleNear':
+      id = spawn(world, P, NEAR_WORKER.x, NEAR_WORKER.y, Zone.Surface);
+      break;
+    case 'idleFar':
+      id = spawn(world, P, FAR_WORKER.x, FAR_WORKER.y, Zone.Surface);
+      break;
+    case 'idleOnDoor':
+      id = spawn(world, P, DOOR.x, DOOR.y, Zone.Surface);
+      break;
+    case 'idleDasher':
+      id = spawn(world, P, NEAR_WORKER.x, NEAR_WORKER.y, Zone.Surface);
+      world.ants.fleeShelterUntilTick[id] = 0;
+      break;
+    case 'shelterer':
+      id = spawn(world, P, DOOR.x, 0, Zone.Underground);
+      world.ants.fleeShelterUntilTick[id] = world.tick;
+      break;
+    case 'atShaft':
+      id = spawn(world, P, DOOR.x, 0, Zone.Underground);
+      break;
+    case 'deep':
+      id = spawn(world, P, DOOR.x + 11, 3, Zone.Underground);
+      break;
+    case 'searcher':
+      id = spawn(world, P, 27, ay, Zone.Surface, AntTask.Foraging, ForagingSubState.SearchingFood);
+      break;
+    case 'carrier':
+      id = spawn(world, P, 30, ay, Zone.Surface, AntTask.Foraging, ForagingSubState.CarryingFood);
+      world.ants.foodCarrying[id] = FOOD_PICKUP_AMOUNT;
+      break;
+    case 'returner':
+      id = spawn(
+        world,
+        P,
+        30,
+        ay,
+        Zone.Surface,
+        AntTask.Foraging,
+        ForagingSubState.ReturningToNest,
+      );
+      break;
+    case 'forageShelterer':
+      id = spawn(
+        world,
+        P,
+        DOOR.x,
+        0,
+        Zone.Underground,
+        AntTask.Foraging,
+        ForagingSubState.ReturningToNest,
+      );
+      world.ants.fleeShelterUntilTick[id] = world.tick;
+      break;
+    case 'forageAtShaft':
+      id = spawn(
+        world,
+        P,
+        DOOR.x,
+        0,
+        Zone.Underground,
+        AntTask.Foraging,
+        ForagingSubState.SearchingFood,
+      );
+      break;
+    case 'fighter':
+      id = spawn(world, P, 27, ay - 1, Zone.Surface, AntTask.Fighting, FightingSubState.Holding);
+      break;
+    case 'nurse':
+      id = spawn(world, P, DOOR.x + 11, 3, Zone.Underground, AntTask.Nursing);
+      break;
+  }
+  if (world.ants.zone[id] === Zone.Surface && world.ants.task[id] === AntTask.Idle) {
+    // A mill target it had been ambling to (a tile beside it): a hold must clear it.
+    world.ants.targetPosX[id] = center(tileX(world, id) + 1);
+    world.ants.targetPosY[id] = center(tileY(world, id));
+  }
+  const frames: string[] = [];
+  let task1 = -1;
+  let zone1 = -1;
+  let phase1 = 0;
+  let target1: [number, number] = [0, 0];
+  for (let t = 0; t < AUDIT_TICKS; t++) {
+    tick(world, []);
+    if (t === 0) {
+      task1 = world.ants.task[id]!;
+      zone1 = world.ants.zone[id]!;
+      phase1 = world.ants.fleeShelterUntilTick[id]!;
+      target1 = [world.ants.targetPosX[id]!, world.ants.targetPosY[id]!];
+    }
+    frames.push(fingerprint(world, id));
+  }
+  return { frames, task1, zone1, phase1, target1 };
+}
+
+/** '' when the V68 run meets `want` against the V67 one, else what went wrong. */
+function check(want: Expect, v67: Run, v68: Run): string {
+  switch (want) {
+    case 'same':
+      return JSON.stringify(v68.frames) === JSON.stringify(v67.frames)
+        ? ''
+        : `differs from V67: ${v67.frames[0]} vs ${v68.frames[0]} … ${v67.frames.at(-1)} vs ${v68.frames.at(-1)}`;
+    case 'in': {
+      const down = v68.zone1 === Zone.Underground && v68.phase1 > 0;
+      const dashing =
+        v68.zone1 === Zone.Surface &&
+        v68.phase1 === 0 &&
+        v68.target1[0] === center(DOOR.x) &&
+        v68.target1[1] === center(DOOR.y);
+      return down || dashing ? '' : `not heading in: ${v68.frames[0]}`;
+    }
+    case 'hold':
+      return v68.zone1 === Zone.Surface &&
+        v68.phase1 === -1 &&
+        v68.target1[0] === -1 &&
+        v68.target1[1] === -1
+        ? ''
+        : `not holding: ${v68.frames[0]}`;
+    case 'stays':
+      if (!(v68.zone1 === Zone.Underground && v68.phase1 > 0)) return `let out: ${v68.frames[0]}`;
+      return v67.phase1 === -1 ? '' : `V67 kept it in too: ${v67.frames[0]}`;
+    case 'held':
+      if (!(v68.zone1 === Zone.Underground && v68.phase1 > 0)) return `not held: ${v68.frames[0]}`;
+      return v67.zone1 === Zone.Surface ? '' : `V67 did not climb out: ${v67.frames[0]}`;
+    case 'recruit':
+      if (!(v68.task1 === AntTask.Fighting && v68.phase1 === -1))
+        return `not recruited: ${v68.frames[0]}`;
+      return v67.task1 === AntTask.Idle ? '' : `V67 recruited it too: ${v67.frames[0]}`;
+  }
+}
+
+describe('#377 (V68) — state-space audit: worker × spider × alarm × where × ratio, V67 vs V68', () => {
+  const WORKERS: Worker[] = [
+    'idleNear',
+    'idleFar',
+    'idleOnDoor',
+    'idleDasher',
+    'shelterer',
+    'atShaft',
+    'deep',
+    'searcher',
+    'carrier',
+    'returner',
+    'forageShelterer',
+    'forageAtShaft',
+    'fighter',
+    'nurse',
+  ];
+  const SPIDERS: Spider[] = [
+    'none',
+    'sated',
+    'feeding',
+    'grace',
+    'rampaging',
+    'chasing',
+    'hungryPatrol',
+  ];
+  const ALARMS: Alarm[] = ['off', 'on'];
+  const IDLE_WORKERS: ReadonlySet<Worker> = new Set([
+    'idleNear',
+    'idleFar',
+    'idleOnDoor',
+    'idleDasher',
+    'shelterer',
+    'atShaft',
+  ]);
+  const RATIOS: Ratio[] = ['none', 'fight'];
+  const tally: Record<Expect, number> = { same: 0, in: 0, hold: 0, stays: 0, held: 0, recruit: 0 };
+  for (const w of WORKERS) {
+    for (const s of SPIDERS) {
+      const cases: [Alarm, Where, Ratio, Expect][] = [];
+      for (const a of ALARMS) {
+        for (const where of IDLE_WORKERS.has(w) ? ALL_WHERES : SOME_WHERES) {
+          for (const ratio of RATIOS) {
+            const want = expected(w, s, a, where, ratio);
+            tally[want] += 1;
+            cases.push([a, where, ratio, want]);
+          }
+        }
+      }
+      it(`${w}, spider ${s}`, () => {
+        const failures: string[] = [];
+        for (const [a, where, ratio, want] of cases) {
+          const v67 = runCase(V67, w, s, a, where, ratio);
+          const v68 = runCase(V68, w, s, a, where, ratio);
+          const bad = check(want, v67, v68);
+          if (bad !== '')
+            failures.push(`alarm ${a}, spider ${where}, ratio ${ratio} → ${want}: ${bad}`);
+        }
+        expect(failures).toEqual([]);
+      }, 60_000);
+    }
+  }
+  it('the audit covers every class', () => {
+    expect(tally.in).toBeGreaterThan(20);
+    expect(tally.hold).toBeGreaterThan(10);
+    // 3 rampaging spiders × the 12 wheres whose danger does not reach the exit.
+    expect(tally.stays).toBe(36);
+    expect(tally.held).toBe(42); // 3 spiders × 14 wheres, alarm off, ratio none
+    expect(tally.recruit).toBe(42); // 3 spiders × 14 wheres, alarm off, ratio fight
+    expect(tally.same).toBeGreaterThan(1700);
+  });
+});
+
+describe('fixtures', () => {
+  it('seed 7: the doors, the lair, and the audit tiles are where the audit puts them', () => {
+    const world = quiet(V68);
+    const ent = world.colonies[P]!.entrances[0]!;
+    expect({ x: ent.surfaceTileX, y: ent.surfaceTileY, open: ent.isOpen }).toEqual({
+      ...DOOR,
+      open: true,
+    });
+    expect(world.colonies[P]!.entrances.filter((e) => e.isOpen)).toHaveLength(1);
+    // Every surface tile the audit uses is walkable; row 64 is open from the door east.
+    for (let x = DOOR.x; x <= 50; x++) expect(canEnterSurfaceTile(world, x, DOOR.y)).toBe(true);
+    for (const [x, y] of [
+      [27, 67],
+      [44, 67],
+      [34, 67],
+      [25, 67],
+      [44, 68],
+      [27, 68],
+      [40, 68],
+      [26, 68],
+      [40, 69],
+      [26, 69],
+      [42, 65],
+      [26, 65],
+      [44, 66],
+      [27, 66],
+      [43, 65],
+    ] as const) {
+      expect(canEnterSurfaceTile(world, x, y)).toBe(true);
+    }
+    expect(canEnterSurfaceTile(world, 27, 63)).toBe(true);
+    expect(canEnterSurfaceTile(world, LAIR.x, LAIR.y)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The rampage
+// ---------------------------------------------------------------------------
+
+describe('#377 — spiderOnRampage: out hunting hungry, until it eats', () => {
+  const states: SpiderBehaviorState[] = [
+    'Patrolling',
+    'Hunting',
+    'Chasing',
+    'Striking',
+    'Rampaging',
+    'Feeding',
+  ];
+  it('no spider: never', () => {
+    const world = quiet(V68);
+    world.spider = null;
+    expect(spiderOnRampage(world)).toBe(false);
+  });
+  for (const state of states) {
+    it(`${state}: on a rampage iff hungry and past the grace${state === 'Feeding' ? ' — never while Feeding' : ''}`, () => {
+      const world = quiet(V68);
+      const sp = world.spider!;
+      sp.state = state;
+      for (const [difficulty, tier] of [
+        ['Easy', 0],
+        ['Normal', 1],
+        ['Hard', 2],
+      ] as const) {
+        world.difficulty = difficulty;
+        const threshold = SPIDER_HUNGER_THRESHOLD_TICKS[tier];
+        sp.hungerTicks = threshold - 1;
+        expect(spiderOnRampage(world)).toBe(false);
+        sp.hungerTicks = threshold;
+        expect(spiderOnRampage(world)).toBe(state !== 'Feeding');
+        world.tick = SPIDER_GRACE_TICKS - 1;
+        expect(spiderOnRampage(world)).toBe(false);
+        world.tick = SPIDER_GRACE_TICKS;
+        expect(spiderOnRampage(world)).toBe(state !== 'Feeding');
+      }
+    });
+  }
+  it('rampageShelterActive is the rampage from V68 on, and never below', () => {
+    const world = quiet(V68);
+    world.spider!.hungerTicks = HUNGRY;
+    expect(rampageShelterActive(world)).toBe(true);
+    world.simVersion = V67;
+    expect(spiderOnRampage(world)).toBe(true);
+    expect(rampageShelterActive(world)).toBe(false);
+    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(V68);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pinned through tick()
+// ---------------------------------------------------------------------------
+
+/** Six Idle workers milling round the player's door. */
+function reserve(world: WorldState): number[] {
+  const ids: number[] = [];
+  for (const [x, y] of [
+    [26, 63],
+    [27, 65],
+    [22, 64],
+    [25, 66],
+    [21, 62],
+    [23, 67],
+  ] as const) {
+    ids.push(spawn(world, P, x, y, Zone.Surface));
+  }
+  return ids;
+}
+
+describe('#377 — the idle reserve goes in when the spider goes hungry, and out after it eats', () => {
+  function run(version: number): { world: WorldState; ids: number[] } {
+    const world = quiet(version);
+    const ids = reserve(world);
+    // It grows hungry at its lair, far from both colonies.
+    world.spider!.hungerTicks = HUNGRY;
+    for (let t = 0; t < 20; t++) tick(world, []);
+    return { world, ids };
+  }
+
+  it('V67: the reserve keeps milling on the surface', () => {
+    const { world, ids } = run(V67);
+    for (const id of ids) expect(world.ants.zone[id]).toBe(Zone.Surface);
+  });
+
+  it('V68: every idle worker is below, sheltering at the shaft top, within 20 ticks', () => {
+    const { world, ids } = run(V68);
+    expect(spiderOnRampage(world)).toBe(true);
+    for (const id of ids) {
+      expect(world.ants.alive[id]).toBe(1);
+      expect(world.ants.zone[id]).toBe(Zone.Underground);
+      expect([tileX(world, id), tileY(world, id)]).toEqual([DOOR.x, 0]);
+      expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(world.tick);
+      expect(world.ants.task[id]).toBe(AntTask.Idle);
+    }
+  });
+
+  it('V68: they stay in while it hunts, however long, and come out once it has eaten', () => {
+    const { world, ids } = run(V68);
+    // Keep it hungry and away from the player's door for three shelter windows.
+    for (let t = 0; t < 3 * SHELTER_COOLDOWN_TICKS; t++) {
+      const sp = world.spider!;
+      sp.state = 'Patrolling';
+      sp.posX = LAIR.x << FP_SHIFT;
+      sp.posY = LAIR.y << FP_SHIFT;
+      sp.hungerTicks = HUNGRY;
+      tick(world, []);
+    }
+    for (const id of ids) expect(world.ants.zone[id]).toBe(Zone.Underground);
+    // It eats (a kill resets its hunger; it feeds far away).
+    const sp = world.spider!;
+    sp.state = 'Feeding';
+    sp.hungerTicks = 0;
+    sp.feedAwayTileX = LAIR.x;
+    sp.feedAwayTileY = LAIR.y;
+    sp.feedArrivedTick = world.tick;
+    expect(spiderOnRampage(world)).toBe(false);
+    for (let t = 0; t < SHELTER_COOLDOWN_TICKS + 5; t++) tick(world, []);
+    for (const id of ids) {
+      expect(world.ants.zone[id]).toBe(Zone.Surface);
+      expect(world.ants.fleeShelterUntilTick[id]).toBe(-1);
+    }
+  });
+
+  it('V68: the spider dying ends it too', () => {
+    const { world, ids } = run(V68);
+    world.spider = null;
+    for (let t = 0; t < SHELTER_COOLDOWN_TICKS + 5; t++) tick(world, []);
+    for (const id of ids) expect(world.ants.zone[id]).toBe(Zone.Surface);
+  });
+});
+
+describe('#377 — it never walks toward the spider', () => {
+  it('the spider camping the only door: the reserve holds out of its way, then goes in once it leaves', () => {
+    const world = quiet(V68);
+    // Out of its chase range (Manhattan > 4 from the door).
+    const ids = [spawn(world, P, 30, 64, Zone.Surface), spawn(world, P, 24, 70, Zone.Surface)];
+    setSpider(world, 'rampaging', DOOR.x, DOOR.y);
+    const start = ids.map((id) => [tileX(world, id), tileY(world, id)]);
+    for (let t = 0; t < 30; t++) {
+      tick(world, []);
+      // Pinned on the door (the camp).
+      world.spider!.posX = DOOR.x << FP_SHIFT;
+      world.spider!.posY = DOOR.y << FP_SHIFT;
+      world.spider!.rampageStartTick = world.tick;
+      for (const id of ids) {
+        expect(world.ants.zone[id]).toBe(Zone.Surface);
+        expect(world.ants.fleeShelterUntilTick[id]).toBe(-1);
+      }
+    }
+    expect(ids.map((id) => [tileX(world, id), tileY(world, id)])).toEqual(start);
+    // It moves on to the enemy's door, far away; the trail at ours decays.
+    const sp = world.spider!;
+    sp.posX = 104 << FP_SHIFT;
+    sp.posY = 64 << FP_SHIFT;
+    sp.rampageTargetColonyId = E;
+    for (let t = 0; t < 200; t++) tick(world, []);
+    for (const id of ids) {
+      expect(world.ants.zone[id]).toBe(Zone.Underground);
+      expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0);
+    }
+  });
+
+  it('two doors, the spider camping one: the idle workers by it go down the other, by path', () => {
+    const world = quiet(V68);
+    const colony = world.colonies[P]!;
+    // A second open entrance 12 tiles east of the first, its shaft dug to the tunnel.
+    const east = { x: 36, y: 64 };
+    colony.entrances.push({
+      entranceId: allocateEntityId(world),
+      surfaceTileX: east.x,
+      surfaceTileY: east.y,
+      isOpen: true,
+    });
+    const grid = world.undergroundGrids[P]!;
+    for (let y = 0; y <= TUNNEL_Y; y++) ugSet(grid, east.x, y, UndergroundTileState.Open);
+    colony.digFlowFieldDirty = true;
+    // A worker west of the camped door, out of its chase range: its way to the east
+    // door runs past the camp, so it holds. Workers east of the camp go down the
+    // east door, the nearest whose way keeps out of the spider's reach.
+    const westIds = [spawn(world, P, 16, 64, Zone.Surface)];
+    const eastIds = [spawn(world, P, 30, 64, Zone.Surface), spawn(world, P, 31, 66, Zone.Surface)];
+    setSpider(world, 'rampaging', DOOR.x, DOOR.y);
+    let minDistToCamp = 99;
+    for (let t = 0; t < 40; t++) {
+      tick(world, []);
+      world.spider!.posX = DOOR.x << FP_SHIFT;
+      world.spider!.posY = DOOR.y << FP_SHIFT;
+      world.spider!.rampageStartTick = world.tick;
+      for (const id of [...westIds, ...eastIds]) {
+        if (world.ants.zone[id] !== Zone.Surface) continue;
+        const d = Math.abs(tileX(world, id) - DOOR.x) + Math.abs(tileY(world, id) - DOOR.y);
+        if (d < minDistToCamp) minDistToCamp = d;
+      }
+    }
+    // Nobody came within the spider's chase range of the camp.
+    expect(minDistToCamp).toBeGreaterThan(4);
+    for (const id of eastIds) {
+      expect(world.ants.zone[id]).toBe(Zone.Underground);
+      expect(tileX(world, id)).toBe(east.x);
+    }
+    for (const id of westIds) {
+      expect(world.ants.zone[id]).toBe(Zone.Surface);
+      expect(world.ants.fleeShelterUntilTick[id]).toBe(-1);
+    }
+  });
+
+  it('seed 7, the enemy colony: a worker behind an obstacle walks round it to its door (by path)', () => {
+    // An obstacle at x103–108, y58–60 stands between the enemy entrance (104,64) and
+    // (104,56); a straight-line step at the door from there runs into it.
+    const world = quiet(V68);
+    for (let x = 103; x <= 108; x++) {
+      for (let y = 58; y <= 60; y++) expect(canEnterSurfaceTile(world, x, y)).toBe(false);
+    }
+    const id = spawn(world, E, 104, 56, Zone.Surface);
+    setSpider(world, 'rampaging', LAIR.x, LAIR.y);
+    let downAt = -1;
+    for (let t = 0; t < 80; t++) {
+      tick(world, []);
+      if (world.ants.zone[id] === Zone.Underground) {
+        downAt = t;
+        break;
+      }
+    }
+    expect(downAt).toBeGreaterThan(0);
+    expect(tileX(world, id)).toBe(104);
+    expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0);
+  });
+
+  it('the spider behind an obstacle: its reach is Manhattan, through the obstacle, as its chase trigger', () => {
+    // The worker at (108,61) walks row 61 under the obstacle to the enemy door
+    // (104,64): 7 steps. The spider at (105,57), above the obstacle, is 4 tiles
+    // (Manhattan) from (105,61) on that way, so it would turn to chase — though
+    // 12 steps from the door by path. m + ds = 7 + 8 = d + 2R: the door is out.
+    const world = quiet(V68);
+    for (let x = 104; x <= 108; x++) expect(canEnterSurfaceTile(world, x, 61)).toBe(true);
+    const id = spawn(world, E, 108, 61, Zone.Surface);
+    world.ants.targetPosX[id] = center(107);
+    world.ants.targetPosY[id] = center(61);
+    setSpider(world, 'hungryPatrol', 105, 57);
+    tick(world, []);
+    expect(world.ants.zone[id]).toBe(Zone.Surface);
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(-1);
+    expect([world.ants.targetPosX[id], world.ants.targetPosY[id]]).toEqual([-1, -1]);
+  });
+
+  it('chased home: one step from its door, the spider beside it on the far side, it gets down alive', () => {
+    // The straggler chase: the worker must not freeze a step short of the door (as
+    // a fixed reach-1 way test for a cornered worker made it). Its step in leads
+    // away from the spider, so it dashes; once the spider is on its tile the door
+    // beside it reads the spider's danger, which is not consulted then (m = 0).
+    const world = quiet(V68);
+    const id = spawn(world, P, DOOR.x + 1, DOOR.y, Zone.Surface);
+    setSpider(world, 'chasing', DOOR.x + 2, DOOR.y);
+    world.spider!.chaseTargetAntId = id;
+    tick(world, []);
+    expect(world.ants.fleeShelterUntilTick[id]).not.toBe(-1);
+    for (let t = 0; t < 6 && world.ants.zone[id] === Zone.Surface; t++) tick(world, []);
+    expect([world.ants.alive[id], world.ants.zone[id]]).toEqual([1, Zone.Underground]);
+  });
+
+  it('one tile out of chase range, round a bend: the way test decides, not the next step — it holds', () => {
+    // The enemy colony: worker (106,61) under the obstacle, spider (105,57) above
+    // it, door (104,64). m = 5, out of range, so the whole way must keep out of it:
+    // m + ds = 5 + 8 = d + 2R, and the way can run by (105,61), 4 from the spider.
+    // Its first step, diagonal to (105,62), lands 5 away: a step rule would dash.
+    const world = quiet(V68);
+    for (const [x, y] of [
+      [106, 61],
+      [105, 61],
+      [105, 62],
+    ] as const) {
+      expect(canEnterSurfaceTile(world, x, y)).toBe(true);
+    }
+    const id = spawn(world, E, 106, 61, Zone.Surface);
+    world.ants.targetPosX[id] = center(107);
+    world.ants.targetPosY[id] = center(61);
+    setSpider(world, 'hungryPatrol', 105, 57);
+    tick(world, []);
+    expect(world.ants.zone[id]).toBe(Zone.Surface);
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(-1);
+    expect([world.ants.targetPosX[id], world.ants.targetPosY[id]]).toEqual([-1, -1]);
+  });
+
+  it('cornered, one diagonal step from its door: the step keeps its distance from the spider — it goes in', () => {
+    // Worker (23,63), spider (25,63), door (24,64): the diagonal step onto the door
+    // lands 2 from the spider, as the worker stands. (A way test by Manhattan box
+    // held it here: m + ds = d + 2(m - 1).)
+    const world = quiet(V68);
+    for (const [x, y] of [
+      [23, 63],
+      [24, 63],
+      [23, 64],
+    ] as const) {
+      expect(canEnterSurfaceTile(world, x, y)).toBe(true);
+    }
+    const id = spawn(world, P, 23, 63, Zone.Surface);
+    setSpider(world, 'hungryPatrol', 25, 63);
+    tick(world, []);
+    // From the tile centre the diagonal crosses both axes at once: it is on the
+    // door, and down, after one tick.
+    expect(world.ants.zone[id]).toBe(Zone.Underground);
+    expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0);
+  });
+});
+
+describe('#377 — the alarm and the rampage', () => {
+  it('after the all-clear, an idle shelterer stays in while the rampage lasts; a forager comes out', () => {
+    const world = quiet(V68);
+    const colony = world.colonies[P]!;
+    colony.alarmActive = true;
+    const idle = spawn(world, P, DOOR.x, 0, Zone.Underground);
+    const forager = spawn(
+      world,
+      P,
+      DOOR.x,
+      0,
+      Zone.Underground,
+      AntTask.Foraging,
+      ForagingSubState.ReturningToNest,
+    );
+    for (const id of [idle, forager]) world.ants.fleeShelterUntilTick[id] = world.tick + 1;
+    world.spider!.hungerTicks = HUNGRY;
+    for (let t = 0; t < 5; t++) tick(world, []);
+    expect(world.ants.zone[idle]).toBe(Zone.Underground);
+    expect(world.ants.zone[forager]).toBe(Zone.Underground);
+    colony.alarmActive = false; // the all-clear
+    for (let t = 0; t < SHELTER_COOLDOWN_TICKS + 5; t++) {
+      world.spider!.posX = LAIR.x << FP_SHIFT;
+      world.spider!.posY = LAIR.y << FP_SHIFT;
+      world.spider!.state = 'Patrolling';
+      world.spider!.hungerTicks = HUNGRY;
+      tick(world, []);
+    }
+    expect(world.ants.zone[idle]).toBe(Zone.Underground);
+    expect(world.ants.fleeShelterUntilTick[idle]!).toBeGreaterThan(0);
+    expect(world.ants.zone[forager]).toBe(Zone.Surface);
+  });
+});
+
+describe('#377 — a recruited shelterer leaves the shelter for its new work', () => {
+  it('the fight ratio mid-rampage makes fighters of the whole sheltering reserve at once', () => {
+    const world = quiet(V68);
+    const ids = reserve(world);
+    world.spider!.hungerTicks = HUNGRY;
+    for (let t = 0; t < 20; t++) {
+      world.spider!.posX = LAIR.x << FP_SHIFT;
+      world.spider!.posY = LAIR.y << FP_SHIFT;
+      world.spider!.state = 'Patrolling';
+      world.spider!.hungerTicks = HUNGRY;
+      tick(world, []);
+    }
+    for (const id of ids) expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0);
+    world.colonies[P]!.targetRatio = { forage: 0, fight: 10 };
+    tick(world, []);
+    for (const id of ids) {
+      expect(world.ants.task[id]).toBe(AntTask.Fighting);
+      expect(world.ants.fleeShelterUntilTick[id]).toBe(-1);
+    }
+  });
+
+  /** The reserve sheltering from a hungry spider at its lair, 20 ticks in. */
+  function shelteringReserve(): { world: WorldState; ids: number[] } {
+    const world = quiet(V68);
+    const ids = reserve(world);
+    world.spider!.hungerTicks = HUNGRY;
+    for (let t = 0; t < 20; t++) {
+      world.spider!.posX = LAIR.x << FP_SHIFT;
+      world.spider!.posY = LAIR.y << FP_SHIFT;
+      world.spider!.state = 'Patrolling';
+      world.spider!.hungerTicks = HUNGRY;
+      tick(world, []);
+    }
+    for (const id of ids) {
+      expect(world.ants.zone[id]).toBe(Zone.Underground);
+      expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(world.tick);
+    }
+    return { world, ids };
+  }
+
+  it('the forage ratio mid-rampage: the new foragers climb out at once, not at their poke-out', () => {
+    const { world, ids } = shelteringReserve();
+    world.colonies[P]!.targetRatio = { forage: 10, fight: 0 };
+    tick(world, []);
+    for (const id of ids) {
+      expect(world.ants.task[id]).toBe(AntTask.Foraging);
+      expect(world.ants.fleeShelterUntilTick[id]).toBe(-1);
+    }
+  });
+
+  it('the forage ratio with the spider camping the door: the new foragers wait a cooldown', () => {
+    const { world, ids } = shelteringReserve();
+    setSpider(world, 'rampaging', DOOR.x, DOOR.y);
+    world.colonies[P]!.targetRatio = { forage: 10, fight: 0 };
+    const at = world.tick;
+    tick(world, []);
+    for (const id of ids) {
+      expect(world.ants.task[id]).toBe(AntTask.Foraging);
+      expect(world.ants.zone[id]).toBe(Zone.Underground);
+      expect(world.ants.fleeShelterUntilTick[id]).toBe(at + SHELTER_COOLDOWN_TICKS);
+    }
+  });
+});
+
+describe('#377 — the dash and the hold, in detail', () => {
+  it('two dashers on one tile: neither is bumped off the way in (a dasher claims no tile)', () => {
+    const world = quiet(V68);
+    const a = spawn(world, P, 30, 64, Zone.Surface);
+    const b = spawn(world, P, 30, 64, Zone.Surface);
+    setSpider(world, 'hungryPatrol', LAIR.x, LAIR.y);
+    tick(world, []);
+    for (const id of [a, b]) {
+      expect(world.ants.fleeShelterUntilTick[id]).toBe(0);
+      expect([tileX(world, id), tileY(world, id)]).toEqual([30, 64]);
+    }
+  });
+
+  it('rampageShelterDashRoutes: an Idle surface dasher with a target, alarm off, on a rampage', () => {
+    const world = quiet(V68);
+    world.spider!.hungerTicks = HUNGRY;
+    const id = spawn(world, P, 27, 64, Zone.Surface);
+    world.ants.fleeShelterUntilTick[id] = 0;
+    world.ants.targetPosX[id] = center(DOOR.x);
+    world.ants.targetPosY[id] = center(DOOR.y);
+    expect(rampageShelterDashRoutes(world, id)).toBe(true);
+    // The colony alarm governs its civilians as at V67 (the V42 straight line).
+    world.colonies[P]!.alarmActive = true;
+    expect(rampageShelterDashRoutes(world, id)).toBe(false);
+    world.colonies[P]!.alarmActive = false;
+    world.ants.fleeShelterUntilTick[id] = -1;
+    expect(rampageShelterDashRoutes(world, id)).toBe(false);
+    world.ants.fleeShelterUntilTick[id] = 0;
+    world.ants.targetPosX[id] = -1;
+    expect(rampageShelterDashRoutes(world, id)).toBe(false);
+    world.ants.targetPosX[id] = center(DOOR.x);
+    world.ants.task[id] = AntTask.Foraging;
+    expect(rampageShelterDashRoutes(world, id)).toBe(false);
+    world.ants.task[id] = AntTask.Idle;
+    world.ants.zone[id] = Zone.Underground;
+    expect(rampageShelterDashRoutes(world, id)).toBe(false);
+    world.ants.zone[id] = Zone.Surface;
+    expect(rampageShelterDashRoutes(world, id)).toBe(true);
+    world.spider!.hungerTicks = 0;
+    expect(rampageShelterDashRoutes(world, id)).toBe(false);
+    world.spider!.hungerTicks = HUNGRY;
+    world.simVersion = V67;
+    expect(rampageShelterDashRoutes(world, id)).toBe(false);
+  });
+
+  it('a worker holding on the spider hunt reticle keeps the away step (it is not left on the strike tile)', () => {
+    for (const version of [V67, V68]) {
+      const world = quiet(version);
+      // The spider on the door, hunting the tile the worker stands on: the door
+      // reads its danger and the worker is within its chase range, so it holds.
+      setSpider(world, 'hungryPatrol', DOOR.x, DOOR.y);
+      const sp = world.spider!;
+      sp.state = 'Hunting';
+      sp.huntTargetTileX = 27;
+      sp.huntTargetTileY = 64;
+      sp.huntStartTick = world.tick;
+      world.scatterReticleTile = { x: 27, y: 64 };
+      const id = spawn(world, P, 27, 64, Zone.Surface);
+      tick(world, []);
+      // Step 13e pushed it off the reticle (on it exactly: north); the hold keeps that.
+      expect(world.ants.fleeShelterUntilTick[id]).toBe(-1);
+      expect([world.ants.targetPosX[id], world.ants.targetPosY[id]]).toEqual([
+        center(27),
+        center(63),
+      ]);
+    }
+  });
+});
+
+describe('#377 — the choice between doors', () => {
+  function twoDoors(): { world: WorldState; eastId: number } {
+    const world = quiet(V68);
+    const colony = world.colonies[P]!;
+    const eastId = allocateEntityId(world);
+    colony.entrances.push({ entranceId: eastId, surfaceTileX: 36, surfaceTileY: 64, isOpen: true });
+    const grid = world.undergroundGrids[P]!;
+    for (let y = 0; y <= TUNNEL_Y; y++) ugSet(grid, 36, y, UndergroundTileState.Open);
+    colony.digFlowFieldDirty = true;
+    world.spider!.hungerTicks = HUNGRY;
+    return { world, eastId };
+  }
+
+  it('the nearer by path; an exact tie goes to the lower entranceId', () => {
+    const { world, eastId } = twoDoors();
+    const westId = world.colonies[P]!.entrances[0]!.entranceId;
+    expect(westId).toBeLessThan(eastId);
+    const tie = spawn(world, P, 30, 64, Zone.Surface); // 6 from each door
+    const nearEast = spawn(world, P, 33, 64, Zone.Surface); // 3 from the east door
+    tick(world, []);
+    expect([world.ants.targetPosX[tie], world.ants.targetPosY[tie]]).toEqual([
+      center(DOOR.x),
+      center(DOOR.y),
+    ]);
+    expect([world.ants.targetPosX[nearEast], world.ants.targetPosY[nearEast]]).toEqual([
+      center(36),
+      center(64),
+    ]);
+  });
+
+  it('nearer by path, not by Manhattan: round the obstacle is farther', () => {
+    // The enemy colony: its door A (104,64) is 8 from (105,57) by Manhattan but 12
+    // by path (round the obstacle at x103–108, y58–60); a door B at (114,57) is 9.
+    const world = quiet(V68);
+    const colony = world.colonies[E]!;
+    expect(
+      colony.entrances.filter((e) => e.isOpen).map((e) => [e.surfaceTileX, e.surfaceTileY]),
+    ).toEqual([[104, 64]]);
+    colony.entrances.push({
+      entranceId: allocateEntityId(world),
+      surfaceTileX: 114,
+      surfaceTileY: 57,
+      isOpen: true,
+    });
+    for (let x = 105; x <= 114; x++) expect(canEnterSurfaceTile(world, x, 57)).toBe(true);
+    const id = spawn(world, E, 105, 57, Zone.Surface);
+    setSpider(world, 'hungryPatrol', LAIR.x, LAIR.y);
+    tick(world, []);
+    expect([world.ants.targetPosX[id], world.ants.targetPosY[id]]).toEqual([
+      center(114),
+      center(57),
+    ]);
+  });
+});
+
+describe('#377 — a door reading real danger that is not the spider (an enemy kill)', () => {
+  /** An enemy kill's DangerTrail on the player's door, the spider elsewhere. */
+  function killAtDoor(world: WorldState): void {
+    const grid = world.pheromoneGrids[pheromoneGridKey(P, PheromoneType.DangerTrail, 'surface')]!;
+    depositDangerCross(grid, DOOR.x, DOOR.y, SPIDER_DANGER_DEPOSIT, SPIDER_DANGER_DEPOSIT >> 1);
+  }
+  const holds = (world: WorldState, id: number): boolean =>
+    world.ants.zone[id] === Zone.Surface &&
+    world.ants.fleeShelterUntilTick[id] === -1 &&
+    world.ants.targetPosX[id] === -1;
+
+  it('the spider far: the worker holds (the V34 rule: never a door that reads real danger)', () => {
+    const world = quiet(V68);
+    const id = spawn(world, P, NEAR_WORKER.x, NEAR_WORKER.y, Zone.Surface);
+    setSpider(world, 'hungryPatrol', LAIR.x, LAIR.y);
+    killAtDoor(world);
+    tick(world, []);
+    expect(holds(world, id)).toBe(true);
+  });
+
+  it('cornered, the spider off its way: still not that door — it holds', () => {
+    const world = quiet(V68);
+    const id = spawn(world, P, NEAR_WORKER.x, NEAR_WORKER.y, Zone.Surface);
+    setSpider(world, 'hungryPatrol', NEAR_WORKER.x, NEAR_WORKER.y + 2);
+    killAtDoor(world);
+    tick(world, []);
+    expect(holds(world, id)).toBe(true);
+  });
+
+  it('the spider on its own tile: any way out — it runs for the door', () => {
+    const world = quiet(V68);
+    const id = spawn(world, P, NEAR_WORKER.x, NEAR_WORKER.y, Zone.Surface);
+    setSpider(world, 'hungryPatrol', NEAR_WORKER.x, NEAR_WORKER.y);
+    killAtDoor(world);
+    tick(world, []);
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(0);
+    expect([world.ants.targetPosX[id], world.ants.targetPosY[id]]).toEqual([
+      center(DOOR.x),
+      center(DOOR.y),
+    ]);
+  });
+});
