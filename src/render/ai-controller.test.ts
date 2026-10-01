@@ -54,6 +54,7 @@ import {
   SIM_VERSION_V61_AI_EARLY_STORAGE,
   SIM_VERSION_V62_AI_NEST_DEFENCE,
   SIM_VERSION_V63_AI_DEEP_QUEEN,
+  SIM_VERSION_V68_RAMPAGE_SHELTER,
   SIM_VERSION_V69_FOOD_FAIRNESS,
 } from '../sim/types.js';
 import { initAnt } from '../sim/ant/ant-store.js';
@@ -1090,20 +1091,27 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       return { world, colony };
     }
 
-    it('scattered north of row 64 (rows 63, 50, 10, 0) she still gets her Queen chamber a third of the way down', () => {
-      for (const y of [63, 50, 10, 0]) {
+    // Rows 55–63: from these the V68 search box (32 rows round her row read as an
+    // underground row) stops short of the Queen depth. From row 54 or above it
+    // reaches it, so those rows don't tell the versions apart.
+    const DEADLOCK_ROWS = [63, 60, 55];
+
+    it('scattered north of row 64 (rows 63, 60, 55) she still gets her Queen chamber a third of the way down', () => {
+      for (const y of DEADLOCK_ROWS) {
         const { world, colony } = shaftWorld(y, SIM_VERSION_V69_FOOD_FAIRNESS);
         aiChamberPlacement(world, colony);
         expect(queenAnchorRow(world), `queen on surface row ${y}`).toBe(THIRD);
       }
     });
 
-    it('at V68 the search seeded at her surface row read as underground: from row 63 no Queen site (the deadlock)', () => {
-      const { world, colony } = shaftWorld(63, 68);
-      aiChamberPlacement(world, colony);
-      expect(queenAnchorRow(world)).toBeUndefined();
+    it('at V68 the search seeded at her surface row read as underground: from rows 55–63 no Queen site (the deadlock)', () => {
+      for (const y of DEADLOCK_ROWS) {
+        const { world, colony } = shaftWorld(y, SIM_VERSION_V68_RAMPAGE_SHELTER);
+        aiChamberPlacement(world, colony);
+        expect(queenAnchorRow(world), `queen on surface row ${y}`).toBeUndefined();
+      }
       // On her start row (64) both versions find it.
-      for (const v of [68, SIM_VERSION_V69_FOOD_FAIRNESS]) {
+      for (const v of [SIM_VERSION_V68_RAMPAGE_SHELTER, SIM_VERSION_V69_FOOD_FAIRNESS]) {
         const w = shaftWorld(64, v);
         aiChamberPlacement(w.world, w.colony);
         expect(queenAnchorRow(w.world), `V${v}`).toBe(THIRD);
@@ -1117,6 +1125,29 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       world.ants.zone[0] = Zone.Underground;
       aiChamberPlacement(world, colony);
       expect(queenAnchorRow(world)).toBeUndefined();
+    });
+
+    it('a queen underground finds a FoodStorage site near her, outside the box round its preferred depth', () => {
+      // FoodStorage prefers row 5 and has no depth gate. The only Open tile is (10, 45):
+      // 5 rows from the queen at (10, 50), 40 rows from row 5 (outside a 32-row box).
+      // Found only if the search starts where she stands.
+      const world = makeWorld(0);
+      world.simVersion = SIM_VERSION_V69_FOOD_FAIRNESS;
+      const colony = addColony(world, 2 as ColonyId, 0);
+      addUndergroundGrid(world, 2 as ColonyId);
+      setQueenPos(world, 0, 10, 50);
+      world.ants.zone[0] = Zone.Underground;
+      setPoolFoodForTest(world, colony, AI_FOOD_STORAGE_THRESHOLD);
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
+      ugSet(world.undergroundGrids[2 as ColonyId]!, 10, 45, UndergroundTileState.Open);
+      aiChamberPlacement(world, colony);
+      const fs = world.commandQueue.find(
+        (q) =>
+          q.type === 'PlaceChamber' &&
+          (q as { chamberType: number }).chamberType === ChamberType.FoodStorage,
+      ) as { anchorTileX: number; anchorTileY: number } | undefined;
+      expect(fs?.anchorTileX).toBe(10);
+      expect(fs?.anchorTileY).toBe(45);
     });
   });
 

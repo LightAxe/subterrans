@@ -1861,7 +1861,8 @@ function isDirtTileUnderground(
 }
 
 /**
- * BFS from the queen's tile outward; returns an anchor tile where a chamber of the
+ * BFS outward from the queen's tile (for a queen still on the surface, from
+ * preferredDepth in her column); returns an anchor tile where a chamber of the
  * given type can be placed without rejection by PlaceChamber's validators. Per plan
  * 09.1-01 Task 2, this function now mirrors the tick.ts PlaceChamber checks so that
  * the issued command actually lands:
@@ -1910,8 +1911,8 @@ function findOpenChamberSpot(
   // #395 (V69) — "pre-descent" is her zone, not her row. Up to V68 the test was
   // `rawQueenTileY >= grid.height`, true only while she stands on a surface row
   // at or below 64. A surface queen pushed north of that (the spider's hunt-reticle
-  // scatter moves Idle surface ants, the queen among them, while she waits for her
-  // chamber) seeded the search at her SURFACE row read as an underground row: from
+  // scatter moves the non-Fighting surface ants, the queen among them while she
+  // waits for her chamber) seeded the search at her SURFACE row read as an underground row: from
   // row 63 the 32-row box never reaches the Queen depth, the depth gate refuses
   // every candidate, and the AI's opening deadlocked with the queen on the surface
   // (V69's nearer food made the slow-bootstrap window this needs reachable: 2 of 300
