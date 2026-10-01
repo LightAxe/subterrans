@@ -4174,7 +4174,8 @@ export interface SurveyOverlayCallbacks {
   /** Player chose New Game from the confirmation screen (fresh seed). The
    *  overlay is already closed by the time this fires. */
   onNewGame(): void;
-  /** Player chose Retry from the confirmation screen (same seed). The
+  /** Player chose Retry from the confirmation screen (the same map: seed,
+   *  difficulty and simVersion of the round just played). The
    *  overlay is already closed by the time this fires. */
   onRetry(): void;
 }

@@ -281,7 +281,8 @@ interface UIScenePhase9 {
   hideSaveLoadDialogOverlay(): void;
   // Issue #131 — survey overlay. After submit or skip, the overlay shows a
   // confirmation screen with New Game / Retry. onNewGame restarts with a new
-  // seed; onRetry restarts with the same seed. onSkip was removed.
+  // seed; onRetry restarts on the same map (seed, difficulty, simVersion).
+  // onSkip was removed.
   showSurveyOverlay(callbacks: {
     quitFromPauseMenu: boolean;
     outcome?: import('../sim/game-over.js').GameOutcome;
@@ -2209,8 +2210,8 @@ export class GameScene extends Phaser.Scene {
     // The submission flow is async; meanwhile the player will start the
     // next session and the live references would otherwise change beneath us.
     const outcome = this.currentOutcome;
-    // Capture the Retry target now (seed, difficulty, simVersion) — retryGame()
-    // needs it but resetSessionState runs first.
+    // Capture the Retry target now (seed, difficulty, simVersion), pinned to the
+    // world this survey is about; Retry fires later, from the confirmation screen.
     const retryTarget = captureRetryTarget(this.world, this.currentSeed);
     // Issue #131 — when opened from the pause menu's "Quit & feedback" action,
     // dismiss the pause menu and transition to GameOver. GameOver is the
@@ -2285,11 +2286,12 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  /** Issue #131 — restart the game with the same seed the player just lost on.
+  /** Issue #131 — restart the game on the same map the player just played.
    *  Mirrors restartGame() but skips generateFreshSeed, using the captured
    *  target instead so the player gets the exact same map to retry. #395: the
    *  target carries the lost world's simVersion, because from V69 map generation
-   *  is version-gated (a game resumed from a V68 save retries on the V68 map). */
+   *  is version-gated (a game resumed from a V68 save retries on the V68 map, and
+   *  keeps that version's rules, as the resumed game did). */
   private retryGame(target: RetryTarget): void {
     const wasSuspended = this.autosaveSuspended;
     if (!wasSuspended) {
