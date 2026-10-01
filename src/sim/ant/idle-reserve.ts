@@ -486,13 +486,13 @@ export function holdAlarmedCivilianAtShaft(
 /**
  * #377 (V68) — the rampage shelter's global gate: the spider is on a rampage
  * (spider.ts spiderOnRampage — out hunting hungry, until it eats or dies) and the
- * world is V68 or later. rampageThreatens (below) decides per colony; it is what
- * step 10a (sheltering idle workers stay recruitable), step 15b (idle surface
- * workers go in, idle shelterers stay in) and step 16 (the routed dash, the hold at
- * the shaft, a holder's occupancy shift) read. The spider does not move or change state between those steps
- * (it ticks at 17.5), so 15b and 16 always read the same answer within a tick; 10a
- * can lag them by that tick when step 12 opens an entrance near the spider (one
- * tick of the V34 recruit skip for a shelterer 15b keeps in anyway). Always false
+ * world is V68 or later. rampageThreatens (below) decides per colony; it is what step
+ * 10a (sheltering idle workers stay recruitable), step 15b (idle surface workers go
+ * in, idle shelterers stay in) and step 16 (the routed dash, the hold at the shaft, a
+ * holder's occupancy shift) read. The spider does not move or change state between
+ * those steps (it ticks at 17.5), so 15b and 16 always read the same answer within a
+ * tick; 10a can lag them by that tick when step 12 opens an entrance near the spider
+ * (one tick of the V34 recruit skip for a shelterer 15b keeps in anyway). Always false
  * below V68.
  */
 export function rampageShelterActive(world: WorldState): boolean {
@@ -558,8 +558,9 @@ export function rampageThreatens(world: WorldState, colony: ColonyRecord): boole
  *    entrance the spider is camping or about to reach is never chosen, nor one it
  *    stands in the way of. With the spider standing still, a door allowed stays
  *    allowed as the worker walks its way (m + ds - d never falls along a shortest
- *    path), and its way never comes within range. (Parity: m + ds has d's parity, so the values next to the bound
- *    are d + 2R, excluded, and d + 2R + 2, the first allowed.)
+ *    path), and its way never comes within range. (Parity: m + ds has d's parity,
+ *    so the values next to the bound are d + 2R, excluded, and d + 2R + 2, the
+ *    first allowed.)
  *  - within its chase range ("cornered", 1 <= m <= R), every way passes within
  *    range, so the worker must only not walk toward the spider: not a door whose
  *    next step (stepTowardReachable, the step step 16 takes it) lands nearer the
@@ -694,15 +695,15 @@ export function rampageShelterDashRoutes(world: WorldState, id: number): boolean
 
 /**
  * #393 (V68) — `id` is an Idle worker holding on the surface from the spider's
- * rampage: not fleeing (phase -1), of a colony whose alarm is off and which the
- * spider threatens, so step 15b found it no entrance whose way keeps out of the
- * spider's reach and it stands where it is (or, within the scatter radius of the hunt
- * reticle, takes step 13e's away step — judged from where that leaves it). Unlike a
- * dasher it still claims its tile
- * in the same-colony occupancy pass (ant-movement.ts resolveSameColonyOccupancy), so
- * a crowded reserve stays spread out instead of stacking into the dense tiles the
- * spider's hunt picks; but a friend's bump may move it only to a tile no nearer the
- * spider, and with none it stays. Always false below V68.
+ * rampage: not fleeing (phase -1), of a colony whose alarm is off and which the spider
+ * threatens, so step 15b found it no entrance whose way keeps out of the spider's
+ * reach and it stands where it is (or, within the scatter radius of the hunt reticle,
+ * takes step 13e's away step — judged from where that leaves it). Unlike a dasher it
+ * still claims its tile in the same-colony occupancy pass (ant-movement.ts
+ * resolveSameColonyOccupancy), so a crowded reserve stays spread out instead of
+ * stacking into the dense tiles the spider's hunt picks; but a friend's bump may move
+ * it only to a tile no nearer the spider, and with none it stays. Always false below
+ * V68.
  */
 export function rampageShelterHolds(world: WorldState, id: number): boolean {
   const ants = world.ants;

@@ -1566,7 +1566,8 @@ describe('#393 (V68) — a holder bumped off a friend’s tile never lands neare
     expect(before).toBe(30);
     expect(sharing()).toBeLessThan(before); // the occupancy pass still spreads them
     // and every tile still shared is a forced overlap: each open neighbour no nearer
-    // the spider is taken.
+    // the spider is taken (there are some, so this is not vacuous).
+    expect(sharing()).toBeGreaterThan(0);
     const taken = new Set(ids.map((id) => `${tileX(world, id)},${tileY(world, id)}`));
     const counts = new Map<string, number>();
     for (const k of ids.map((id) => `${tileX(world, id)},${tileY(world, id)}`))

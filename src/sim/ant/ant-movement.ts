@@ -2231,8 +2231,9 @@ function resolveSameColonyOccupancy(world: WorldState): void {
     // If no shift found, forced overlap — rare. Leave the ant at the original
     // tile; do not pollute the occupancy map (the lower-id claimant remains
     // registered). Visual overlap persists this tick; natural drift on the
-    // next tick usually breaks the tie. (A rampage holder does not drift: its
-    // overlap lasts until a not-nearer neighbour frees up or the threat ends.)
+    // next tick usually breaks the tie. (A rampage holder stands still, so drift
+    // does not break it: the overlap lasts until a neighbour no nearer the spider is
+    // free, or one of the two moves off or stops holding.)
     void shifted;
   }
 }
