@@ -77,17 +77,17 @@ describe('#395 part 2 — pinned V69: egg-laying is unchanged below V70', () => 
       const world = createScenario(seed, difficulty, SIM_VERSION_V69_FOOD_FAIRNESS);
       expect(runOpening(world), `seed ${seed} ${difficulty}`).toEqual(golden);
       const c = world.colonies[PLAYER_COLONY_ID]!;
-      expect(c.eggCount + c.larvaeCount).toBe(v69Brood);
+      expect(c.eggCount + c.larvaeCount, `seed ${seed} ${difficulty}`).toBe(v69Brood);
     }
-  }, 120_000);
+  }, 240_000);
 
-  it('non-vacuity: at V70 the same openings diverge, with a smaller brood', () => {
-    for (const [seed, difficulty, golden, v69Brood] of GOLDEN_RUNS) {
+  it('non-vacuity: at V70 the same openings end 3:00 with a smaller brood', () => {
+    // (A hash comparison would prove nothing: the serialized world carries simVersion.)
+    for (const [seed, difficulty, , v69Brood] of GOLDEN_RUNS) {
       const v70 = createScenario(seed, difficulty, SIM_VERSION_V70_EGG_RESERVE);
-      const hashes = runOpening(v70);
-      expect(hashes[2], `seed ${seed} ${difficulty}`).not.toBe(golden[2]);
+      runOpening(v70);
       const c = v70.colonies[PLAYER_COLONY_ID]!;
       expect(c.eggCount + c.larvaeCount, `seed ${seed} ${difficulty}`).toBeLessThan(v69Brood);
     }
-  }, 120_000);
+  }, 240_000);
 });

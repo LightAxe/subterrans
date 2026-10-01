@@ -562,55 +562,61 @@ describe('#395 (V70) — storage capacity caps what the reserve allows', () => {
 
 describe('#395 (V70) — the reserve feeds the colony for the runway (real consumption)', () => {
   it('laid at exactly the reserve, with no food coming in nobody starves or misses a meal for the runway', () => {
-    for (const shape of [SHAPES[1]!, SHAPES[4]!, SHAPES[5]!, SHAPES[6]!]) {
-      const world = makeWorld(SIM_VERSION_V70_EGG_RESERVE);
-      const colony = makeColony(world, 1, shape, 'chambers-only:3');
-      const ants = world.ants;
-      // The worst case: every worker's meal is due now. Some eggs hatch, and some
-      // larvae mature, during the runway (lifecycle transitions run below).
-      for (const id of colony.workers)
-        ants.lastMealTick[id] = world.tick - WORKER_MEAL_INTERVAL_TICKS;
-      colony.eggs.forEach((id, i) => {
-        ants.age[id] = i % 2 === 0 ? 600 : 0;
-      });
-      colony.larvae.forEach((id, i) => {
-        ants.age[id] = i % 3 === 0 ? 1000 : 0;
-      });
-      const reserve = eggReserveFp(world, colony);
-      setStores(world, colony, 'chambers-only:3', reserve);
-      tickQueenEggProduction(world, colony);
-      expect(colony.eggCount, JSON.stringify(shape)).toBe(shape.eggs + 1);
-      // The real tick order: the lay tick's consumption has already run (step 3), its
-      // lifecycle step (7) runs right after the lay (6). The runway is the next RUNWAY
-      // ticks.
-      tickLifecycleTransitions(world, colony);
-      const queen = colony.queenEntityId;
-      const living = [queen, ...colony.eggs, ...colony.larvae, ...colony.workers].filter(
-        (id) => ants.alive[id] === 1,
-      );
-      const start = world.tick;
-      let workerMealsMissed = 0;
-      for (let t = 1; t <= RUNWAY; t++) {
-        world.tick = start + t;
-        tickFoodConsumption(world, colony);
-        expect(ants.lastMealTick[queen], `queen fed at tick ${t}`).toBe(world.tick);
-        for (const id of colony.larvae) {
-          if (ants.alive[id] === 1)
-            expect(ants.lastMealTick[id], `larva fed at tick ${t}`).toBe(world.tick);
-        }
-        for (const id of colony.workers) {
-          if (
-            ants.alive[id] === 1 &&
-            world.tick - ants.lastMealTick[id]! >= WORKER_MEAL_INTERVAL_TICKS
-          ) {
-            workerMealsMissed++;
-          }
-        }
-        tickDeathCleanup(world, colony);
+    // Two worker timings: due on the tick after the lay (meals at +1 and +601), and fed
+    // on the lay tick (meals at +600 and +1200, the last when the stores are lowest).
+    // Both fit the meals the reserve counts; the second is the tighter for the at-home rule
+    // that a worker's meal must leave QUEEN_MEAL_RESERVE_FP in the stores.
+    const timings = [WORKER_MEAL_INTERVAL_TICKS - 1, 0];
+    for (const shape of [SHAPES[1]!, SHAPES[4]!, SHAPES[5]!, SHAPES[6]!])
+      for (const lastMealAgo of timings) {
+        const world = makeWorld(SIM_VERSION_V70_EGG_RESERVE);
+        const colony = makeColony(world, 1, shape, 'chambers-only:3');
+        const ants = world.ants;
+        // Most meals in the runway for every worker. Some eggs hatch, and some larvae
+        // mature, during the runway (lifecycle transitions run below).
+        for (const id of colony.workers) ants.lastMealTick[id] = world.tick - lastMealAgo;
+        colony.eggs.forEach((id, i) => {
+          ants.age[id] = i % 2 === 0 ? 600 : 0;
+        });
+        colony.larvae.forEach((id, i) => {
+          ants.age[id] = i % 3 === 0 ? 1000 : 0;
+        });
+        const reserve = eggReserveFp(world, colony);
+        setStores(world, colony, 'chambers-only:3', reserve);
+        tickQueenEggProduction(world, colony);
+        expect(colony.eggCount, JSON.stringify(shape)).toBe(shape.eggs + 1);
+        // The real tick order: the lay tick's consumption has already run (step 3), its
+        // lifecycle step (7) runs right after the lay (6). The runway is the next RUNWAY
+        // ticks.
         tickLifecycleTransitions(world, colony);
+        const queen = colony.queenEntityId;
+        const living = [queen, ...colony.eggs, ...colony.larvae, ...colony.workers].filter(
+          (id) => ants.alive[id] === 1,
+        );
+        const start = world.tick;
+        let workerMealsMissed = 0;
+        for (let t = 1; t <= RUNWAY; t++) {
+          world.tick = start + t;
+          tickFoodConsumption(world, colony);
+          expect(ants.lastMealTick[queen], `queen fed at tick ${t}`).toBe(world.tick);
+          for (const id of colony.larvae) {
+            if (ants.alive[id] === 1)
+              expect(ants.lastMealTick[id], `larva fed at tick ${t}`).toBe(world.tick);
+          }
+          for (const id of colony.workers) {
+            if (
+              ants.alive[id] === 1 &&
+              world.tick - ants.lastMealTick[id]! >= WORKER_MEAL_INTERVAL_TICKS
+            ) {
+              workerMealsMissed++;
+            }
+          }
+          tickDeathCleanup(world, colony);
+          tickLifecycleTransitions(world, colony);
+        }
+        for (const id of living)
+          expect(ants.alive[id], `ant ${id} ${JSON.stringify(shape)}`).toBe(1);
+        expect(workerMealsMissed, JSON.stringify(shape)).toBe(0);
       }
-      for (const id of living) expect(ants.alive[id], `ant ${id} ${JSON.stringify(shape)}`).toBe(1);
-      expect(workerMealsMissed, JSON.stringify(shape)).toBe(0);
-    }
   });
 });

@@ -92,5 +92,5 @@ describe('#395 (V70) — a world saved mid-game continues exactly as the unsaved
     // Non-vacuity: across the continuation the V70 queen laid, and was held back.
     expect(liveLays.n).toBeGreaterThan(0);
     expect(v69Lays.n).toBeGreaterThan(liveLays.n);
-  }, 60_000);
+  }, 240_000); // sized for instrumented coverage runs (#227)
 });

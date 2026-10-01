@@ -79,13 +79,13 @@ import {
 // started laying eggs against an empty tunnel, forcing every worker into
 // Nursing and starving the queen (see gsd-debug 09 session).
 //
+// Pending chambers do NOT satisfy either gate — colony.chambers only contains
+// promoted entries (see checkPendingChambers, single-path creation invariant).
+//
 // From V70 (#395) a FoodStorage chamber is effectively required too: the smallest
 // egg reserve (3600 fp at the 60 s runway) is more than the entrance pool holds
 // (BASE_FOOD_STORAGE_CAPACITY, 2048), and storage capacity then caps the brood
 // (QUEEN_EGG_RESERVE_RUNWAY_TICKS).
-//
-// Pending chambers do NOT satisfy either gate — colony.chambers only contains
-// promoted entries (see checkPendingChambers, single-path creation invariant).
 //
 // When all gates pass:
 //   - Allocate new entity via allocateEntityId(world)
