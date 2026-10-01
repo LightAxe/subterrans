@@ -18,18 +18,23 @@ import {
   bakeMinimapDapple,
   drawMinimapBorder,
   drawMinimapEnemyFighters,
-  drawMinimapGatheringRing,
+  drawMinimapArmyRing,
   MINIMAP_BORDER_COLOR,
   MINIMAP_BORDER_OUTLINE_COLOR,
   MINIMAP_ENEMY_DOT_PX,
   COLOR_MINIMAP_ENEMY_FIGHTER,
   COLOR_MINIMAP_ENEMY_FIGHTER_BACKING,
-  COLOR_MINIMAP_GATHERING_RING,
+  COLOR_MINIMAP_ARMY_RING,
   MINIMAP_RING_MIN_R,
   MINIMAP_RING_MAX_R,
   MINIMAP_RING_PERIOD_MS,
 } from './minimap.js';
 import { GATHER_MIN_FIGHTERS } from './enemy-gathering.js';
+import {
+  MARCH_MIN_FIGHTERS,
+  MARCH_WINDOW_TICKS,
+  measureEnemyMarchThisTick,
+} from './enemy-march.js';
 import { addFighter, raidWorld } from '../sim/raid-test-utils.js';
 import { AntTask } from '../sim/enums.js';
 import type { GfxLike } from './draw-surface.js';
@@ -548,7 +553,7 @@ describe('#372 drawMinimapEnemyFighters — every enemy surface fighter, always'
   });
 });
 
-describe('#372 drawMinimapGatheringRing — a pulsing ring round a gathering army', () => {
+describe('#372 drawMinimapArmyRing — a pulsing ring round a gathering army', () => {
   const mm = hud.MINIMAP;
 
   function gathered(n: number, x = 36, y = 62): WorldState {
@@ -560,7 +565,7 @@ describe('#372 drawMinimapGatheringRing — a pulsing ring round a gathering arm
 
   it('no ring below GATHER_MIN_FIGHTERS', () => {
     const gfx = new MockGfx();
-    drawMinimapGatheringRing(gfx, gathered(GATHER_MIN_FIGHTERS - 1), hud, PLAYER_COLONY_ID, 0);
+    drawMinimapArmyRing(gfx, gathered(GATHER_MIN_FIGHTERS - 1), hud, PLAYER_COLONY_ID, 0);
     expect(circles(gfx)).toHaveLength(0);
   });
 
@@ -571,14 +576,14 @@ describe('#372 drawMinimapGatheringRing — a pulsing ring round a gathering arm
     const cy = mm.y + ((62.5 + 63.5) / 2) * 1.25;
     const period = MINIMAP_RING_PERIOD_MS;
     const low = new MockGfx();
-    drawMinimapGatheringRing(low, w, hud, PLAYER_COLONY_ID, (period * 3) / 4); // sin = -1
+    drawMinimapArmyRing(low, w, hud, PLAYER_COLONY_ID, (period * 3) / 4); // sin = -1
     const high = new MockGfx();
-    drawMinimapGatheringRing(high, w, hud, PLAYER_COLONY_ID, period / 4); // sin = +1
+    drawMinimapArmyRing(high, w, hud, PLAYER_COLONY_ID, period / 4); // sin = +1
     const [haloLo, ringLo] = circles(low);
     const [, ringHi] = circles(high);
     expect(haloLo!.style).toEqual([4, 0x000000, 0.55]);
     expect(ringLo!.style[0]).toBe(2);
-    expect(ringLo!.style[1]).toBe(COLOR_MINIMAP_GATHERING_RING);
+    expect(ringLo!.style[1]).toBe(COLOR_MINIMAP_ARMY_RING);
     expect(ringLo!.style[2]).toBeCloseTo(0.55, 5);
     expect(ringHi!.style[2]).toBeCloseTo(1, 5);
     expect(ringLo!.args[0]).toBeCloseTo(cx, 5);
@@ -595,7 +600,7 @@ describe('#372 drawMinimapGatheringRing — a pulsing ring round a gathering arm
     for (let i = 0; i < GATHER_MIN_FIGHTERS; i++)
       addFighter(w, ENEMY_COLONY_ID, 26 + 4 * i, 70, null);
     const gfx = new MockGfx();
-    drawMinimapGatheringRing(gfx, w, hud, PLAYER_COLONY_ID, (MINIMAP_RING_PERIOD_MS * 3) / 4);
+    drawMinimapArmyRing(gfx, w, hud, PLAYER_COLONY_ID, (MINIMAP_RING_PERIOD_MS * 3) / 4);
     const r = circles(gfx)[1]!.args[2]!;
     expect(r).toBeCloseTo((20 * 1.25) / 2 + 4, 5); // half the box diagonal + 4
     expect(r).toBeGreaterThan(MINIMAP_RING_MIN_R);
@@ -605,7 +610,7 @@ describe('#372 drawMinimapGatheringRing — a pulsing ring round a gathering arm
       addFighter(far, ENEMY_COLONY_ID, x, y, null);
     }
     const g2 = new MockGfx();
-    drawMinimapGatheringRing(g2, far, hud, PLAYER_COLONY_ID, (MINIMAP_RING_PERIOD_MS * 3) / 4);
+    drawMinimapArmyRing(g2, far, hud, PLAYER_COLONY_ID, (MINIMAP_RING_PERIOD_MS * 3) / 4);
     expect(circles(g2)[1]!.args[2]).toBeCloseTo(MINIMAP_RING_MAX_R, 5);
   });
 
@@ -615,7 +620,7 @@ describe('#372 drawMinimapGatheringRing — a pulsing ring round a gathering arm
     for (let i = 0; i < GATHER_MIN_FIGHTERS; i++)
       addFighter(w, ENEMY_COLONY_ID, i % 3, (i / 3) | 0, null);
     const gfx = new MockGfx();
-    drawMinimapGatheringRing(gfx, w, hud, PLAYER_COLONY_ID, MINIMAP_RING_PERIOD_MS / 4);
+    drawMinimapArmyRing(gfx, w, hud, PLAYER_COLONY_ID, MINIMAP_RING_PERIOD_MS / 4);
     const [cx, cy, r] = circles(gfx)[0]!.args as [number, number, number];
     const reach = r + 2;
     expect(cx - reach).toBeGreaterThanOrEqual(mm.x - 1e-9);
@@ -635,5 +640,154 @@ describe('#372 drawMinimapGatheringRing — a pulsing ring round a gathering arm
     const c = new MockGfx();
     drawMinimap(c, w, vs, hud, ENEMY_COLONY_ID, 0);
     expect(circles(c)).toHaveLength(0);
+  });
+});
+
+describe('#394 drawMinimapArmyRing — the ring follows a marching army', () => {
+  const mm = hud.MINIMAP;
+  const LOW = (MINIMAP_RING_PERIOD_MS * 3) / 4; // sin = -1: the ring at its base radius
+
+  /** Step every ant in `ids` (dx, dy) tiles a tick for `ticks` ticks; the shared
+   *  march history sees each tick (as UIScene's per-frame draw does). */
+  function walk(w: WorldState, ids: readonly number[], ticks: number, dx: number, dy = 0): void {
+    for (let t = 0; t < ticks; t++) {
+      // eslint-disable-next-line no-restricted-syntax -- test fixture clock, not a render write
+      w.tick += 1;
+      for (const id of ids) {
+        w.ants.posX[id] = w.ants.posX[id]! + Math.round(dx * 256);
+        w.ants.posY[id] = w.ants.posY[id]! + Math.round(dy * 256);
+      }
+      measureEnemyMarchThisTick(w, PLAYER_COLONY_ID);
+    }
+  }
+
+  /** Ring centre (minimap px) of a box of tile centres x0..x1 × y0..y1. */
+  const centre = (x0: number, x1: number, y0: number, y1: number) => [
+    mm.x + ((x0 + x1) / 2) * 1.25,
+    mm.y + ((y0 + y1) / 2) * 1.25,
+  ];
+
+  it('rings a marching army where it is now, tick after tick', () => {
+    const { world: w } = raidWorld();
+    const ids: number[] = [];
+    for (let i = 0; i < MARCH_MIN_FIGHTERS; i++)
+      ids.push(addFighter(w, ENEMY_COLONY_ID, 70 + (i % 3), 62 + ((i / 3) | 0), null));
+    measureEnemyMarchThisTick(w, PLAYER_COLONY_ID);
+    walk(w, ids, MARCH_WINDOW_TICKS - 1, -0.5);
+    const none = new MockGfx();
+    drawMinimapArmyRing(none, w, hud, PLAYER_COLONY_ID, LOW);
+    expect(circles(none)).toHaveLength(0); // no heading yet
+    walk(w, ids, 1, -0.5); // 10 tiles west: x 60..62 (centres 60.5..62.5)
+    const a = new MockGfx();
+    drawMinimapArmyRing(a, w, hud, PLAYER_COLONY_ID, LOW);
+    expect(circles(a)).toHaveLength(2); // halo + ring
+    const [ax, ay] = centre(60.5, 62.5, 62.5, 63.5);
+    expect(circles(a)[1]!.args[0]).toBeCloseTo(ax!, 5);
+    expect(circles(a)[1]!.args[1]).toBeCloseTo(ay!, 5);
+    expect(circles(a)[1]!.style[1]).toBe(COLOR_MINIMAP_ARMY_RING);
+    walk(w, ids, 20, -0.5); // 10 more
+    const b = new MockGfx();
+    drawMinimapArmyRing(b, w, hud, PLAYER_COLONY_ID, LOW);
+    const [bx] = centre(50.5, 52.5, 62.5, 63.5);
+    expect(circles(b)[1]!.args[0]).toBeCloseTo(bx!, 5);
+  });
+
+  it('a march and a gathering at the same door share one ring round both', () => {
+    const { world: w } = raidWorld();
+    for (let i = 0; i < GATHER_MIN_FIGHTERS; i++)
+      addFighter(w, ENEMY_COLONY_ID, 30 + (i % 3), 62 + ((i / 3) | 0), null);
+    const ids: number[] = [];
+    for (let i = 0; i < MARCH_MIN_FIGHTERS; i++)
+      ids.push(addFighter(w, ENEMY_COLONY_ID, 60 + (i % 3), 62 + ((i / 3) | 0), null));
+    measureEnemyMarchThisTick(w, PLAYER_COLONY_ID);
+    walk(w, ids, MARCH_WINDOW_TICKS, -0.5); // to x 50..52
+    const gfx = new MockGfx();
+    drawMinimapArmyRing(gfx, w, hud, PLAYER_COLONY_ID, LOW);
+    expect(circles(gfx)).toHaveLength(2);
+    // Box: gathering x 30.5..32.5, march x 50.5..52.5, rows 62.5..63.5.
+    const [cx, cy] = centre(30.5, 52.5, 62.5, 63.5);
+    expect(circles(gfx)[1]!.args[0]).toBeCloseTo(cx!, 5);
+    expect(circles(gfx)[1]!.args[1]).toBeCloseTo(cy!, 5);
+    expect(circles(gfx)[1]!.args[2]).toBeCloseTo(Math.hypot(22 * 1.25, 1.25) / 2 + 4, 5);
+  });
+
+  it('too far apart for one ring to enclose both: a ring each, even at the same door', () => {
+    const { world: w } = raidWorld();
+    for (let i = 0; i < GATHER_MIN_FIGHTERS; i++)
+      addFighter(w, ENEMY_COLONY_ID, 30 + (i % 3), 62 + ((i / 3) | 0), null);
+    const ids: number[] = [];
+    for (let i = 0; i < MARCH_MIN_FIGHTERS; i++)
+      ids.push(addFighter(w, ENEMY_COLONY_ID, 76 + (i % 3), 62 + ((i / 3) | 0), null));
+    measureEnemyMarchThisTick(w, PLAYER_COLONY_ID);
+    walk(w, ids, MARCH_WINDOW_TICKS, -0.5); // to x 66..68: 36 tiles from the gathering
+    const gfx = new MockGfx();
+    drawMinimapArmyRing(gfx, w, hud, PLAYER_COLONY_ID, LOW);
+    expect(circles(gfx)).toHaveLength(4);
+    const [mx] = centre(66.5, 68.5, 62.5, 63.5);
+    const [gx] = centre(30.5, 32.5, 62.5, 63.5);
+    expect(circles(gfx)[1]!.args[0]).toBeCloseTo(mx!, 5);
+    expect(circles(gfx)[3]!.args[0]).toBeCloseTo(gx!, 5);
+  });
+
+  it('a march and a gathering at different doors get a ring each', () => {
+    const { world: w, player } = raidWorld();
+    player.entrances.push({ entranceId: 9001, surfaceTileX: 24, surfaceTileY: 20, isOpen: true });
+    // Gathering at the north door; the march heads for the row-64 door.
+    for (let i = 0; i < GATHER_MIN_FIGHTERS; i++)
+      addFighter(w, ENEMY_COLONY_ID, 30 + (i % 3), 18 + ((i / 3) | 0), null);
+    const ids: number[] = [];
+    for (let i = 0; i < MARCH_MIN_FIGHTERS; i++)
+      ids.push(addFighter(w, ENEMY_COLONY_ID, 70 + (i % 3), 64 + ((i / 3) | 0), null));
+    measureEnemyMarchThisTick(w, PLAYER_COLONY_ID);
+    walk(w, ids, MARCH_WINDOW_TICKS, -0.5);
+    const gfx = new MockGfx();
+    drawMinimapArmyRing(gfx, w, hud, PLAYER_COLONY_ID, LOW);
+    expect(circles(gfx)).toHaveLength(4);
+    const [mx] = centre(60.5, 62.5, 64.5, 65.5);
+    const [gx] = centre(30.5, 32.5, 18.5, 19.5);
+    expect(circles(gfx)[1]!.args[0]).toBeCloseTo(mx!, 5); // the march first
+    expect(circles(gfx)[3]!.args[0]).toBeCloseTo(gx!, 5);
+  });
+
+  it('different doors get a ring each even when one ring could enclose both', () => {
+    const { world: w, player } = raidWorld();
+    player.entrances.push({ entranceId: 9001, surfaceTileX: 24, surfaceTileY: 20, isOpen: true });
+    // Gathering 14-16 tiles from the north door (and 46+ from the row-64 one).
+    for (let i = 0; i < GATHER_MIN_FIGHTERS; i++)
+      addFighter(w, ENEMY_COLONY_ID, 38 + (i % 3), 18 + ((i / 3) | 0), null);
+    // A march just beside it, more than GATHER_RADIUS_TILES from the north door,
+    // walking straight at the row-64 door (south-west).
+    const ids: number[] = [];
+    for (let i = 0; i < MARCH_MIN_FIGHTERS; i++)
+      ids.push(addFighter(w, ENEMY_COLONY_ID, 54 + (i % 3), 21 + ((i / 3) | 0), null));
+    const [ux, uy] = [24.5 - 55.5, 64.5 - 21.5];
+    const len = Math.hypot(ux, uy);
+    measureEnemyMarchThisTick(w, PLAYER_COLONY_ID);
+    walk(w, ids, MARCH_WINDOW_TICKS, (0.5 * ux) / len, (0.5 * uy) / len);
+    const m = measureEnemyMarchThisTick(w, PLAYER_COLONY_ID)!;
+    expect(m.fighters).toBe(MARCH_MIN_FIGHTERS);
+    expect(m.entrance.surfaceTileY).toBe(64);
+    // One ring round both would fit: the union box is well under the largest ring.
+    const span = Math.hypot((m.maxTileX - 38.5) * 1.25, (m.maxTileY - 18.5) * 1.25);
+    expect(span / 2 + 4).toBeLessThan(MINIMAP_RING_MAX_R);
+    const gfx = new MockGfx();
+    drawMinimapArmyRing(gfx, w, hud, PLAYER_COLONY_ID, LOW);
+    expect(circles(gfx)).toHaveLength(4);
+    const [mx] = centre(m.minTileX, m.maxTileX, m.minTileY, m.maxTileY);
+    const [gx] = centre(38.5, 40.5, 18.5, 19.5);
+    expect(circles(gfx)[1]!.args[0]).toBeCloseTo(mx!, 5);
+    expect(circles(gfx)[3]!.args[0]).toBeCloseTo(gx!, 5);
+  });
+
+  it('MARCH_MIN_FIGHTERS - 1 marching: no ring', () => {
+    const { world: w } = raidWorld();
+    const ids: number[] = [];
+    for (let i = 0; i < MARCH_MIN_FIGHTERS - 1; i++)
+      ids.push(addFighter(w, ENEMY_COLONY_ID, 70 + (i % 3), 62 + ((i / 3) | 0), null));
+    measureEnemyMarchThisTick(w, PLAYER_COLONY_ID);
+    walk(w, ids, MARCH_WINDOW_TICKS, -0.5);
+    const gfx = new MockGfx();
+    drawMinimapArmyRing(gfx, w, hud, PLAYER_COLONY_ID, LOW);
+    expect(circles(gfx)).toHaveLength(0);
   });
 });

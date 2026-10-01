@@ -6,7 +6,8 @@
 // Exports:
 //   drawMinimap(gfx, world, viewState, hud, viewerColonyId?, frameTimeMs?) — called
 //     per frame from UIScene.update(); #372 adds the frame border, the enemy
-//     fighter dots and the pulsing ring round a gathering enemy army
+//     fighter dots and the pulsing ring round an enemy army gathering near the
+//     viewer's entrances (#394: or marching on them, the ring following it)
 //   minimapClickToTile(px, py, hud) — converts screen pixel to tile coord, returns null if outside
 //   applyMinimapClick(viewState, px, py, hud) — pan surface camera, and (while
 //     underground) X-link the underground camera to the click (#399: the view
@@ -52,6 +53,7 @@ import { AntTask } from '../sim/enums.js';
 import { Zone } from '../sim/terrain.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import { isEnemyGathering, measureEnemyGatheringThisTick } from './enemy-gathering.js';
+import { isEnemyMarching, measureEnemyMarchThisTick } from './enemy-march.js';
 
 // Exported for tests + external consumers. Derived from the default 800×592
 // layout's minimap rect so they stay byte-identical to the pre-#238 values
@@ -85,9 +87,10 @@ export const COLOR_MINIMAP_ENEMY_FIGHTER_BACKING = 0x1a0000;
 /** Side (px) of the red square; the backing is 2px larger. */
 export const MINIMAP_ENEMY_DOT_PX = 3;
 
-// #372 — the ring round a gathering army (isEnemyGathering): red, pulsing once
-// a second in radius and alpha, over a dark halo.
-export const COLOR_MINIMAP_GATHERING_RING = 0xff2a1f;
+// #372 — the ring round an enemy army (gathering near an entrance, or — #394 —
+// marching on one): red, pulsing once a second in radius and alpha, over a dark
+// halo.
+export const COLOR_MINIMAP_ARMY_RING = 0xff2a1f;
 export const MINIMAP_RING_PERIOD_MS = 1000;
 /** Ring radius bounds (px) around the army's bounding box. */
 export const MINIMAP_RING_MIN_R = 9;
@@ -188,13 +191,14 @@ export function drawMinimap(
   gfx.fillRect(rx, ry, 1, rh); // left edge
   gfx.fillRect(rx + rw - 1, ry, 1, rh); // right edge
 
-  // #372 — enemy fighters and the ring round a gathering army, on top of the
-  // viewport outline so neither hides behind it.
+  // #372 — enemy fighters and the ring round an army gathering near (or, #394,
+  // marching on) the viewer's entrances, on top of the viewport outline so
+  // neither hides behind it.
   drawMinimapEnemyFighters(gfx, world, hud, viewerColonyId);
   // Colony markers after the dots, so an enemy nest's own sentries never bury
   // its marker (#372).
   drawMinimapColonyMarkers(gfx, world, mm, sx, sy);
-  drawMinimapGatheringRing(gfx, world, hud, viewerColonyId, frameTimeMs);
+  drawMinimapArmyRing(gfx, world, hud, viewerColonyId, frameTimeMs);
 
   // #372 — the frame, outside the map rect (nothing above draws there).
   drawMinimapBorder(gfx, hud);
@@ -337,14 +341,23 @@ export function drawMinimapEnemyFighters(
   }
 }
 
+/** A bounding box in tile coordinates (fractional). */
+interface TileBox {
+  minTileX: number;
+  minTileY: number;
+  maxTileX: number;
+  maxTileY: number;
+}
+
 /**
- * #372 — while an enemy army is gathering near one of the viewer's entrances
- * (isEnemyGathering), ring it: a red circle round the army's bounding box,
- * pulsing in radius (+2px) and alpha once per MINIMAP_RING_PERIOD_MS, over a
- * dark halo. The radius is clamped to [MINIMAP_RING_MIN_R, MINIMAP_RING_MAX_R]
- * and the centre pulled in so the ring stays inside the map rect.
+ * #372/#394 — ring every enemy army threatening the viewer's entrances: one
+ * marching on them (isEnemyMarching, enemy-march.ts), so the ring follows it
+ * across the map, and one gathering near an entrance (isEnemyGathering). A march
+ * and a gathering at the same entrance are one army — its head at the door, its
+ * tail still coming — and share one ring round both, if one ring can enclose
+ * them (else, like a march and a gathering at different entrances, one each).
  */
-export function drawMinimapGatheringRing(
+export function drawMinimapArmyRing(
   gfx: GfxLike,
   world: WorldState,
   hud: HudLayout,
@@ -352,23 +365,57 @@ export function drawMinimapGatheringRing(
   frameTimeMs: number,
 ): void {
   const g = measureEnemyGatheringThisTick(world, viewerColonyId);
-  if (!isEnemyGathering(g)) return;
+  const m = measureEnemyMarchThisTick(world, viewerColonyId);
+  const gathering = isEnemyGathering(g);
+  const marching = isEnemyMarching(m);
+  if (marching && gathering && m.entrance === g.entrance) {
+    const both: TileBox = {
+      minTileX: Math.min(m.minTileX, g.minTileX),
+      minTileY: Math.min(m.minTileY, g.minTileY),
+      maxTileX: Math.max(m.maxTileX, g.maxTileX),
+      maxTileY: Math.max(m.maxTileY, g.maxTileY),
+    };
+    if (ringBaseRadius(hud, both) <= MINIMAP_RING_MAX_R) {
+      drawRingRound(gfx, hud, frameTimeMs, both);
+      return;
+    }
+    // Too far apart for one ring to enclose both: one each.
+  }
+  if (marching) drawRingRound(gfx, hud, frameTimeMs, m);
+  if (gathering) drawRingRound(gfx, hud, frameTimeMs, g);
+}
+
+/** The unclamped base radius (px) of a ring round `box`: half its diagonal on
+ *  the minimap, plus 4. */
+function ringBaseRadius(hud: HudLayout, box: TileBox): number {
+  const sx = hud.MINIMAP.w / SURFACE_GRID_WIDTH;
+  const sy = hud.MINIMAP.h / SURFACE_GRID_HEIGHT;
+  return Math.hypot((box.maxTileX - box.minTileX) * sx, (box.maxTileY - box.minTileY) * sy) / 2 + 4;
+}
+
+/**
+ * #372 — the ring round one army's bounding box `box`: a red circle pulsing in
+ * radius (+2px) and alpha once per MINIMAP_RING_PERIOD_MS, over a dark halo. The
+ * radius is clamped to [MINIMAP_RING_MIN_R, MINIMAP_RING_MAX_R] and the centre
+ * pulled in so the ring stays inside the map rect.
+ */
+function drawRingRound(gfx: GfxLike, hud: HudLayout, frameTimeMs: number, box: TileBox): void {
   const mm = hud.MINIMAP;
   const sx = mm.w / SURFACE_GRID_WIDTH;
   const sy = mm.h / SURFACE_GRID_HEIGHT;
-  const x0 = g.minTileX * sx;
-  const x1 = g.maxTileX * sx;
-  const y0 = g.minTileY * sy;
-  const y1 = g.maxTileY * sy;
+  const x0 = box.minTileX * sx;
+  const x1 = box.maxTileX * sx;
+  const y0 = box.minTileY * sy;
+  const y1 = box.maxTileY * sy;
   const phase = 0.5 + 0.5 * Math.sin((2 * Math.PI * frameTimeMs) / MINIMAP_RING_PERIOD_MS);
-  const base = clamp(Math.hypot(x1 - x0, y1 - y0) / 2 + 4, MINIMAP_RING_MIN_R, MINIMAP_RING_MAX_R);
+  const base = clamp(ringBaseRadius(hud, box), MINIMAP_RING_MIN_R, MINIMAP_RING_MAX_R);
   const r = base + 2 * phase;
   const reach = r + 2; // the halo's outer edge
   const cx = clamp(mm.x + (x0 + x1) / 2, mm.x + reach, mm.x + mm.w - reach);
   const cy = clamp(mm.y + (y0 + y1) / 2, mm.y + reach, mm.y + mm.h - reach);
   gfx.lineStyle(4, 0x000000, 0.55);
   gfx.strokeCircle(cx, cy, r);
-  gfx.lineStyle(2, COLOR_MINIMAP_GATHERING_RING, 0.55 + 0.45 * phase);
+  gfx.lineStyle(2, COLOR_MINIMAP_ARMY_RING, 0.55 + 0.45 * phase);
   gfx.strokeCircle(cx, cy, r);
 }
 

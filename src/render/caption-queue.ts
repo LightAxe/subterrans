@@ -45,13 +45,13 @@ export interface CaptionRequest {
    *  and the mark-shown-on-display persistence in UIScene. */
   hintId?: string;
   /** One-shot caption key — present iff source === 'event' AND the caption was
-   *  produced by a one-shot trigger (checkAndTrigger/captionForEvent), which marks
-   *  the key BEFORE the request reaches this queue. If the request is dropped on
+   *  produced by a one-shot trigger (checkAndTrigger), which marks the key BEFORE
+   *  the request reaches this queue. If the request is dropped on
    *  overflow, UIScene un-marks this key so the caption can re-fire (it never
    *  displayed). Absent for recurring captions, which don't dedup on `triggered`. */
   captionKey?: CaptionKey;
   /** #372 — full-opacity hold (ms) between the fade-in and fade-out; absent:
-   *  CAPTION_HOLD_MS. For a long caption that must be read (the gathering warning). */
+   *  CAPTION_HOLD_MS. For a long caption that must be read (the army warning). */
   holdMs?: number;
   /** #378 — a caption that is the latest version of a message: it replaces an
    *  older caption with the same key, on screen or pending, instead of queueing
@@ -121,7 +121,7 @@ export function createCaptionQueueState(): CaptionQueueState {
  * #290 PR 6 / #350: may a recurring caption (raid news, the spider-rampage
  * warning) enter the queue now? Only when the queue is fully idle. Taking the
  * single pending slot behind an active caption would make an arriving one-shot
- * event (rally, queen damage, invasion) overflow and be dropped for good, so
+ * event (rally, queen damage, onboarding) overflow and be dropped for good, so
  * recurring news waits instead (callers go
  * through recurring-captions.ts offerRecurringCaption).
  */

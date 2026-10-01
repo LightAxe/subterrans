@@ -2,7 +2,7 @@
 // shared caption queue without costing a one-shot caption its slot.
 //
 // The caption queue (caption-queue.ts) holds one active caption and ONE pending
-// one. A one-shot caption (rally, queen damage, invasion, onboarding) is marked
+// one. A one-shot caption (rally, queen damage, onboarding) is marked
 // shown before it reaches the queue and is un-marked only if the queue drops it
 // on overflow; it then waits for its trigger to happen again, which for most
 // one-shots is never. A recurring caption has no key and would take the pending
@@ -34,7 +34,7 @@
 
 import type { SpiderBehaviorState, WorldState } from '../sim/types.js';
 import type { SimEvent } from '../sim/telemetry.js';
-import { captionForEvent, oneShotKeyForEvent, type CaptionKey } from './onboarding-captions.js';
+import { captionForEvent } from './onboarding-captions.js';
 
 /** The part of UIScene a recurring caption needs. */
 export interface RecurringCaptionSink {
@@ -75,11 +75,11 @@ export function offerRecurringCaption(
  * How long an owed rampage warning is still offered (10 s of game time), the
  * same window as owed raid news. The queue drains within about 3 s of wall-clock
  * time behind an active and a pending default caption, so this only runs out
- * at high game speed behind a busy queue. The #372 gathering warning holds
+ * at high game speed behind a busy queue. The #372 army warning holds
  * longer; while news is owed it shortens to a 2 s readable floor (2.7 s in all,
  * UIScene.yieldLongCaption), so at 4x (a 2.5 s real-time window) news owed from
  * the same moment the warning began can still expire behind it — a known cost
- * of a once-per-gathering warning being readable.
+ * of a once-per-wave warning being readable.
  */
 export const RAMPAGE_CAPTION_OWED_TICKS = 200;
 
@@ -159,36 +159,17 @@ export function recurringCaptionStillOwed(
   return rampage.owedSinceTick !== -Infinity || raidCaption !== null;
 }
 
-/** The part of UIScene an event caption needs: showCaption with the one-shot key. */
-export interface EventCaptionSink extends RecurringCaptionSink {
-  showCaption(text: string, screenX: number, screenY: number, captionKey?: CaptionKey): boolean;
-}
-
 /**
  * GameScene's caption handling for one sim event, per the event→caption policy
- * in onboarding-captions.ts:
- *   - a one-shot event caption (invasion_start) is shown now, with its key, so
- *     the queue un-marks and re-fires it if it is dropped;
- *   - the recurring spider_rampage_start warning is NOT shown here. It is marked
- *     owed and shown by offerOwedRampageCaption once the queue is idle (#350);
- *     shown here, it would take the pending slot behind an active caption and
- *     the next one-shot caption would be dropped.
- * Other events have no caption. captionForEvent marks a one-shot key even with
- * no UIScene, as GameScene always has.
+ * in onboarding-captions.ts. The spider_rampage_start warning is NOT shown here:
+ * it is marked owed and shown by offerOwedRampageCaption once the queue is idle
+ * (#350); shown here, it would take the pending slot behind an active caption and
+ * the next one-shot caption would be dropped. Other events have no caption (#394:
+ * invasion_start's one-shot caption is gone — the army warning announces every
+ * invasion wave instead).
  */
-export function routeEventCaption(
-  ev: SimEvent,
-  rampage: RampageCaptionState,
-  ui: EventCaptionSink | null,
-  screenX: number,
-  screenY: number,
-): void {
+export function routeEventCaption(ev: SimEvent, rampage: RampageCaptionState): void {
   if (ev.type === 'spider_rampage_start') {
     noteRampageStart(rampage, ev.tick, ev.payload.hungerTicks);
-    return;
   }
-  const key = oneShotKeyForEvent(ev.type);
-  if (key === null) return;
-  const text = captionForEvent(ev.type);
-  if (text !== null && ui !== null) ui.showCaption(text, screenX, screenY, key);
 }

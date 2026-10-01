@@ -215,12 +215,17 @@ import {
   routeEventCaption,
 } from './recurring-captions.js';
 import {
-  createGatheringWarningState,
+  createArmyWarningState,
   GATHER_CAPTION_HOLD_MS,
-  markGatheringWarningShown,
-  nextGatheringWarning,
-  resetGatheringWarningState,
+  markArmyWarningShown,
+  nextArmyWarning,
+  resetArmyWarningState,
 } from './enemy-gathering.js';
+import {
+  armyWarningLogEntry,
+  measureEnemyMarchThisTick,
+  type ArmyWarningLogEntry,
+} from './enemy-march.js';
 import { checkAndTrigger, resetCaptions, type CaptionKey } from './onboarding-captions.js';
 import { advanceQueenDanger, createQueenDangerState } from './queen-danger.js';
 // Stage 3b controls rework (issue #18, #3) — first-use navigation hints.
@@ -336,7 +341,7 @@ interface UIScenePhase9 {
   // recurring captions (raid news, the spider-rampage warning) may enter without
   // taking the slot a one-shot caption would need.
   captionQueueIdle?(): boolean;
-  /** #372 — a long-hold caption (the gathering warning) shortens its hold so an
+  /** #372 — a long-hold caption (the army warning) shortens its hold so an
    *  event caption waiting behind it is not held back (UIScene.yieldLongCaption). */
   yieldLongCaption?(): void;
   /** #372 — Dev/E2E-only: each caption's final hold (ms) and whether it gave way. */
@@ -437,6 +442,26 @@ declare global {
       /** #372 — each caption this round, oldest first: the final full-opacity hold
        *  scheduled for it (ms) and whether it gave way. Dev-build only. */
       getCaptionHolds?(): { text: string; holdMs: number; yielded: boolean }[];
+      /** #394 — each army warning the caption queue took this round, oldest first:
+       *  the tick it was taken, its text, and the march it reported then — how
+       *  many enemy fighters were marching and how far (tiles) the nearest point of
+       *  their bounding box still was from the entrance the march heads for (null:
+       *  no march — a gathering, or chasers only). Lets a spec assert the warning
+       *  came early in the march without timing it. */
+      getArmyWarningLog?(): ArmyWarningLogEntry[];
+      /** #394 — the enemy fighters marching on the player's entrances now, as
+       *  measureEnemyMarchThisTick reports them (null when it reports none; it may
+       *  be fewer than an army, or chasers only — fighters 0), with the entrance
+       *  they head for. Read-only, render-side. Dev-build only. */
+      getEnemyMarch?(): {
+        fighters: number;
+        minTileX: number;
+        minTileY: number;
+        maxTileX: number;
+        maxTileY: number;
+        entranceTileX: number;
+        entranceTileY: number;
+      } | null;
       /** #378 — the text of every caption a newer version of it replaced this
        *  round (cut short on screen or swapped out while waiting), oldest first. */
       getCaptionsReplaced?(): string[];
@@ -782,6 +807,21 @@ export class GameScene extends Phaser.Scene {
       getTick: (): number => this.world?.tick ?? -1,
       getCaptionsShown: (): string[] => this.getUIScene()?.captionsShown?.() ?? [],
       getCaptionHolds: () => this.getUIScene()?.captionHolds?.() ?? [],
+      getArmyWarningLog: (): ArmyWarningLogEntry[] => [...this.armyWarningLog],
+      getEnemyMarch: () => {
+        if (this.world === undefined) return null;
+        const m = measureEnemyMarchThisTick(this.world, PLAYER_COLONY_ID);
+        if (m === null) return null;
+        return {
+          fighters: m.fighters,
+          minTileX: m.minTileX,
+          minTileY: m.minTileY,
+          maxTileX: m.maxTileX,
+          maxTileY: m.maxTileY,
+          entranceTileX: m.entrance.surfaceTileX,
+          entranceTileY: m.entrance.surfaceTileY,
+        };
+      },
       getCaptionsReplaced: () => this.getUIScene()?.captionsReplaced?.() ?? [],
       getCaptionQueue: () =>
         this.getUIScene()?.captionQueueTexts?.() ?? {
@@ -940,8 +980,12 @@ export class GameScene extends Phaser.Scene {
   private readonly raidCaptions = createRaidCaptionState();
   // #350 — the spider-rampage warning owed until the caption queue is idle.
   private readonly rampageCaption = createRampageCaptionState();
-  // #372 — the enemy-army gathering warning (once per gathering; re-armed in finishBoot).
-  private readonly gatheringWarning = createGatheringWarningState();
+  // #372/#394 — the army warning: an enemy army marching on or gathering near an
+  // entrance, once per wave (re-armed in finishBoot).
+  private readonly armyWarning = createArmyWarningState();
+  // #394 — dev-only log of the army warnings the caption queue took this round
+  // (__phase9_test.getArmyWarningLog); empty in production builds.
+  private armyWarningLog: ArmyWarningLogEntry[] = [];
   private renderFrame = 0; // frame counter for glow fade maps
   private readonly contestedGlowFrames: Map<number, number> = new Map(); // surface glow fade
   private readonly undergroundGlowFrames: Map<number, number> = new Map(); // underground glow fade
@@ -1658,6 +1702,7 @@ export class GameScene extends Phaser.Scene {
     this.contestedGlowFrames.clear();
     this.undergroundGlowFrames.clear();
     resetCaptions();
+    this.armyWarningLog = [];
     // Stage 3b (#3): reset the per-session first-world-input latch so the
     // proactive [Tab] nudge can re-evaluate on a fresh round (the cross-session
     // shown-flags persist in settings and are NOT cleared here).
@@ -1719,11 +1764,11 @@ export class GameScene extends Phaser.Scene {
       if (!ev || ev.tick <= this.lastProcessedEventTick) continue;
       if (ev.tick > maxTickSeen) maxTickSeen = ev.tick;
 
-      // The event's caption, if it has one (recurring-captions.ts): a one-shot
-      // shows through the queue now; the recurring spider-rampage warning is only
-      // marked owed (#350) and shown by checkQueenStatusForEffects once the
-      // caption queue is idle, so it never takes a one-shot caption's slot.
-      routeEventCaption(ev, this.rampageCaption, uiScene, this.layout.w / 2, 60);
+      // The event's caption, if it has one (recurring-captions.ts): the
+      // spider-rampage warning is only marked owed (#350) and shown by
+      // checkQueenStatusForEffects once the caption queue is idle, so it never
+      // takes a one-shot caption's slot.
+      routeEventCaption(ev, this.rampageCaption);
 
       if (ev.type === 'invasion_start') {
         // Screen-edge flash in the direction of the invasion entrance.
@@ -1744,20 +1789,8 @@ export class GameScene extends Phaser.Scene {
         } else {
           uiScene?.triggerScreenEdgeFlash('right');
         }
-        // Caption #7 (AI invasion, one-shot) is shown by routeEventCaption above.
-      }
-
-      if (ev.type === 'ai_state_transition' && ev.payload.to === 'Invading') {
-        // Belt-and-suspenders: invasion_start is the primary trigger above.
-        // This handles any Invading transition not paired with invasion_start.
-        // Gate flash + caption on checkAndTrigger so they fire exactly once:
-        // when invasion_start already fired the caption this pass, captionText
-        // is null and neither flash nor caption fires again here.
-        const captionText = checkAndTrigger('aiInvading');
-        if (captionText) {
-          uiScene?.triggerScreenEdgeFlash('right');
-          if (uiScene) uiScene.showCaption(captionText, this.layout.w / 2, 60, 'aiInvading');
-        }
+        // #394 — no caption here: the army warning (checkQueenStatusForEffects)
+        // announces every invasion wave as it marches, naming the entrance.
       }
     }
 
@@ -1829,24 +1862,28 @@ export class GameScene extends Phaser.Scene {
     // Recurring captions (no one-shot key) enter only while the caption queue is
     // fully idle (offerRecurringCaption, fail-closed). Taking the pending slot
     // behind an active caption would make an arriving one-shot caption (rallyRaid,
-    // queen damage, invasion) get dropped, so each waits, owed, and is retried each
+    // queen damage, onboarding) get dropped, so each waits, owed, and is retried each
     // frame (recurring-captions.ts).
     //
-    // #372 — the enemy-army gathering warning, once per gathering near one of
-    // the player's entrances (enemy-gathering.ts). Offered first: an army about
-    // to invade outranks the spider and raid news.
-    const gatherText = nextGatheringWarning(this.gatheringWarning, this.world, PLAYER_COLONY_ID);
+    // #372/#394 — the army warning, once per wave of an enemy army marching on
+    // (enemy-march.ts) or gathering near (enemy-gathering.ts) one of the player's
+    // entrances. Offered first: an army about to invade outranks the spider and
+    // raid news.
+    const armyText = nextArmyWarning(this.armyWarning, this.world, PLAYER_COLONY_ID);
     if (
-      gatherText !== null &&
+      armyText !== null &&
       uiScene &&
-      offerRecurringCaption(uiScene, gatherText, this.layout.w / 2, 60, GATHER_CAPTION_HOLD_MS)
+      offerRecurringCaption(uiScene, armyText, this.layout.w / 2, 60, GATHER_CAPTION_HOLD_MS)
     ) {
-      markGatheringWarningShown(this.gatheringWarning);
+      markArmyWarningShown(this.armyWarning);
+      if (import.meta.env.DEV) {
+        this.armyWarningLog.push(armyWarningLogEntry(this.world, PLAYER_COLONY_ID, armyText));
+      }
     }
 
     // #350 — the spider-rampage warning, owed from its spider_rampage_start until
-    // it shows or goes stale. Offered after the gathering warning: it outranks raid
-    // news. (Owed news behind the long gathering warning shortens that warning to
+    // it shows or goes stale. Offered after the army warning: it outranks raid
+    // news. (Owed news behind the long army warning shortens that warning to
     // a readable floor, below.)
     if (uiScene) {
       offerOwedRampageCaption(this.rampageCaption, this.world, uiScene, this.layout.w / 2, 60);
@@ -1870,7 +1907,7 @@ export class GameScene extends Phaser.Scene {
       markRaidCaptionShown(this.raidCaptions, this.world, raidCaption);
     } else if (recurringCaptionStillOwed(this.rampageCaption, raidCaption)) {
       // #372 — news still owed behind a busy queue: a long-hold caption (the
-      // gathering warning) gives way, keeping CAPTION_YIELD_FLOOR_MS to be read.
+      // army warning) gives way, keeping CAPTION_YIELD_FLOOR_MS to be read.
       uiScene?.yieldLongCaption?.();
     }
   }
@@ -2075,7 +2112,7 @@ export class GameScene extends Phaser.Scene {
     // #350 — a prior round's owed rampage warning must not carry over.
     resetRampageCaptionState(this.rampageCaption);
     // #372 — a new round or loaded save starts armed with nothing owed.
-    resetGatheringWarningState(this.gatheringWarning);
+    resetArmyWarningState(this.armyWarning);
     // Stage 2 §B: a fresh/loaded world must rebake every allocated terrain RT (the prior
     // session's RTs are stale). Optional chaining — finishBoot can run before create() has
     // instantiated the cache in some boot orderings; the first frame then lazily bakes.

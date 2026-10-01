@@ -17,7 +17,6 @@ export type CaptionKey =
   | 'rally'
   | 'rallyRaid'
   | 'spiderPriority'
-  | 'aiInvading'
   | 'spiderRampage'
   | 'queenDamage'
   | 'queenStarvation'
@@ -32,7 +31,6 @@ const CAPTION_TEXTS: Record<CaptionKey, string> = {
   // #290 PR 6: the rally is on an enemy's open entrance (raid-captions.ts).
   rallyRaid: 'Fighters will attack this nest and raid its larder when it is unguarded.',
   spiderPriority: 'Your fighters are engaging the spider.',
-  aiInvading: 'The enemy is attacking your hive.',
   spiderRampage: 'The spider has gone hungry and is hunting on the surface.',
   queenDamage: 'Your queen is in danger.',
   queenStarvation: 'Your queen is growing hungry.',
@@ -49,7 +47,7 @@ export function resetCaptions(): void {
 /**
  * Un-mark a one-shot caption key so it can fire again.
  *
- * checkAndTrigger/captionForEvent mark a key the moment they hand back the text,
+ * checkAndTrigger marks a key the moment it hands back the text,
  * before the caption reaches the bounded caption queue. If the queue then DROPS
  * that caption on overflow it would never display yet stay marked 'already shown'
  * — losing a first-occurrence onboarding caption forever. UIScene calls this when
@@ -85,15 +83,22 @@ export function checkAndTrigger(key: CaptionKey, textOverride?: string): string 
 // Event → caption policy
 // ---------------------------------------------------------------------------
 //
-// `captionForEvent` is the dispatch policy for captions driven by WorldState
-// events (`world.events`). It is keyed by the event `type` string — NOT by a
-// CaptionKey — so GameScene's event loop forwards each event type and shows
-// whatever caption (if any) comes back. The recurring-vs-one-shot decision
-// lives here rather than at the call site.
+// `captionForEvent` is the text policy for captions driven by WorldState events
+// (`world.events`). It is keyed by the event `type` string — NOT by a
+// CaptionKey. GameScene's event loop hands each event to routeEventCaption
+// (recurring-captions.ts), which decides when a caption shows; the only event
+// with one is spider_rampage_start, whose text offerOwedRampageCaption takes
+// from here.
 //
 // Captions that are driven by world-state polling or input commands (dig,
 // chamber, spider, foodMark, rally, rallyRaid, spiderPriority, queenDamage,
 // queenStarvation) are NOT events — they keep using checkAndTrigger directly.
+//
+// #394 — every event caption is now recurring. The one-shot invasion caption
+// ('The enemy is attacking your hive.', on the first invasion_start only) is
+// gone: the army warning (enemy-gathering.ts) announces every invasion wave
+// instead, naming the threatened entrance, from world state rather than the AI's
+// event.
 
 // Recurring alerts re-fire their caption on EVERY occurrence of the event
 // (e.g. every spider rampage, not just the first). These never consult the
@@ -102,39 +107,13 @@ const RECURRING_EVENT_CAPTIONS = new Map<SimEvent['type'], CaptionKey>([
   ['spider_rampage_start', 'spiderRampage'],
 ]);
 
-// One-shot onboarding events fire their caption once per session, then stay
-// silent. They share the same `triggered` dedup as checkAndTrigger, so an
-// event and any non-event trigger of the same CaptionKey suppress each other.
-const ONE_SHOT_EVENT_CAPTIONS = new Map<SimEvent['type'], CaptionKey>([
-  ['invasion_start', 'aiInvading'],
-]);
-
 /**
  * Map a WorldState event type to the caption that should display for it, or
- * null if the event has no caption (or a one-shot caption already fired).
- *
- * Recurring events (e.g. 'spider_rampage_start') return their caption on every
- * call; one-shot events (e.g. 'invasion_start') return their text once per
- * session then null. Unknown event types return null.
+ * null if the event has no caption. Recurring events (e.g.
+ * 'spider_rampage_start') return their caption on every call. Unknown event
+ * types return null.
  */
 export function captionForEvent(eventType: SimEvent['type']): string | null {
   const recurringKey = RECURRING_EVENT_CAPTIONS.get(eventType);
-  if (recurringKey !== undefined) {
-    return CAPTION_TEXTS[recurringKey];
-  }
-  const oneShotKey = ONE_SHOT_EVENT_CAPTIONS.get(eventType);
-  if (oneShotKey !== undefined) {
-    return checkAndTrigger(oneShotKey);
-  }
-  return null;
-}
-
-/**
- * The one-shot CaptionKey an event maps to, or null for recurring / caption-less
- * events. GameScene passes this to showCaption so a dropped one-shot event
- * caption can be un-marked (re-fired) — without duplicating the event→key policy
- * at the call site. Recurring events return null here (they never dedup).
- */
-export function oneShotKeyForEvent(eventType: SimEvent['type']): CaptionKey | null {
-  return ONE_SHOT_EVENT_CAPTIONS.get(eventType) ?? null;
+  return recurringKey === undefined ? null : CAPTION_TEXTS[recurringKey];
 }

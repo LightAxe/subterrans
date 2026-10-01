@@ -1660,7 +1660,8 @@ export class UIScene extends Phaser.Scene {
 
     // Minimap
     // #372 — the viewer is the player colony: every other colony's surface
-    // fighters show as red dots, and a gathering army pulses (on scene time).
+    // fighters show as red dots, and an army gathering near or (#394) marching on
+    // its entrances is ringed, pulsing on scene time.
     drawMinimap(
       this.gfx as unknown as import('./draw-surface.js').GfxLike,
       world,
@@ -1980,7 +1981,7 @@ export class UIScene extends Phaser.Scene {
   // paint on top of a first-use hint (or each other). Admitted as source:'event'.
   //
   // `captionKey` is the one-shot trigger key behind this caption, when there is
-  // one. checkAndTrigger/captionForEvent mark that key the moment they return the
+  // one. checkAndTrigger marks that key the moment it returns the
   // text — before the request reaches the bounded queue — so a caption dropped on
   // overflow would stay marked 'already shown' yet never display, losing it for
   // the session. Passing the key lets enqueueCaption un-mark it on drop so it
@@ -2223,7 +2224,7 @@ export class UIScene extends Phaser.Scene {
   }
 
   /**
-   * #372 — a long-hold caption (the gathering warning) gives way to an event
+   * #372 — a long-hold caption (the army warning) gives way to an event
    * caption (not a first-use hint) waiting behind it: its hold is cut to what CAPTION_YIELD_FLOOR_MS would have
    * left (yieldedHoldMs), so a one-shot queued behind it, or an owed recurring
    * caption (raid news, the rampage warning), is not held back the full 4 s. It
