@@ -685,12 +685,7 @@ function setRampageShelterTarget(
  * friend bumps it sideways off its way. Always false below V68.
  */
 export function rampageShelterDashRoutes(world: WorldState, id: number): boolean {
-  const ants = world.ants;
-  if (ants.task[id] !== AntTask.Idle || ants.zone[id] !== ZONE_SURFACE) return false;
-  if (ants.fleeShelterUntilTick[id] !== 0 || ants.targetPosX[id] === -1) return false;
-  const colony = world.colonies[ants.colonyId[id]!];
-  if (colony === undefined || colony.alarmActive === true) return false;
-  return rampageThreatens(world, colony);
+  return world.ants.targetPosX[id] !== -1 && idleSurfaceShelterer(world, id, 0);
 }
 
 /**
@@ -706,9 +701,19 @@ export function rampageShelterDashRoutes(world: WorldState, id: number): boolean
  * V68.
  */
 export function rampageShelterHolds(world: WorldState, id: number): boolean {
+  return idleSurfaceShelterer(world, id, -1);
+}
+
+/**
+ * #377 / #393 (V68) — the test the dasher (rampageShelterDashRoutes, phase 0) and the
+ * holder (rampageShelterHolds, phase -1) share, so the two can never drift apart: `id`
+ * is an Idle worker on the surface at flee phase `phase`, of a colony whose alarm is off
+ * and which the spider threatens. Always false below V68.
+ */
+function idleSurfaceShelterer(world: WorldState, id: number, phase: -1 | 0): boolean {
   const ants = world.ants;
   if (ants.task[id] !== AntTask.Idle || ants.zone[id] !== ZONE_SURFACE) return false;
-  if (ants.fleeShelterUntilTick[id] !== -1) return false;
+  if (ants.fleeShelterUntilTick[id] !== phase) return false;
   const colony = world.colonies[ants.colonyId[id]!];
   if (colony === undefined || colony.alarmActive === true) return false;
   return rampageThreatens(world, colony);
