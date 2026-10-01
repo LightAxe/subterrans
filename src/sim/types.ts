@@ -1535,7 +1535,79 @@ export const SIM_VERSION_V66_QUEEN_STARVES_HP = 66 as const;
  * MATCH_TIMEOUT_TICKS. MIN_ACCEPTED is UNCHANGED (V50).
  */
 export const SIM_VERSION_V67_NO_MATCH_TIMEOUT = 67 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V67_NO_MATCH_TIMEOUT;
+
+/**
+ * #377 (V68) — idle workers shelter from a spider rampage. Up to V67 an Idle worker
+ * on the surface kept milling round its colony's entrance while the spider hunted,
+ * and fled only from DangerTrail on its own tile, so a spider camping the door, or
+ * passing it, picked the idle reserve off one at a time (its straggler chase, within
+ * SPIDER_CHASE_TRIGGER_RADIUS). With stores full nearly every worker is idle — the
+ * backpressure demotes searchers to Idle — so it was steady attrition. From V68
+ * (every colony alike — CLNY-08), while the spider is ON A RAMPAGE (spider.ts
+ * spiderOnRampage: out hunting hungry, from the moment it grows hungry until it eats
+ * or dies; the window the rampage caption covers, of which the Rampaging state is
+ * only the entrance-camping part — a camper diverts to chase any ant that comes near)
+ * AND THREATENS THE COLONY (idle-reserve.ts rampageThreatens: it is camping, or on
+ * its way to camp, one of the colony's entrances — Rampaging with
+ * rampageTargetColonyId the colony — or it is within RAMPAGE_THREAT_RADIUS_TILES,
+ * the spider's hunt-search radius, of one of the colony's open entrances, whatever it
+ * is doing, a chase between camps included). A colony it is not threatening keeps its
+ * idle reserve out, exactly as at V67. While it threatens one:
+ *   - Every Idle worker on the surface of the colony, if its alarm is off, goes in. Only
+ *     Idle workers: foragers (searchers, carriers, returners) keep working, under the
+ *     V34 danger flee as before; fighters, nurses and diggers are untouched. It heads
+ *     for the nearest of its colony's open entrances by path (the surface goal field)
+ *     that reads no real danger and whose way there keeps out of the spider's reach —
+ *     the spider is not within SPIDER_CHASE_TRIGGER_RADIUS (Manhattan, the chase
+ *     trigger's own measure) of the worker's shortest path to it, door included,
+ *     judged conservatively (it may hold a worker whose actual route would have kept clear) — and
+ *     walks that goal field to it (not the V34 flee's straight line). So it never
+ *     heads for the entrance the spider is camping or about to reach, nor past the
+ *     spider. With no such entrance it holds where it stands, re-choosing every tick
+ *     (within the scatter radius of the hunt reticle it keeps step 13e's away step).
+ *     Once the spider is within SPIDER_CHASE_TRIGGER_RADIUS of it, every way passes
+ *     within its reach, so it must only not walk toward the spider: it runs for the
+ *     nearest such entrance whose next step in (the goal field's, re-chosen every
+ *     tick) lands no nearer the spider than it stands, and holds if there is none. A
+ *     dasher claims no tile in the occupancy pass, so no friend bumps it sideways; a
+ *     holder still claims its tile, but a friend's bump shifts it only to a tile no
+ *     nearer the spider, and with none it stays (#393).
+ *     With the spider on its own tile any way out beats staying: the door's danger
+ *     reading (then the spider's own) is not consulted. One already standing on an entrance goes down it unless the
+ *     descent there is blocked (a Rampaging spider on it, #165).
+ *     (ant/idle-reserve.ts pickRampageShelterEntrance.)
+ *   - Once down it shelters at the shaft top, as a V34 flee shelterer does, and an
+ *     Idle worker reaching the shaft top from below is held there the same way (the
+ *     C1 alarm hook). The poke-out does not let an Idle shelterer out while the
+ *     threat lasts, alarm or not; after it, the first poke-out whose exit reads no
+ *     real danger does, as before — the shelter timer and the DangerTrail's decay
+ *     are the hold-off. The #373 shelter retreat is unchanged, except that 10a may
+ *     now recruit a retreating Idle shelterer (below).
+ *   - Step 10a still recruits Idle shelterers while the threat lasts and the alarm is
+ *     off (the V34 skip of a worker on the flee timer does not apply to any Idle
+ *     shelterer then — from the rampage, a V34 danger flee or a #373 retreat), into
+ *     any role the allocation asks for: a new fighter, nurse or digger leaves the
+ *     shelter the same tick (step 15b's reassignment guard), and a new forager's
+ *     poke-out falls due the same tick, so it climbs out unless its exit reads real
+ *     danger — or invaders are in its nest, where it keeps sheltering by the #373
+ *     retreat until they are gone. A rampage can last thousands of ticks; the ratio
+ *     must not wait for it.
+ *     Under the alarm the V65 rule stands.
+ *   - While the colony alarm sounds it governs the colony's civilians exactly as at
+ *     V67 (the rampage adds only the poke-out hold, which outlasts the all-clear).
+ *     The spider-priority order moves fighters only: civilians shelter whether or
+ *     not their colony has sent its fighters at the spider.
+ * Read from saved state only (the spider's state, position, hungerTicks and
+ * rampageTargetColonyId — only a Rampaging spider's target counts — world.tick,
+ * world.difficulty, the colony's entrances and alarm, the DangerTrail, the hunt
+ * reticle (world.scatterReticleTile), ant positions and tasks, and the V34 flee
+ * column); the goal fields are the cached
+ * derived surface fields. No new serialized field, command, world.rngState draw,
+ * entity-ID advance or tick-order change. A V67 save replays byte-identically.
+ * MIN_ACCEPTED is UNCHANGED (V50).
+ */
+export const SIM_VERSION_V68_RAMPAGE_SHELTER = 68 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V68_RAMPAGE_SHELTER;
 
 /**
  * S2 — AI colony state machine states.

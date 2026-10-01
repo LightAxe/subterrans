@@ -82,6 +82,7 @@ import {
   updateFightAntTargets,
   fighterWalksHomeToEat,
   tickIdleReserveAndFlee,
+  rampageThreatens,
   updateRaiders,
   tickRaidActions,
   updateBlockaders,
@@ -1288,6 +1289,12 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // else. See SIM_VERSION_V65_ALARM_INVASION.
     const alarmRecruitsFighters =
       alarmRecallActive && world.simVersion >= SIM_VERSION_V65_ALARM_INVASION;
+    // #377 (V68) — while the spider on a rampage threatens this colony an Idle worker
+    // sheltering stays recruitable (the V34 skip below does not apply): a rampage can
+    // last thousands of ticks, and the ratio must not wait for it. With the alarm off
+    // it takes any role; under the alarm the V65 rule above already recruits it, into
+    // fighting only. Always false below V68.
+    const rampageRecruitsShelterers = rampageThreatens(world, colony);
     const undergroundGrid10a = world.undergroundGrids[colony.colonyId];
     const rawDigDemand =
       undergroundGrid10a !== undefined
@@ -1387,7 +1394,19 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       // in reserve; it resumes on the all-clear.
       // #373 (V65): under the alarm a shelterer is recruited like any other worker
       // (only into fighting — below); step 15b ends its shelter the same tick.
-      if (world.ants.fleeShelterUntilTick[id]! > 0 && !alarmRecruitsFighters) continue;
+      // #377 (V68): while the spider on a rampage threatens this colony so is any Idle shelterer (from
+      // the rampage, a V34 danger flee, or a #373 retreat), into any role: a new
+      // fighter, nurse or digger leaves the shelter the same tick (15b's top
+      // guard), and a new forager's poke-out falls due the same tick (below) — it
+      // climbs out if its exit reads no real danger, else waits a cooldown (and
+      // with invaders in its nest it keeps retreating, #373, until they are gone).
+      if (
+        world.ants.fleeShelterUntilTick[id]! > 0 &&
+        !alarmRecruitsFighters &&
+        !rampageRecruitsShelterers
+      ) {
+        continue;
+      }
       // C1 (V42) — an alarmed colony recruits NOBODY. The timer check above only
       // covers workers that are ALREADY sheltering, and this step runs at 10a,
       // five steps before tickIdleReserveAndFlee (15b) gets to start them
@@ -1476,6 +1495,17 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       }
       world.ants.task[id] = newTask;
       world.ants.subTask[id] = newSubTask;
+      // #377 (V68) — a shelterer recruited into foraging mid-rampage pokes out at
+      // 15b this tick rather than when its cooldown runs out: it counts as a
+      // forager from now, so a frozen one would hold a free Idle worker back. (Not
+      // while invaders are in its nest: 15b keeps a #373 retreater sheltering.)
+      if (
+        newTask === AntTask.Foraging &&
+        rampageRecruitsShelterers &&
+        world.ants.fleeShelterUntilTick[id]! > world.tick
+      ) {
+        world.ants.fleeShelterUntilTick[id] = world.tick;
+      }
 
       if (newTask === AntTask.Foraging) actualForage += 1;
       else if (newTask === AntTask.Digging) actualDig += 1;

@@ -94,6 +94,8 @@ import {
   idleMusterPassesThroughFriends,
   idleMustersHome,
   idleWalksHome,
+  rampageShelterDashRoutes,
+  rampageShelterHolds,
   shelterPassesThroughFriends,
   shelterRetreatDir,
 } from './idle-reserve.js';
@@ -460,12 +462,21 @@ export function tickAntMovement(
       const ftx = ants.targetPosX[id]!;
       const posX = ants.posX[id]!;
       const posY = ants.posY[id]!;
-      const step = pickCardinalStep(
-        ants,
-        id,
-        (ftx >> FP_SHIFT) - (posX >> FP_SHIFT),
-        (ants.targetPosY[id]! >> FP_SHIFT) - (posY >> FP_SHIFT),
-      );
+      // #377 (V68) — an idle worker going in from the spider's rampage walks the
+      // surface goal field to the entrance step 15b chose for it (idle-reserve.ts
+      // rampageShelterDashRoutes); off the field it keeps the straight line.
+      const routed = rampageShelterDashRoutes(world, id)
+        ? entranceRoutedStep(world, posX, posY, ftx, ants.targetPosY[id]!)
+        : OFF_GOAL_FIELD;
+      const step =
+        routed !== OFF_GOAL_FIELD
+          ? routed
+          : pickCardinalStep(
+              ants,
+              id,
+              (ftx >> FP_SHIFT) - (posX >> FP_SHIFT),
+              (ants.targetPosY[id]! >> FP_SHIFT) - (posY >> FP_SHIFT),
+            );
       dx = unpackStepDx(step);
       dy = unpackStepDy(step);
     } else if (chamberTargetX !== -1 && !chamberFoodUnreachable) {
@@ -2031,6 +2042,11 @@ function claimsNoTile(world: WorldState, id: number): boolean {
   }
   // #322 (V49): nor does an idle worker mustering home under the alarm.
   if (idleMusterPassesThroughFriends(world, id)) return true;
+  // #377 (V68): nor one dashing in from the spider's rampage. The reserve funnels
+  // down one goal-field path to its door; bumped sideways off it, one could land
+  // within the spider's chase range. (One holding instead still claims its tile, and
+  // resolveSameColonyOccupancy shifts it only to a tile no nearer the spider, #393.)
+  if (rampageShelterDashRoutes(world, id)) return true;
   // #373 (V65): nor does a shelterer below ground while its nest is invaded. Bumped
   // like any ant, one filing down a one-wide shaft or tunnel past a friend standing
   // still there was pushed back off its tile every tick and never got by.
@@ -2135,6 +2151,21 @@ function resolveSameColonyOccupancy(world: WorldState): void {
       ants.subTask[id] === ForagingSubState.SearchingFood
         ? arena.surfaceDangerByColony[colonyId]
         : undefined;
+    // #393 (V68): a worker holding from the spider's rampage (rampageShelterHolds)
+    // is shifted only to a tile no nearer the spider — so never into its chase range
+    // from outside it, and never a step toward it when cornered — and, with no such
+    // tile, stays (the forced overlap below). The spider has not moved this tick (it
+    // ticks at 17.5): this is the tile step 15b judged the holder's ways against. No
+    // nearer at all, not merely not into chase range: the spider moves at twice an
+    // ant's speed, so a holder keeps whatever margin it has, as the cornered rule does.
+    let holdSpiderX = -1;
+    let holdSpiderY = -1;
+    let holdSpiderDist = 0;
+    if (zone === Zone.Surface && rampageShelterHolds(world, id)) {
+      holdSpiderX = world.spider!.posX >> FP_SHIFT; // rampageShelterHolds: a spider
+      holdSpiderY = world.spider!.posY >> FP_SHIFT;
+      holdSpiderDist = Math.abs(tileX - holdSpiderX) + Math.abs(tileY - holdSpiderY);
+    }
     let shifted = false;
     for (let attempt = 0; attempt < 2 && !shifted; attempt++) {
       // attempt 0 = danger-safe-only; skipped entirely when there is no danger grid, so
@@ -2153,6 +2184,12 @@ function resolveSameColonyOccupancy(world: WorldState): void {
           if (ny < 0 || ny >= SURFACE_GRID_HEIGHT) continue;
           // Don't bump a same-colony collision into a HardBlock tile.
           if (!canEnterSurfaceTile(world, nx, ny)) continue;
+          if (
+            holdSpiderX !== -1 &&
+            Math.abs(nx - holdSpiderX) + Math.abs(ny - holdSpiderY) < holdSpiderDist
+          ) {
+            continue;
+          }
         }
         // Danger-safe pass (attempt 0): skip a spider-wake tile so the displacement
         // prefers a clean neighbour. attempt 1 takes it anyway if every neighbour is
@@ -2194,7 +2231,9 @@ function resolveSameColonyOccupancy(world: WorldState): void {
     // If no shift found, forced overlap — rare. Leave the ant at the original
     // tile; do not pollute the occupancy map (the lower-id claimant remains
     // registered). Visual overlap persists this tick; natural drift on the
-    // next tick usually breaks the tie.
+    // next tick usually breaks the tie. (A rampage holder stands still, so drift
+    // does not break it: the overlap lasts until a neighbour no nearer the spider is
+    // free, or one of the two moves off or stops holding.)
     void shifted;
   }
 }
