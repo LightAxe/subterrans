@@ -38,6 +38,7 @@ import {
   FOOD_PILE_INITIAL_PICKUPS_MAX,
   FOOD_PILE_MIN_COLONY_DISTANCE,
   FOOD_PILE_MIN_SEPARATION,
+  MAX_ENTITIES,
   SURFACE_GRID_WIDTH,
 } from './constants.js';
 
@@ -184,14 +185,14 @@ function openWorld(seed = 1): WorldState {
   return world;
 }
 
-/** Add colony `cid` with entrances at `doors` (open unless `[x, y, false]`). */
+/** Add colony `cid` with entrances at `tiles` (open unless `[x, y, false]`). */
 function addColony(
   world: WorldState,
   cid: number,
-  doors: ReadonlyArray<readonly [number, number] | readonly [number, number, boolean]>,
+  tiles: ReadonlyArray<readonly [number, number] | readonly [number, number, boolean]>,
 ): void {
   const colony = createColonyRecord(cid, allocateEntityId(world));
-  colony.entrances = doors.map((d) => ({
+  colony.entrances = tiles.map((d) => ({
     entranceId: allocateEntityId(world),
     surfaceTileX: d[0],
     surfaceTileY: d[1],
@@ -595,20 +596,25 @@ describe('#395 ensureFoodNearEachColony on hand-built worlds', () => {
   });
 
   it('reads home from the open entrances: a closed one does not count, any open one does', () => {
-    const world = openWorld();
-    addColony(world, 1, [
-      [20, 20, false],
-      [20, 100],
-    ]);
-    const nearClosed = pile(20, 35);
-    setPilesForTest(world, [nearClosed]);
-    ensureFoodNearEachColony(world, new Rng(6));
-    const [x, y] = tileOf(world, nearClosed.foodPileId);
-    expect(Math.abs(x - 20) + Math.abs(y - 100)).toBeLessThanOrEqual(R);
-    // ... but the closed entrance still keeps piles at the scatter's distance.
-    expect(Math.abs(x - 20) + Math.abs(y - 20)).toBeGreaterThanOrEqual(
-      FOOD_PILE_MIN_COLONY_DISTANCE,
-    );
+    // A closed entrance 16 tiles north of the open one, inside its radius: a pile
+    // near the closed one does not serve, and the closed one still keeps piles at
+    // the scatter's distance.
+    for (let s = 1; s <= 30; s++) {
+      const world = openWorld();
+      addColony(world, 1, [
+        [20, 84, false],
+        [20, 100],
+      ]);
+      const nearClosed = pile(20, 70); // 14 from the closed entrance, 30 from the open one
+      setPilesForTest(world, [nearClosed]);
+      expect(unservedColonies(world)).toEqual([1]);
+      ensureFoodNearEachColony(world, new Rng(s));
+      const [x, y] = tileOf(world, nearClosed.foodPileId);
+      expect(Math.abs(x - 20) + Math.abs(y - 100)).toBeLessThanOrEqual(R);
+      expect(Math.abs(x - 20) + Math.abs(y - 84)).toBeGreaterThanOrEqual(
+        FOOD_PILE_MIN_COLONY_DISTANCE,
+      );
+    }
 
     const w2 = openWorld();
     addColony(w2, 1, [
@@ -746,6 +752,24 @@ describe('#395 ensureFoodNearEachColony on hand-built worlds', () => {
     ensureFoodNearEachColony(w2, new Rng(19));
     expect(pileCount(w2)).toBe(FOOD_PILE_HARD_CAP);
     expect(ownPickups(w2, 1)).toBeGreaterThanOrEqual(MIN);
+  });
+
+  it('makes no new pile when the entity ids have run out, and draws nothing', () => {
+    for (const [next, makes] of [
+      [MAX_ENTITIES, false],
+      [MAX_ENTITIES - 1, true],
+    ] as const) {
+      const world = openWorld();
+      addColony(world, 1, [[64, 64]]);
+      setPilesForTest(world, [pile(3, 3, MIN - 1)]); // nothing big enough to move
+      world.nextEntityId = next;
+      const rng = new Rng(29);
+      ensureFoodNearEachColony(world, rng);
+      expect(rng.getState() !== 29).toBe(makes);
+      expect(pileCount(world)).toBe(makes ? 2 : 1);
+      expect(world.nextEntityId).toBe(makes ? MAX_ENTITIES : next);
+      if (makes) expect(pileFoodId(world, pileSlotAt(world, 1))).toBe(MAX_ENTITIES - 1);
+    }
   });
 
   it('leaves a colony with nowhere to put a pile as it is, with no draw', () => {

@@ -480,7 +480,8 @@ export function createScenario(
 
   // --- Step 7b (#395, V69): every colony gets food of its own near home. ---
   // After the colonies, so it reads where each one actually is (its open entrances).
-  // Moves at most one pile per colony that lacks it, drawing from the same rng.
+  // Moves at most one pile (or, with none to move, makes at most one) per colony that
+  // lacks it, drawing from the same rng.
   if (world.simVersion >= SIM_VERSION_V69_FOOD_FAIRNESS) ensureFoodNearEachColony(world, rng);
 
   // PR 4 — assert the connectivity invariant AT WORLD-GEN (not only on save

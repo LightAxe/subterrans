@@ -38,7 +38,9 @@
 //       3. The donor moves there (`movePile`): same id, same size, same place in
 //          creation order. The pile count and the map's food total are unchanged.
 //          With no donor, a new pile is made there instead, its size drawn (a second
-//          draw) from FOOD_FAIRNESS_MIN_PICKUPS to FOOD_PILE_INITIAL_PICKUPS_MAX.
+//          draw) from FOOD_FAIRNESS_MIN_PICKUPS to FOOD_PILE_INITIAL_PICKUPS_MAX —
+//          unless the store holds FOOD_PILE_HARD_CAP piles or the entity ids have run
+//          out, in which case the colony is left as it is (no draw).
 //     With no destination tile at all the colony is left as it is.
 //   - A satisfied colony costs nothing: no draw, no change. A move never takes a
 //     pile that serves a colony, and the moved pile serves only the colony it was
@@ -166,7 +168,7 @@ function tileIndex(x: number, y: number): number {
 function isDestination(
   world: WorldState,
   homes: readonly Home[],
-  doors: readonly (readonly [number, number])[],
+  entrances: readonly (readonly [number, number])[],
   h: number,
   x: number,
   y: number,
@@ -174,8 +176,8 @@ function isDestination(
 ): boolean {
   if (!isSurfaceTileInComponent(world, x, y)) return false;
   if (servedHome(homes, tileIndex(x, y)) !== h) return false;
-  for (const [dx, dy] of doors) {
-    if (Math.abs(x - dx) + Math.abs(y - dy) < FOOD_PILE_MIN_COLONY_DISTANCE) return false;
+  for (const [ex, ey] of entrances) {
+    if (Math.abs(x - ex) + Math.abs(y - ey) < FOOD_PILE_MIN_COLONY_DISTANCE) return false;
   }
   const n = pileCount(world);
   for (let o = 0; o < n; o++) {
@@ -279,13 +281,14 @@ function forEachCandidate(
 /**
  * #395 (V69) — give every colony in `world.colonies` at least FOOD_FAIRNESS_MIN_PICKUPS
  * pickups of natural food of its own within FOOD_FAIRNESS_RADIUS_TILES of one of its
- * open entrances (see the file header for the rules). World generation only: call once, after the colonies and
- * the scenario's piles are placed. Draws from `rng` once per pile it moves (twice for
- * one it makes), and not at all when every colony already has its food.
+ * open entrances (see the file header for the rules). World generation only: call
+ * once, after the colonies and the scenario's piles are placed. Draws from `rng` once
+ * per pile it moves (twice for one it makes), and not at all when every colony
+ * already has its food.
  */
 export function ensureFoodNearEachColony(world: WorldState, rng: Rng): void {
   const homes = colonyHomes(world);
-  const doors = entranceTiles(world);
+  const entrances = entranceTiles(world);
   for (let h = 0; h < homes.length; h++) {
     if (homes[h]!.fields.length === 0) continue;
     if (isSatisfied(world, homes, h)) continue;
@@ -300,7 +303,7 @@ export function ensureFoodNearEachColony(world: WorldState, rng: Rng): void {
     }
     let count = 0;
     forEachCandidate(world, homes, h, (x, y) => {
-      if (isDestination(world, homes, doors, h, x, y, donor)) count++;
+      if (isDestination(world, homes, entrances, h, x, y, donor)) count++;
       return false;
     });
     if (count === 0) continue; // nowhere to put one: leave the colony as it is
@@ -309,7 +312,7 @@ export function ensureFoodNearEachColony(world: WorldState, rng: Rng): void {
     let destX = -1;
     let destY = -1;
     forEachCandidate(world, homes, h, (x, y) => {
-      if (!isDestination(world, homes, doors, h, x, y, donor)) return false;
+      if (!isDestination(world, homes, entrances, h, x, y, donor)) return false;
       if (k > 0) {
         k--;
         return false;
@@ -319,12 +322,19 @@ export function ensureFoodNearEachColony(world: WorldState, rng: Rng): void {
       return true;
     });
 
+    // The two passes see the same world, so the k-th valid tile exists.
+    if (destX < 0) throw new Error('ensureFoodNearEachColony: destination pass disagrees');
     if (donor !== -1) {
-      movePile(world, donor, destX, destY);
+      if (!movePile(world, donor, destX, destY)) {
+        throw new Error('ensureFoodNearEachColony: movePile refused a valid destination');
+      }
     } else {
       // No pile to move: make a new one, as big as a donor must be at least.
       const pickups = rng.nextRange(FOOD_FAIRNESS_MIN_PICKUPS, FOOD_PILE_INITIAL_PICKUPS_MAX);
-      spawnPile(world, allocateEntityId(world), destX, destY, pickups * FOOD_PICKUP_AMOUNT, 0);
+      const id = allocateEntityId(world);
+      if (spawnPile(world, id, destX, destY, pickups * FOOD_PICKUP_AMOUNT, 0) < 0) {
+        throw new Error('ensureFoodNearEachColony: spawnPile refused under the hard cap');
+      }
     }
   }
 }

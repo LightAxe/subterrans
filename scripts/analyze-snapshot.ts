@@ -5,8 +5,10 @@
 //
 // What it does, in order:
 //   1. Loads the JSON debug snapshot envelope.
-//   2. Replays from seed: createScenario(seed) → tick() through the captured
-//      inputLog up to snapshot.tick, then byte-compares serialized state.
+//   2. Replays from seed: createScenario(seed, difficulty, simVersion) at the
+//      snapshot's own simVersion (map generation is version-gated, #395) →
+//      tick() through the captured inputLog up to snapshot.tick, then
+//      byte-compares serialized state.
 //      A divergence here is a SCEN-06 regression. The log is regrouped into the
 //      DRAIN batches the sim actually saw (#296 — `issuedAtTick` is one tick
 //      early for sim self-emits) and the replaying world's own regenerated

@@ -478,8 +478,8 @@ function rushCommands(world: WorldState, t: number): SimCommand[] {
 
 /** The tick the enemy queen died (null = alive at `ticks`). */
 function rushTrial(simVersion: number, ticks: number): number | null {
-  const world = createScenario(303, 'Normal');
-  world.simVersion = simVersion;
+  // #395: created at the pinned version, so the map is the one it had then.
+  const world = createScenario(303, 'Normal', simVersion);
   const enemy = world.colonies[ENEMY_COLONY_ID]!;
   for (let t = 0; t < ticks; t++) {
     runAIController(world, ENEMY_COLONY_ID);

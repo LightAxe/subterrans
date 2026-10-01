@@ -269,10 +269,12 @@ A finite surface food source foragers harvest. When its pickups run out the pile
 Since **#395 (simVersion V69)** map generation gives every colony food of its own
 near home: piles holding at least `FOOD_FAIRNESS_MIN_PICKUPS` (40) pickups between
 them within `FOOD_FAIRNESS_RADIUS_TILES` (25) tiles, by surface path, of one of its
-open entrances. A pile is a colony's own when no other colony's entrance is as near
-it. A colony short of that has the nearest unclaimed pile of at least 40 pickups
-moved into that range (same pile, same size: the map's pile count and food total
-do not change). Piles that spawn during play are placed as before.
+open entrances. A pile within that range is a colony's own when no other colony's
+open entrance is as near it. A colony short of that has a pile moved into that range:
+the nearest pile of at least 40 pickups that is no colony's own, preferring one nearer
+it than any other colony (its own side of the map) — same pile, same size, so the
+map's pile count and food total do not change; only if there is no such pile is a new
+one made. Piles that spawn during play are placed as before.
 _Avoid_: food node, resource, deposit.
 
 **Flow field**:
@@ -513,7 +515,8 @@ _Avoid_: checkpoint.
 
 **Input log / replay**:
 The recorded SimCommand stream — **player and AI** — that reproduces a match
-deterministically from its seed.
+deterministically from its seed, difficulty and `simVersion` (since #395, V69, the
+world is generated at that version: map generation is version-gated too).
 _Avoid_: history, journal.
 
 **Autosave**:
