@@ -54,6 +54,7 @@ import {
   SIM_VERSION_V61_AI_EARLY_STORAGE,
   SIM_VERSION_V62_AI_NEST_DEFENCE,
   SIM_VERSION_V63_AI_DEEP_QUEEN,
+  SIM_VERSION_V69_FOOD_FAIRNESS,
 } from '../sim/types.js';
 import { initAnt } from '../sim/ant/ant-store.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
@@ -1060,6 +1061,62 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
         aiChamberPlacement(world, colony);
         expect(queenAnchor(world)?.anchorTileY).toBe(THIRD);
       }
+    });
+  });
+
+  describe('#395 (V69) — a surface queen off her start row still finds her Queen site', () => {
+    function queenAnchorRow(world: WorldState): number | undefined {
+      const c = world.commandQueue.find(
+        (q) =>
+          q.type === 'PlaceChamber' &&
+          (q as { chamberType: number }).chamberType === ChamberType.Queen,
+      ) as { anchorTileY: number } | undefined;
+      return c?.anchorTileY;
+    }
+    const THIRD = QUEEN_ROW;
+    /** A bootstrap shaft at column 10 down to a third of the way, the queen on the surface at row `y`. */
+    function shaftWorld(
+      y: number,
+      simVersion: number,
+    ): { world: WorldState; colony: ColonyRecord } {
+      const world = makeWorld(0);
+      world.simVersion = simVersion;
+      const colony = addColony(world, 2 as ColonyId, 0);
+      addUndergroundGrid(world, 2 as ColonyId);
+      setQueenPos(world, 0, 10, y);
+      world.ants.zone[0] = Zone.Surface;
+      const grid = world.undergroundGrids[2 as ColonyId]!;
+      for (let r = 0; r <= THIRD; r++) ugSet(grid, 10, r, UndergroundTileState.Open);
+      return { world, colony };
+    }
+
+    it('scattered north of row 64 (rows 63, 50, 10, 0) she still gets her Queen chamber a third of the way down', () => {
+      for (const y of [63, 50, 10, 0]) {
+        const { world, colony } = shaftWorld(y, SIM_VERSION_V69_FOOD_FAIRNESS);
+        aiChamberPlacement(world, colony);
+        expect(queenAnchorRow(world), `queen on surface row ${y}`).toBe(THIRD);
+      }
+    });
+
+    it('at V68 the search seeded at her surface row read as underground: from row 63 no Queen site (the deadlock)', () => {
+      const { world, colony } = shaftWorld(63, 68);
+      aiChamberPlacement(world, colony);
+      expect(queenAnchorRow(world)).toBeUndefined();
+      // On her start row (64) both versions find it.
+      for (const v of [68, SIM_VERSION_V69_FOOD_FAIRNESS]) {
+        const w = shaftWorld(64, v);
+        aiChamberPlacement(w.world, w.colony);
+        expect(queenAnchorRow(w.world), `V${v}`).toBe(THIRD);
+      }
+    });
+
+    it('a queen underground still seeds the search where she stands', () => {
+      // Underground at (10, 60) with an open spot at the Queen depth: 38+ rows above
+      // her, outside the 32-row search box, so no site — as at V68.
+      const { world, colony } = shaftWorld(60, SIM_VERSION_V69_FOOD_FAIRNESS);
+      world.ants.zone[0] = Zone.Underground;
+      aiChamberPlacement(world, colony);
+      expect(queenAnchorRow(world)).toBeUndefined();
     });
   });
 
