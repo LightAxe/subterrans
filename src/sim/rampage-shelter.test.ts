@@ -1505,6 +1505,9 @@ describe('#393 (V68) — a holder bumped off a friend’s tile never lands neare
       const boxed = bump(V68, hx, hy, away);
       expect([tileX(boxed.world, boxed.h), tileY(boxed.world, boxed.h)]).toEqual([hx, hy]);
       expect(boxed.world.ants.fleeShelterUntilTick[boxed.h]).toBe(-1);
+      // V67 (and V68 before #393) bumps it onto a tile toward the spider.
+      const old = bump(V67, hx, hy, away);
+      expect(toward).toContainEqual({ x: tileX(old.world, old.h), y: tileY(old.world, old.h) });
     });
   }
 
@@ -1562,6 +1565,22 @@ describe('#393 (V68) — a holder bumped off a friend’s tile never lands neare
     }
     expect(before).toBe(30);
     expect(sharing()).toBeLessThan(before); // the occupancy pass still spreads them
+    // and every tile still shared is a forced overlap: each open neighbour no nearer
+    // the spider is taken.
+    const taken = new Set(ids.map((id) => `${tileX(world, id)},${tileY(world, id)}`));
+    const counts = new Map<string, number>();
+    for (const k of ids.map((id) => `${tileX(world, id)},${tileY(world, id)}`))
+      counts.set(k, (counts.get(k) ?? 0) + 1);
+    for (const [k, c] of counts) {
+      if (c < 2) continue;
+      const [x, y] = k.split(',').map(Number) as [number, number];
+      for (const [dx, dy] of OCC_DIRS) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (!canEnterSurfaceTile(world, nx, ny) || fromDoor(nx, ny) < fromDoor(x, y)) continue;
+        expect([k, `${nx},${ny}`, taken.has(`${nx},${ny}`)]).toEqual([k, `${nx},${ny}`, true]);
+      }
+    }
     expect(frames.slice(-5).every((f) => f === frames.at(-1))).toBe(true); // no livelock
   });
 });
@@ -1614,6 +1633,7 @@ describe('#393 — the occupancy rule moves only a threatened colony’s Idle ho
     // braces.
     const setup = (w: WorldState): number[] => {
       w.colonies[P]!.alarmActive = true;
+      spiderDanger(w, DOOR.x, DOOR.y); // the door reads camped from the first tick
       spiderDanger(w, DOOR.x, DOOR.y + 5); // real danger on its tile: it holds
       return [
         spawn(w, P, DOOR.x, DOOR.y + 5, Zone.Surface),

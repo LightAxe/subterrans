@@ -13,7 +13,9 @@
 // #377 (V68): the rampage shelter — while the spider on a rampage threatens their
 // colony (rampageThreatens), idle workers go in (pickRampageShelterEntrance; step
 // 16 walks them there by path, rampageShelterDashRoutes) and stay in; step 10a
-// reads rampageThreatens to keep them recruitable.
+// reads rampageThreatens to keep them recruitable, and step 16's occupancy pass
+// shifts one holding on the surface only away from the spider (#393,
+// rampageShelterHolds).
 //
 // One hook runs INSIDE step 16 rather than at 15b: holdAlarmedCivilianAtShaft
 // (C1, V42), which movement's ascent calls so the colony alarm can keep a
@@ -487,7 +489,7 @@ export function holdAlarmedCivilianAtShaft(
  * world is V68 or later. rampageThreatens (below) decides per colony; it is what
  * step 10a (sheltering idle workers stay recruitable), step 15b (idle surface
  * workers go in, idle shelterers stay in) and step 16 (the routed dash, the hold at
- * the shaft) read. The spider does not move or change state between those steps
+ * the shaft, a holder's occupancy shift) read. The spider does not move or change state between those steps
  * (it ticks at 17.5), so 15b and 16 always read the same answer within a tick; 10a
  * can lag them by that tick when step 12 opens an entrance near the spider (one
  * tick of the V34 recruit skip for a shelterer 15b keeps in anyway). Always false
@@ -694,7 +696,9 @@ export function rampageShelterDashRoutes(world: WorldState, id: number): boolean
  * #393 (V68) — `id` is an Idle worker holding on the surface from the spider's
  * rampage: not fleeing (phase -1), of a colony whose alarm is off and which the
  * spider threatens, so step 15b found it no entrance whose way keeps out of the
- * spider's reach and it stands where it is. Unlike a dasher it still claims its tile
+ * spider's reach and it stands where it is (or, within the scatter radius of the hunt
+ * reticle, takes step 13e's away step — judged from where that leaves it). Unlike a
+ * dasher it still claims its tile
  * in the same-colony occupancy pass (ant-movement.ts resolveSameColonyOccupancy), so
  * a crowded reserve stays spread out instead of stacking into the dense tiles the
  * spider's hunt picks; but a friend's bump may move it only to a tile no nearer the
