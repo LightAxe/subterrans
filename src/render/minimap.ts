@@ -8,7 +8,9 @@
 //     per frame from UIScene.update(); #372 adds the frame border, the enemy
 //     fighter dots and the pulsing ring round a gathering enemy army
 //   minimapClickToTile(px, py, hud) — converts screen pixel to tile coord, returns null if outside
-//   applyMinimapClick(viewState, px, py, hud) — pan surface camera + X-link underground camera
+//   applyMinimapClick(viewState, px, py, hud) — pan surface camera, and (while
+//     underground) X-link the underground camera to the click (#399: the view
+//     toggle itself no longer X-links)
 //   MINIMAP_SCALE_X, MINIMAP_SCALE_Y — default-layout pixel-to-tile scale factors
 
 import {
@@ -17,7 +19,12 @@ import {
   COLOR_ENEMY_COLONY,
   COLOR_FOOD_PILE_NORMAL,
 } from './sprites.js';
-import { buildHudLayout, type HudLayout } from './hud-layout.js';
+import {
+  buildHudLayout,
+  MINIMAP_BORDER_PX,
+  MINIMAP_FRAME_OUT_PX,
+  type HudLayout,
+} from './hud-layout.js';
 import { DEFAULT_LAYOUT } from './layout.js';
 import { COLOR_BARREN_EARTH, COLOR_BARREN_EARTH_DARK } from './terrain-atlas.js';
 import {
@@ -66,8 +73,9 @@ const COLOR_DEAD_COLONY_MEMORIAL = 0x444444 as const;
 // found the unframed minimap melting into the surface ground behind it.
 export const MINIMAP_BORDER_COLOR = 0xe8dcb4;
 export const MINIMAP_BORDER_OUTLINE_COLOR = 0x000000;
-/** Width (px) of the light band; the dark line sits one px further out. */
-export const MINIMAP_BORDER_PX = 2;
+/** Width (px) of the light band; the dark line sits one px further out. (#399:
+ *  defined in hud-layout.ts beside minimapFrameRect, re-exported here.) */
+export { MINIMAP_BORDER_PX };
 
 // #372 — enemy fighters on the minimap: a bright red square on a dark backing
 // one px wider each side, so a lone fighter reads against both the pale ground
@@ -263,19 +271,13 @@ function drawMinimapColonyMarkers(
   }
 }
 
-/** #372 — frame the minimap: a light band and a dark outer line, outside the rect. */
+/** #372 — frame the minimap: a light band and a dark outer line, outside the rect
+ *  (its outer edge is minimapFrameRect, hud-layout.ts). */
 export function drawMinimapBorder(gfx: GfxLike, hud: HudLayout): void {
   const mm = hud.MINIMAP;
   const b = MINIMAP_BORDER_PX;
-  frameRect(
-    gfx,
-    mm.x - b - 1,
-    mm.y - b - 1,
-    mm.w + 2 * b + 2,
-    mm.h + 2 * b + 2,
-    1,
-    MINIMAP_BORDER_OUTLINE_COLOR,
-  );
+  const o = MINIMAP_FRAME_OUT_PX;
+  frameRect(gfx, mm.x - o, mm.y - o, mm.w + 2 * o, mm.h + 2 * o, 1, MINIMAP_BORDER_OUTLINE_COLOR);
   frameRect(gfx, mm.x - b, mm.y - b, mm.w + 2 * b, mm.h + 2 * b, b, MINIMAP_BORDER_COLOR);
 }
 

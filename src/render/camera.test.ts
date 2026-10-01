@@ -2,9 +2,11 @@
 //
 // Tests cover the two-view lifecycle on the new world-pixel CameraView model:
 //   - createViewState / resetViewState: world-px centers, default zoom, in-place reset
-//   - toggleView: X-link (world px), first-underground-visit centering, surface-Y/underground-Y
-//     preservation, and the atomic-toggle §A5 behavior (per-view ZOOM save/restore,
-//     in-flight zoom-lerp cancelled, clamp at the restored zoom)
+//   - toggleView: (#399) down always to the viewer's own nest — its remembered spot, else
+//     its nest centre — never X-linked to the surface; up back to where the surface was
+//     left; first-underground-visit centering when there is no nest to find; and the
+//     atomic-toggle §A5 behavior (per-view ZOOM save/restore, in-flight zoom-lerp
+//     cancelled, clamp at the restored zoom)
 //   - toggleUndergroundColony: binary colony flip, and (#378) the underground camera
 //     moving to the colony it switches to (nest centre / remembered spot)
 //
@@ -13,6 +15,8 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  SURFACE_WORLD_PX_H,
+  SURFACE_WORLD_PX_W,
   UNDERGROUND_WORLD_PX_H,
   UNDERGROUND_WORLD_PX_W,
   createViewState,
@@ -23,6 +27,7 @@ import {
 } from './camera.js';
 import {
   DEFAULT_ZOOM,
+  clampCameraView,
   viewWorldHeight,
   viewWorldWidth,
   initialUndergroundCenterYPx,
@@ -166,11 +171,11 @@ describe('resetViewState', () => {
 
 describe('toggleView', () => {
   describe('surface → underground (first visit)', () => {
-    it('X-links the underground center to the surface center (world px)', () => {
-      const vs = createViewState(24, 64);
-      vs.surfaceCamera.centerX = 800; // in-bounds world px
+    it('#399 — does not X-link: with no nest to find (no world), the underground camera stays put', () => {
+      const vs = createViewState(64, 64);
+      vs.surfaceCamera.centerX = 1500; // the player looked far off on the surface
       toggleView(vs);
-      expect(vs.undergroundCamera.centerX).toBe(800);
+      expect(vs.undergroundCamera.centerX).toBe(tileCenterPx(64));
     });
 
     it('anchors underground centerY at the shaft-top on first visit (overriding any prior value)', () => {
@@ -188,13 +193,14 @@ describe('toggleView', () => {
     });
   });
 
-  describe('underground → surface (surface Y preserved)', () => {
-    it('X-links the surface center to the underground center (world px)', () => {
-      const vs = createViewState(24, 64);
+  describe('underground → surface (the surface camera where it was left)', () => {
+    it('#399 — does not X-link: the surface returns to where it was, wherever the player went below', () => {
+      const vs = createViewState(64, 64);
+      vs.surfaceCamera.centerX = 1500;
       toggleView(vs); // → underground
       vs.undergroundCamera.centerX = 700;
       toggleView(vs); // → surface
-      expect(vs.surfaceCamera.centerX).toBe(700);
+      expect(vs.surfaceCamera.centerX).toBe(1500);
     });
 
     it('does NOT change surface centerY across the round trip', () => {
@@ -217,13 +223,14 @@ describe('toggleView', () => {
       expect(vs.undergroundCamera.centerY).toBe(600);
     });
 
-    it('still X-links underground centerX from surface on repeat toggle', () => {
+    it('#399 — returns to the remembered underground spot, whatever the surface camera did meanwhile', () => {
       const vs = createViewState(24, 64);
       toggleView(vs); // → underground (first visit)
+      vs.undergroundCamera.centerX = 500;
       toggleView(vs); // → surface
       vs.surfaceCamera.centerX = 900;
       toggleView(vs); // → underground (2nd visit)
-      expect(vs.undergroundCamera.centerX).toBe(900);
+      expect(vs.undergroundCamera.centerX).toBe(500);
     });
   });
 
@@ -306,15 +313,17 @@ describe('toggleUndergroundColony', () => {
     expect(vs.activeView).toBe('surface');
   });
 
-  it('without a world, and nothing remembered, leaves both camera centers where they were', () => {
+  it('without a world, and nothing remembered, still switches colony but leaves both camera centers where they were', () => {
     // #378 — with a world the toggle moves the underground camera (below); with
     // none it has nowhere to go. Start tile 64 keeps the centre inside the clamp.
+    // The documented silent fallback: the colony flips, the camera does not.
     const vs = createViewState(64, 64);
     const sx = vs.surfaceCamera.centerX;
     const sy = vs.surfaceCamera.centerY;
     const ux = vs.undergroundCamera.centerX;
     const uy = vs.undergroundCamera.centerY;
     toggleUndergroundColony(vs);
+    expect(vs.activeUndergroundColonyId).toBe(ENEMY_COLONY_ID);
     expect(vs.surfaceCamera.centerX).toBe(sx);
     expect(vs.surfaceCamera.centerY).toBe(sy);
     expect(vs.undergroundCamera.centerX).toBe(ux);
@@ -455,7 +464,8 @@ describe('#378 — undergroundNestCenterPx', () => {
 });
 
 describe('#378 — toggleUndergroundColony moves the underground camera', () => {
-  /** Underground on the player's own nest, the camera X-linked from the surface. */
+  /** Underground on the player's own nest (no world: the camera stays at the start
+   *  column it was created at). */
   function ownUnderground(w: WorldState) {
     const door = w.colonies[PLAYER_COLONY_ID]!.entrances[0]!;
     const vs = createViewState(door.surfaceTileX, door.surfaceTileY);
@@ -545,5 +555,151 @@ describe('#378 — toggleUndergroundColony moves the underground camera', () => 
     toggleUndergroundColony(vs, world());
     resetViewState(vs, 24, 64);
     expect(vs.undergroundCenterByColony).toBe(map);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #399 — the Underground button always goes to the viewer's own nest
+// ---------------------------------------------------------------------------
+
+describe('#399 — going down shows your own nest, wherever the surface camera is', () => {
+  /** On the surface over the enemy's entrance — as after giving a raid order there. */
+  function atEnemyDoor(w: WorldState) {
+    const own = w.colonies[PLAYER_COLONY_ID]!.entrances[0]!;
+    const vs = createViewState(own.surfaceTileX, own.surfaceTileY);
+    const door = w.colonies[ENEMY_COLONY_ID]!.entrances[0]!;
+    vs.surfaceCamera.centerX = tileCenterPx(door.surfaceTileX);
+    vs.surfaceCamera.centerY = tileCenterPx(door.surfaceTileY);
+    clampCameraView(vs.surfaceCamera, SURFACE_WORLD_PX_W, SURFACE_WORLD_PX_H); // as a real pan leaves it
+    return { vs, door, at: { x: vs.surfaceCamera.centerX, y: vs.surfaceCamera.centerY } };
+  }
+
+  it('the first time: centred on the own nest’s Queen chamber, not under the enemy entrance', () => {
+    const w = world();
+    addQueenChamber(w, PLAYER_COLONY_ID, 30, 25); // 6 × 4 tiles → centre (33, 27)
+    const { vs } = atEnemyDoor(w);
+    toggleView(vs, w);
+    expect(vs.activeView).toBe('underground');
+    expect(vs.activeUndergroundColonyId).toBe(PLAYER_COLONY_ID);
+    expect(vs.undergroundCamera.centerX).toBe(33 * TILE_SIZE_PX);
+    expect(vs.undergroundCamera.centerY).toBe(27 * TILE_SIZE_PX);
+    expect(vs.undergroundVisited).toBe(true);
+  });
+
+  it('the first time, with no Queen chamber yet: the own entrance’s column, shaft at the top', () => {
+    const w = world();
+    const own = w.colonies[PLAYER_COLONY_ID]!.entrances[0]!;
+    const { vs, door } = atEnemyDoor(w);
+    expect(door.surfaceTileX).not.toBe(own.surfaceTileX);
+    vs.undergroundCamera.centerY = 900; // a stale depth the nest centre must win over
+    toggleView(vs, w);
+    expect(vs.undergroundCamera.centerX).toBe(clampedX(tileCenterPx(own.surfaceTileX)));
+    expect(vs.undergroundCamera.centerY).toBe(initialUndergroundCenterYPx());
+  });
+
+  it('then where the player last was in their own nest — not the nest centre, not the surface’s x', () => {
+    const w = world();
+    addQueenChamber(w, PLAYER_COLONY_ID, 30, 25);
+    const { vs, at } = atEnemyDoor(w);
+    toggleView(vs, w); // → own nest, on the queen
+    vs.undergroundCamera.centerX = 700; // panned to where they were digging
+    vs.undergroundCamera.centerY = 500;
+    toggleView(vs, w); // → surface: back over the enemy entrance (no X-link)
+    expect(vs.surfaceCamera.centerX).toBe(at.x);
+    expect(vs.surfaceCamera.centerY).toBe(at.y);
+    vs.surfaceCamera.centerX = 1700; // and the surface camera wanders off further
+    toggleView(vs, w); // → underground
+    expect(vs.undergroundCamera.centerX).toBe(700);
+    expect(vs.undergroundCamera.centerY).toBe(500);
+  });
+
+  it('left while looking at the enemy’s nest: back down shows the own nest, and the toggle still finds the enemy spot', () => {
+    const w = world();
+    addQueenChamber(w, ENEMY_COLONY_ID, 90, 20);
+    const { vs } = atEnemyDoor(w);
+    toggleView(vs, w); // → own nest (entrance column)
+    vs.undergroundCamera.centerX = 600;
+    vs.undergroundCamera.centerY = 450;
+    toggleUndergroundColony(vs, w); // → enemy, on its queen
+    expect(vs.activeUndergroundColonyId).toBe(ENEMY_COLONY_ID);
+    vs.undergroundCamera.centerX = 1300; // looked around the enemy nest
+    vs.undergroundCamera.centerY = 520;
+    toggleView(vs, w); // → surface, from the enemy's nest
+    toggleView(vs, w); // → underground: YOUR nest, where you left it
+    expect(vs.activeUndergroundColonyId).toBe(PLAYER_COLONY_ID);
+    expect(vs.undergroundCamera.centerX).toBe(600);
+    expect(vs.undergroundCamera.centerY).toBe(450);
+    toggleUndergroundColony(vs, w); // → enemy: where it was left
+    expect(vs.undergroundCamera.centerX).toBe(1300);
+    expect(vs.undergroundCamera.centerY).toBe(520);
+    toggleUndergroundColony(vs, w); // → own again
+    expect(vs.undergroundCamera.centerX).toBe(600);
+    expect(vs.undergroundCamera.centerY).toBe(450);
+  });
+
+  it('underground → Enemy Colony → back still restores the own spot after a surface trip', () => {
+    const w = world();
+    const { vs } = atEnemyDoor(w);
+    toggleView(vs, w); // → own
+    vs.undergroundCamera.centerX = 640;
+    toggleView(vs, w); // → surface
+    toggleView(vs, w); // → own, at 640
+    toggleUndergroundColony(vs, w); // → enemy (its entrance column)
+    toggleUndergroundColony(vs, w); // → back
+    expect(vs.activeUndergroundColonyId).toBe(PLAYER_COLONY_ID);
+    expect(vs.undergroundCamera.centerX).toBe(640);
+  });
+
+  it('the remembered spot is clamped at the current zoom on the way back down, and the zoom kept', () => {
+    const w = world();
+    const { vs } = atEnemyDoor(w);
+    toggleView(vs, w);
+    vs.undergroundCamera.centerX = 60; // hard against the left edge at zoom 1… (clamped on settle)
+    toggleView(vs, w);
+    vs.undergroundCamera.zoom = 0.75;
+    vs.undergroundCamera.targetZoom = 0.75;
+    toggleView(vs, w);
+    expect(vs.undergroundCamera.zoom).toBe(0.75);
+    expect(vs.undergroundCamera.centerX).toBe(viewWorldWidth(0.75) / 2);
+  });
+
+  it('is colony-agnostic: "own" is the viewer passed in, whichever colony that is', () => {
+    const w = world();
+    addQueenChamber(w, ENEMY_COLONY_ID, 90, 20);
+    addQueenChamber(w, PLAYER_COLONY_ID, 30, 25);
+    const vs = createViewState(24, 64);
+    toggleView(vs, w, ENEMY_COLONY_ID); // the enemy colony's viewer
+    expect(vs.activeUndergroundColonyId).toBe(ENEMY_COLONY_ID);
+    expect(vs.undergroundCamera.centerX).toBe(93 * TILE_SIZE_PX);
+    vs.undergroundCamera.centerX = 1100;
+    toggleView(vs, w, ENEMY_COLONY_ID);
+    toggleView(vs, w, ENEMY_COLONY_ID);
+    expect(vs.undergroundCamera.centerX).toBe(1100);
+  });
+
+  it('remembers by updating the colony’s entry in place (no new object per trip)', () => {
+    const w = world();
+    const { vs } = atEnemyDoor(w);
+    toggleView(vs, w);
+    toggleView(vs, w);
+    const spot = vs.undergroundCenterByColony.get(PLAYER_COLONY_ID);
+    expect(spot).toBeDefined();
+    toggleView(vs, w);
+    vs.undergroundCamera.centerX = 777;
+    toggleView(vs, w);
+    expect(vs.undergroundCenterByColony.get(PLAYER_COLONY_ID)).toBe(spot);
+    expect(spot!.centerX).toBe(777);
+  });
+
+  it('a new round forgets the spot: the next trip down centres on the nest again', () => {
+    const w = world();
+    addQueenChamber(w, PLAYER_COLONY_ID, 30, 25);
+    const { vs } = atEnemyDoor(w);
+    toggleView(vs, w);
+    vs.undergroundCamera.centerX = 700;
+    toggleView(vs, w);
+    resetViewState(vs, 24, 64);
+    toggleView(vs, w);
+    expect(vs.undergroundCamera.centerX).toBe(33 * TILE_SIZE_PX);
   });
 });

@@ -18,27 +18,22 @@ import {
   CARRIED_FOOD_SCALE,
   CARRIED_FOOD_TINT,
   carriedFoodPosition,
+  ANT_SPRITE_DEPTH,
   ANT_TEXTURE_QUEEN,
   ANT_TEXTURE_WORKER,
+  CARRIED_FOOD_DEPTH,
   EGG_TEXTURE,
   FOOD_CACHE_TEXTURE,
   LARVA_TEXTURE,
   SPIDER_SPRITE_DEPTH,
   SPIDER_TEXTURE,
+  STATIC_SPRITE_DEPTH,
   type AntSpriteDrawOptions,
   type AntSpriteLayer,
   type SpiderSpriteDrawOptions,
   type StaticSpriteDrawOptions,
   type StaticSpriteKind,
 } from './ant-sprite-layer.js';
-
-const ANT_SPRITE_DEPTH = 50;
-// Static entities sit just below ants so a queen standing in the Nursery
-// still reads on top of its own eggs. Keeps Z order predictable.
-const STATIC_SPRITE_DEPTH = 48;
-// #290 PR 6 — a carried-food crumb sits on top of the ant carrying it (and below
-// the spider, SPIDER_SPRITE_DEPTH 52).
-const CARRIED_FOOD_DEPTH = 51;
 
 const STATIC_TEXTURES: Record<StaticSpriteKind, string> = {
   egg: EGG_TEXTURE,

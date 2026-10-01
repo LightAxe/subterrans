@@ -9,10 +9,19 @@ import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import {
   drawPheromoneOverlay,
-  pheromoneRenderParams,
+  pheromoneIntensity,
+  PHEROMONE_OVERLAY_DEPTH,
+  PHEROMONE_VISUAL_MIN,
   PHEROMONE_VISUAL_MAX,
   MAX_PHEROMONE_ALPHA,
 } from './draw-pheromone.js';
+import {
+  ANT_SPRITE_DEPTH,
+  CARRIED_FOOD_DEPTH,
+  ENTITY_GFX_DEPTH,
+  SPIDER_SPRITE_DEPTH,
+  STATIC_SPRITE_DEPTH,
+} from './ant-sprite-layer.js';
 import type { GfxLike } from './draw-surface.js';
 import type { WorldState } from '../sim/types.js';
 import { createWorldState } from '../sim/types.js';
@@ -23,6 +32,7 @@ import {
   TILE_SIZE_PX,
   COLOR_PHEROMONE_FOOD_FAINT,
   COLOR_PHEROMONE_FOOD_STRONG,
+  lerpColor,
 } from './sprites.js';
 import { makeCameraView, type CameraView } from './camera-adapter.js';
 
@@ -103,53 +113,80 @@ function makeWorldWithFoodGrid(width: number, height: number): WorldState {
 }
 
 // ---------------------------------------------------------------------------
-// Tests: pheromoneRenderParams
+// Tests: pheromoneIntensity (#399 — see-through, scaled by trail strength)
 // ---------------------------------------------------------------------------
 
-describe('pheromoneRenderParams', () => {
-  it('value=0 → alpha=0, color=faintColor', () => {
-    const result = pheromoneRenderParams(
-      0,
-      COLOR_PHEROMONE_FOOD_FAINT,
-      COLOR_PHEROMONE_FOOD_STRONG,
-    );
-    expect(result.alpha).toBe(0);
-    expect(result.color).toBe(COLOR_PHEROMONE_FOOD_FAINT);
+describe('#399 — pheromoneIntensity: alpha and colour follow trail strength', () => {
+  it('a full-strength tile is see-through: at most 35% alpha (Rob: about 30–40%)', () => {
+    expect(MAX_PHEROMONE_ALPHA).toBe(0.35);
+    expect(MAX_PHEROMONE_ALPHA).toBeGreaterThanOrEqual(0.3);
+    expect(MAX_PHEROMONE_ALPHA).toBeLessThanOrEqual(0.4);
   });
 
-  it('value=PHEROMONE_VISUAL_MAX → alpha=MAX_PHEROMONE_ALPHA (0.6), color=strongColor', () => {
-    const result = pheromoneRenderParams(
-      PHEROMONE_VISUAL_MAX,
-      COLOR_PHEROMONE_FOOD_FAINT,
-      COLOR_PHEROMONE_FOOD_STRONG,
-    );
-    expect(result.alpha).toBeCloseTo(MAX_PHEROMONE_ALPHA, 10);
-    expect(result.color).toBe(COLOR_PHEROMONE_FOOD_STRONG);
+  it('weak trail is not drawn at all: 0 at or below PHEROMONE_VISUAL_MIN', () => {
+    expect(PHEROMONE_VISUAL_MIN).toBe(1024);
+    expect(pheromoneIntensity(0)).toBe(0);
+    expect(pheromoneIntensity(128)).toBe(0); // the V14 food-trail floor
+    expect(pheromoneIntensity(1024)).toBe(0); // one tick's deposit (FOOD_TRAIL_DEPOSIT_V14)
+    expect(pheromoneIntensity(PHEROMONE_VISUAL_MIN)).toBe(0);
+    expect(pheromoneIntensity(PHEROMONE_VISUAL_MIN + 1)).toBeGreaterThan(0);
   });
 
-  it('value=2×PHEROMONE_VISUAL_MAX → alpha capped at MAX_PHEROMONE_ALPHA (0.6)', () => {
-    const result = pheromoneRenderParams(
-      2 * PHEROMONE_VISUAL_MAX,
-      COLOR_PHEROMONE_FOOD_FAINT,
-      COLOR_PHEROMONE_FOOD_STRONG,
-    );
-    expect(result.alpha).toBeCloseTo(MAX_PHEROMONE_ALPHA, 10);
+  it('rises with the log of the strength — a quarter per doubling — to 1 at PHEROMONE_VISUAL_MAX, and stays there', () => {
+    expect(PHEROMONE_VISUAL_MAX).toBe(16384);
+    expect(pheromoneIntensity(2048)).toBeCloseTo(0.25, 10);
+    expect(pheromoneIntensity(4096)).toBeCloseTo(0.5, 10);
+    expect(pheromoneIntensity(8192)).toBeCloseTo(0.75, 10);
+    expect(pheromoneIntensity(Math.round(1024 * Math.SQRT2))).toBeCloseTo(0.125, 3);
+    expect(pheromoneIntensity(PHEROMONE_VISUAL_MAX)).toBe(1);
+    expect(pheromoneIntensity(65280)).toBe(1); // PHEROMONE_CAP
+    // Monotone over the whole range a grid cell can hold.
+    let prev = -1;
+    for (let v = 0; v <= 65280; v += 64) {
+      const t = pheromoneIntensity(v);
+      expect(t).toBeGreaterThanOrEqual(prev);
+      expect(t).toBeGreaterThanOrEqual(0);
+      expect(t).toBeLessThanOrEqual(1);
+      prev = t;
+    }
   });
 
-  it('value=PHEROMONE_VISUAL_MAX/2, black→white → alpha≈0.3, color≈0x7f7f7f', () => {
-    const result = pheromoneRenderParams(PHEROMONE_VISUAL_MAX / 2, 0x000000, 0xffffff);
-    expect(result.alpha).toBeCloseTo(0.3, 10);
-    // lerpColor(0, 0xffffff, 0.5) — each channel: 0 + 255*0.5 = 127 → 0x7f7f7f
-    expect(result.color).toBe(0x7f7f7f);
+  it('only strong trails stand out: one deposit not drawn, a single pass faint, a busy route in full', () => {
+    const alpha = (v: number) => pheromoneIntensity(v) * MAX_PHEROMONE_ALPHA;
+    // One tick's deposit (1024): not drawn; a little more, barely.
+    expect(alpha(1024)).toBe(0);
+    expect(alpha(1500)).toBeLessThan(0.05);
+    // A single forager pass (about two ticks' deposits a tile, ~2048): faint.
+    expect(alpha(2048)).toBeLessThan(0.1);
+    // A typical trail tile (the V68 playtest saves' per-save medians ran 270–3950):
+    // faint — visible, but at most about half of full strength.
+    expect(alpha(2200)).toBeGreaterThan(0.05);
+    expect(alpha(2200)).toBeLessThan(MAX_PHEROMONE_ALPHA / 3);
+    expect(alpha(3950)).toBeLessThan(MAX_PHEROMONE_ALPHA / 2);
+    // A well-used route (≥ 16384) and the spider's lair (~32768): the full 35%.
+    expect(alpha(16384)).toBe(MAX_PHEROMONE_ALPHA);
+    expect(alpha(32768)).toBe(MAX_PHEROMONE_ALPHA);
   });
+});
 
-  it('normalized is correctly proportional for arbitrary values', () => {
-    const quarter = pheromoneRenderParams(PHEROMONE_VISUAL_MAX / 4, 0x000000, 0xffffff);
-    expect(quarter.alpha).toBeCloseTo(MAX_PHEROMONE_ALPHA * 0.25, 10);
-
-    const threeQuarters = pheromoneRenderParams(PHEROMONE_VISUAL_MAX * 0.75, 0x000000, 0xffffff);
-    expect(threeQuarters.alpha).toBeCloseTo(MAX_PHEROMONE_ALPHA * 0.75, 10);
+describe('#399 — the overlay draws beneath every layer ants are drawn on', () => {
+  it('PHEROMONE_OVERLAY_DEPTH is below the entity gfx (ant dots), brood, ants, carried food and the spider', () => {
+    for (const antLayer of [
+      ENTITY_GFX_DEPTH,
+      STATIC_SPRITE_DEPTH,
+      ANT_SPRITE_DEPTH,
+      CARRIED_FOOD_DEPTH,
+      SPIDER_SPRITE_DEPTH,
+    ]) {
+      expect(PHEROMONE_OVERLAY_DEPTH).toBeLessThan(antLayer);
+    }
+    // …and above the terrain RenderTexture (depth -10, game-scene.ts).
+    expect(PHEROMONE_OVERLAY_DEPTH).toBeGreaterThan(-10);
   });
+  // That GameScene actually puts its layers at these depths is pinned on the live
+  // scene, not here: tests/pheromone-overlay.spec.ts reads every layer's depth
+  // (__phase9_test.getLayerDepths) on the surface and underground and checks
+  // terrain < overlay < entity gfx and every ant-layer sprite.
 });
 
 // ---------------------------------------------------------------------------
@@ -162,42 +199,48 @@ describe('drawPheromoneOverlay — FoodTrail grid', () => {
 
   beforeEach(() => {
     gfx = new MockGfx();
-    // 4×1 row: values at [0, ¼, ½, full] of PHEROMONE_VISUAL_MAX so the
-    // ramp test sees strictly increasing alpha regardless of what VISUAL_MAX is.
-    world = makeWorldWithFoodGrid(4, 1);
+    // 5×1 row: [0, at the visibility floor, one doubling above it (¼), two (½),
+    // full], so the ramp test sees strictly increasing alpha.
+    world = makeWorldWithFoodGrid(5, 1);
     const key = pheromoneGridKey(PLAYER_COLONY_ID, PheromoneType.FoodTrail, 'surface');
     const grid = world.pheromoneGrids[key]!;
     phSet(grid, 0, 0, 0);
-    phSet(grid, 1, 0, PHEROMONE_VISUAL_MAX >> 2); // ¼ → normalized 0.25
-    phSet(grid, 2, 0, PHEROMONE_VISUAL_MAX >> 1); // ½ → normalized 0.5
-    phSet(grid, 3, 0, PHEROMONE_VISUAL_MAX); // full → normalized 1.0
+    phSet(grid, 1, 0, PHEROMONE_VISUAL_MIN); // weak: not drawn
+    phSet(grid, 2, 0, 2 * PHEROMONE_VISUAL_MIN); // ¼
+    phSet(grid, 3, 0, 4 * PHEROMONE_VISUAL_MIN); // ½
+    phSet(grid, 4, 0, PHEROMONE_VISUAL_MAX); // full
   });
 
-  it('produces exactly 3 fillRect calls (skips the zero tile)', () => {
+  it('draws only the tiles strong enough to show (skips zero and weak tiles)', () => {
     const cam = makeCamera(2, 0.5);
     drawPheromoneOverlay(gfx, world, cam, 'surface');
     const rects = gfx.callsOf('fillRect');
-    expect(rects.length).toBe(3);
+    expect(rects.map((r) => r.args[0])).toEqual([2, 3, 4].map((tx) => tx * TILE_SIZE_PX));
   });
 
-  it('alpha increases from first to last non-zero tile (ramp behavior)', () => {
+  it('each tile’s alpha is its intensity × MAX_PHEROMONE_ALPHA, its colour lerped faint → strong', () => {
     const cam = makeCamera(2, 0.5);
     drawPheromoneOverlay(gfx, world, cam, 'surface');
     const styles = gfx.callsOf('fillStyle');
-    // fillStyle is called once per non-zero tile, in order tx=1,2,3
     expect(styles.length).toBe(3);
-    const alphas = styles.map((s) => s.args[1] as number);
-    // alpha should be strictly increasing
+    const expected = [0.25, 0.5, 1];
+    styles.forEach((st, i) => {
+      expect(st.args[1] as number).toBeCloseTo(expected[i]! * MAX_PHEROMONE_ALPHA, 10);
+      expect(st.args[0]).toBe(
+        lerpColor(COLOR_PHEROMONE_FOOD_FAINT, COLOR_PHEROMONE_FOOD_STRONG, expected[i]!),
+      );
+    });
+    // Strictly increasing with strength; the strongest at the 35% cap, never above.
+    const alphas = styles.map((st) => st.args[1] as number);
     expect(alphas[0]).toBeLessThan(alphas[1]!);
     expect(alphas[1]).toBeLessThan(alphas[2]!);
+    expect(Math.max(...alphas)).toBe(MAX_PHEROMONE_ALPHA);
   });
 
-  it('color at ¼-scale value (PHEROMONE_VISUAL_MAX >> 2) is between faint and strong (not equal to either endpoint)', () => {
+  it('colour at ¼ strength is between faint and strong (not equal to either endpoint)', () => {
     const cam = makeCamera(2, 0.5);
     drawPheromoneOverlay(gfx, world, cam, 'surface');
-    const styles = gfx.callsOf('fillStyle');
-    // First non-zero tile (tx=1, value = PHEROMONE_VISUAL_MAX >> 2 = 128) → normalized=0.25
-    const color = styles[0]!.args[0] as number;
+    const color = gfx.callsOf('fillStyle')[0]!.args[0] as number;
     expect(color).not.toBe(COLOR_PHEROMONE_FOOD_FAINT);
     expect(color).not.toBe(COLOR_PHEROMONE_FOOD_STRONG);
   });
@@ -286,7 +329,7 @@ describe('drawPheromoneOverlay — underground zone', () => {
     // Install underground FoodTrail grid
     const ugKey = pheromoneGridKey(PLAYER_COLONY_ID, PheromoneType.FoodTrail, 'underground');
     const ugGrid = createPheromoneGrid(4, 4);
-    phSet(ugGrid, 1, 1, 1024);
+    phSet(ugGrid, 1, 1, 4096);
     world.pheromoneGrids[ugKey] = ugGrid;
 
     // Surface key should NOT be read
@@ -334,10 +377,10 @@ describe('drawPheromoneOverlay — viewport clipping', () => {
     const world = createWorldState(1);
     const key = pheromoneGridKey(PLAYER_COLONY_ID, PheromoneType.FoodTrail, 'surface');
     const smallGrid = createPheromoneGrid(2, 2);
-    phSet(smallGrid, 0, 0, 1024);
-    phSet(smallGrid, 1, 0, 1024);
-    phSet(smallGrid, 0, 1, 1024);
-    phSet(smallGrid, 1, 1, 1024);
+    phSet(smallGrid, 0, 0, 4096);
+    phSet(smallGrid, 1, 0, 4096);
+    phSet(smallGrid, 0, 1, 4096);
+    phSet(smallGrid, 1, 1, 4096);
     world.pheromoneGrids[key] = smallGrid;
 
     // Huge viewport — should still produce only 4 fillRect calls (2×2 grid)

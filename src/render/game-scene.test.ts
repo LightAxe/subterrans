@@ -464,8 +464,8 @@ describe('session reset orchestration (bootFresh / bootFromSave precondition)', 
     expect(s.viewState.activeView).toBe('surface');
     expect(s.viewState.activeTool).toBe('command'); // surface default
     // resetViewState frames the surface camera on the start tile CENTER (world px):
-    // centerX/Y = (tile + 0.5) × TILE_SIZE_PX. Underground X-links to the same
-    // start column; its centerY resets to the shaft-at-top initial depth.
+    // centerX/Y = (tile + 0.5) × TILE_SIZE_PX. The underground camera resets to
+    // the same start column (the own nest's entrance) at the shaft-at-top depth.
     expect(s.viewState.surfaceCamera.centerX).toBe((PLAYER_START_X + 0.5) * TILE_SIZE_PX);
     expect(s.viewState.surfaceCamera.centerY).toBe((PLAYER_START_Y + 0.5) * TILE_SIZE_PX);
     expect(s.viewState.undergroundCamera.centerX).toBe((PLAYER_START_X + 0.5) * TILE_SIZE_PX);

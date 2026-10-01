@@ -1,5 +1,6 @@
 // raid-menu-ui.spec.ts — #378: the raid menu's hover highlight and description,
-// and the order caption on a quick switch, in a real browser.
+// and the order caption on a quick switch, in a real browser. #399: the
+// description stays on screen and clear of the HUD wherever the menu opens.
 //
 // The pieces are pinned in unit tests (raid-order-view.test.ts: the hovered row,
 // its lit colour, the description and where it goes; caption-queue.test.ts: a
@@ -18,8 +19,16 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { clickCanvasRect, settleToPlaying, waitForUiHook } from './helpers/boot.js';
-import { MINIMAP_RECT, contextMenuRowRect, type Rect } from './helpers/geometry.js';
+import {
+  ALARM_TOGGLE_RECT,
+  VIEW_TOGGLE_RECT,
+  contextMenuRowRect,
+  type Rect,
+} from './helpers/geometry.js';
 import { TILE_SIZE_PX } from '../src/render/sprites.js';
+import { buildHudLayout, minimapFrameRect } from '../src/render/hud-layout.js';
+import { DEFAULT_LAYOUT } from '../src/render/layout.js';
+import { RAID_ORDER_OPTIONS, raidOrderCaption } from '../src/render/raid-order-view.js';
 
 interface TestHook {
   getCaptionsShown?: () => string[];
@@ -40,7 +49,9 @@ interface TestHook {
   getContextMenu?: () => { visible: boolean; kind: string; screenX: number; screenY: number };
   getRaidMenu?: () => { hovered: number | null; description: string | null } | null;
   getRaidMenuDescriptionRect?: () => { x: number; y: number; w: number; h: number } | null;
-  getCameraState?: () => { surface: { centerX: number; centerY: number; zoom: number } };
+  getCameraState?: () => {
+    surface: { centerX: number; centerY: number; zoom: number; viewW: number };
+  };
   sampleArea?: (x: number, y: number, w: number, h: number) => Promise<number[]>;
   isPaused?: () => boolean;
 }
@@ -117,10 +128,60 @@ async function enemyDoor(page: Page): Promise<{ tileX: number; tileY: number }> 
   return doors[0]!;
 }
 
-async function canvasBox(page: Page): Promise<{ x: number; y: number }> {
+async function canvasBox(
+  page: Page,
+): Promise<{ x: number; y: number; width: number; height: number }> {
   const box = await page.locator('canvas').first().boundingBox();
   if (!box) throw new Error('canvas has no bounding box');
   return box;
+}
+
+/** The raid menu description's box as last drawn (canvas px), or null. */
+async function descriptionRect(page: Page): Promise<Rect | null> {
+  return await page.evaluate(
+    () =>
+      (
+        window as unknown as { __phase9_test?: TestHook }
+      ).__phase9_test?.getRaidMenuDescriptionRect?.() ?? null,
+  );
+}
+
+/** #399 — move the surface camera so the enemy entrance's tile centre lands near
+ *  canvas point `at` (the camera centres on a whole tile, so within a tile of it),
+ *  and return where it landed. */
+async function putDoorAt(
+  page: Page,
+  door: { tileX: number; tileY: number },
+  at: { x: number; y: number },
+): Promise<{ x: number; y: number }> {
+  const cam0 = await page.evaluate(() =>
+    (window as unknown as { __phase9_test?: TestHook }).__phase9_test!.getCameraState!(),
+  );
+  const zoom = cam0.surface.zoom;
+  const viewportW = cam0.surface.viewW * zoom;
+  const viewportH = DEFAULT_LAYOUT.h;
+  // Centre the camera on the tile `at` is that many tiles from the door.
+  const dx = Math.round((at.x - viewportW / 2) / (TILE_SIZE_PX * zoom));
+  const dy = Math.round((at.y - viewportH / 2) / (TILE_SIZE_PX * zoom));
+  await page.evaluate(
+    ({ x, y }) =>
+      (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.surfaceTileScreenPoint?.(
+        x,
+        y,
+      ) ?? null,
+    { x: door.tileX - dx, y: door.tileY - dy },
+  );
+  const cam = (
+    await page.evaluate(() =>
+      (window as unknown as { __phase9_test?: TestHook }).__phase9_test!.getCameraState!(),
+    )
+  ).surface;
+  const wx = (door.tileX + 0.5) * TILE_SIZE_PX;
+  const wy = (door.tileY + 0.5) * TILE_SIZE_PX;
+  return {
+    x: Math.round((wx - cam.centerX) * cam.zoom + viewportW / 2),
+    y: Math.round((wy - cam.centerY) * cam.zoom + viewportH / 2),
+  };
 }
 
 /** Right-click the enemy entrance; resolves once the raid menu is up (its top-left). */
@@ -269,20 +330,28 @@ test.describe('#378 — the raid menu', () => {
     // that has not moved has pointed at nothing: no row lit, nothing described
     // (no order is in force yet).
     await expect.poll(() => raidMenu(page)).toEqual({ hovered: null, description: null });
-    const lastRow = contextMenuRowRect(menu.screenX, menu.screenY, RAID.Assault);
-    const menuBottom = lastRow.y + lastRow.h;
-    // Where the description line goes: just under the menu, from its left edge. This
-    // patch is inside its 6-px left padding, so it is all backing, no letters.
-    const underMenu: Rect = { x: menu.screenX + 1, y: menuBottom + 4, w: 4, h: 10 };
+    // Hover Spoil once to learn where its description goes (#399: wrapped, and
+    // placed clear of the HUD — not always flush under the menu). A patch inside
+    // the box's 6-px left padding is all backing, no letters.
+    await hoverRow(page, menu, RAID.Spoil);
+    await expect.poll(async () => (await raidMenu(page))?.hovered ?? null).toBe(RAID.Spoil);
+    const d = await descriptionRect(page);
+    expect(d).not.toBeNull();
+    const backing: Rect = {
+      x: Math.ceil(d!.x) + 1,
+      y: Math.ceil(d!.y) + 2,
+      w: 4,
+      h: Math.floor(d!.h) - 6,
+    };
 
     // Off the menu, with no order in force yet: nothing lit, nothing described.
     await pointAt(page, menu.screenX - 60, menu.screenY + 40);
     await expect.poll(() => raidMenu(page)).toEqual({ hovered: null, description: null });
     const spoilUnlit = await meanLuma(page, stripePatch(menu, RAID.Spoil));
-    const groundUnderMenu = await meanLuma(page, underMenu);
+    const groundUnderBox = await meanLuma(page, backing);
 
-    // Hover Spoil: its row is lit and the line under the menu says what it does, in
-    // the order caption's words.
+    // Hover Spoil: its row is lit and the description says what it does, in the
+    // order caption's words.
     await hoverRow(page, menu, RAID.Spoil);
     await expect
       .poll(() => raidMenu(page))
@@ -293,8 +362,9 @@ test.describe('#378 — the raid menu', () => {
     await expect
       .poll(() => meanLuma(page, stripePatch(menu, RAID.Spoil)))
       .toBeGreaterThan(spoilUnlit + 40);
-    // The description's dark backing now covers the ground under the menu.
-    await expect.poll(() => meanLuma(page, underMenu)).toBeLessThan(groundUnderMenu - 20);
+    // The description's dark backing now covers the ground there.
+    await expect.poll(() => meanLuma(page, backing)).toBeLessThan(groundUnderBox - 20);
+    expect(await descriptionRect(page)).toEqual(d);
     const box = await canvasBox(page);
     await page.screenshot({
       path: 'test-results/raid-menu-hover-spoil.png',
@@ -485,56 +555,157 @@ test.describe('#378 — the raid menu', () => {
     expect(shown.indexOf(zoomHint)).toBeGreaterThan(shown.findIndex(isAssault));
   });
 
-  test('a click on the description line only closes the menu, even where it lies over the minimap', async ({
-    page,
-  }) => {
+  // #399: the description no longer lies over a HUD control (where #378's version
+  // of this test clicked, on the minimap), so what is left to see is that a click
+  // on its words is like any click off the menu: it closes it and gives no order.
+  test('a click on the description closes the menu: no order, no camera move', async ({ page }) => {
     await freshGame(page, ALL_HINTS);
     const door = await enemyDoor(page);
-    await giveOrder(page, door, RAID.Deny); // an order in force, so the line shows
+    await giveOrder(page, door, RAID.Deny); // an order in force, so the description shows
     await setPaused(page, true);
 
-    // Put the entrance right of centre, so the menu opened on it sits over the
-    // right-hand HUD column and its description line runs across the minimap top.
-    const shift = 12;
-    const left = await page.evaluate(
-      ({ x, y }) =>
-        (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.surfaceTileScreenPoint?.(
-          x,
-          y,
-        ) ?? null,
-      { x: door.tileX - shift, y: door.tileY },
-    );
-    expect(left).not.toBeNull();
-    const cam0 = await page.evaluate(() =>
-      (window as unknown as { __phase9_test?: TestHook }).__phase9_test!.getCameraState!(),
-    );
-    const doorPt = { x: left!.x + shift * TILE_SIZE_PX * cam0.surface.zoom, y: left!.y };
-    const box = await canvasBox(page);
-    await page.mouse.click(box.x + doorPt.x, box.y + doorPt.y, { button: 'right' });
+    await openRaidMenu(page, door);
     await expect.poll(async () => (await raidMenu(page))?.description ?? null).toMatch(/^Deny: /);
-    const d = await page.evaluate(() =>
-      (window as unknown as { __phase9_test?: TestHook }).__phase9_test!
-        .getRaidMenuDescriptionRect!(),
-    );
+    const d = await descriptionRect(page);
     expect(d).not.toBeNull();
-    // Where the line and the minimap overlap.
-    const x0 = Math.max(d!.x, MINIMAP_RECT.x);
-    const x1 = Math.min(d!.x + d!.w, MINIMAP_RECT.x + MINIMAP_RECT.w);
-    const y0 = Math.max(d!.y, MINIMAP_RECT.y);
-    const y1 = Math.min(d!.y + d!.h, MINIMAP_RECT.y + MINIMAP_RECT.h);
-    expect(x1 - x0).toBeGreaterThan(4);
-    expect(y1 - y0).toBeGreaterThan(4);
     const before = await page.evaluate(() =>
       (window as unknown as { __phase9_test?: TestHook }).__phase9_test!.getCameraState!(),
     );
+    const rallyBefore = await page.evaluate(
+      () =>
+        (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.getPlayerRaidOrder?.() ??
+        null,
+    );
 
-    // A click on the words there: the menu closes, and the minimap under them
-    // takes nothing (a minimap click would jump the camera).
-    await clickCanvasRect(page, { x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
+    // A click on the words: the menu closes; the world under them takes nothing
+    // (no rally moved there) and the camera stays.
+    await clickCanvasRect(page, { ...d!, w: Math.min(d!.w, 40) });
     await expect.poll(async () => (await raidMenu(page)) === null).toBe(true);
     const after = await page.evaluate(() =>
       (window as unknown as { __phase9_test?: TestHook }).__phase9_test!.getCameraState!(),
     );
     expect(after.surface).toEqual(before.surface);
+    expect(
+      await page.evaluate(
+        () =>
+          (
+            window as unknown as { __phase9_test?: TestHook }
+          ).__phase9_test?.getPlayerRaidOrder?.() ?? null,
+      ),
+    ).toEqual(rallyBefore);
   });
+});
+
+// #399 — the playtest found the description strip over the minimap's top border
+// and the Blockade line running to the canvas's right edge (shots/04-raid-menu-
+// hover-3-blockade.png). Every order's description, with the menu opened by the
+// right edge, near the bottom HUD strip, and over the minimap, must lie wholly on
+// screen above the strip, off the menu, and clear of every HUD control. The oracle
+// is the HUD layout itself, not the placement code (raid-order-view.ts).
+test.describe('#399 — the raid menu description stays on screen and clear of the HUD', () => {
+  const hud = buildHudLayout(DEFAULT_LAYOUT);
+  /** The minimap as painted: its rect and the frame round it (#372). Same
+   *  outline the minimap's painter draws to (MINIMAP_FRAME_OUT_PX, hud-layout.ts). */
+  const minimapFrame: Rect = minimapFrameRect(hud);
+  const HUD_CONTROLS: ReadonlyArray<[string, Rect]> = [
+    ['minimap', minimapFrame],
+    ['view toggle', VIEW_TOGGLE_RECT],
+    ['alarm toggle', ALARM_TOGGLE_RECT],
+    ['tool palette', hud.TOOLS],
+    ['stats', hud.STATS],
+    ['save icon', hud.SAVE_ICON],
+  ];
+  const overlaps = (a: Rect, b: Rect): boolean =>
+    a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+  // Where on the canvas the enemy entrance is put before the right-click, and what
+  // that must do to the menu (checked, so the case is really the one named).
+  const CASES = [
+    {
+      name: 'right-edge',
+      at: { x: DEFAULT_LAYOUT.w - 20, y: hud.ALARM_TOGGLE.y - 160 },
+      menuIs: (m: Rect) => m.x + m.w === DEFAULT_LAYOUT.w,
+    },
+    {
+      name: 'bottom',
+      at: { x: DEFAULT_LAYOUT.w / 2 + 40, y: hud.HINTS.y - 8 },
+      menuIs: (m: Rect) => m.y + m.h === hud.HINTS.y,
+    },
+    {
+      name: 'over-minimap',
+      at: { x: hud.MINIMAP.x - 30, y: hud.HINTS.y - 30 },
+      menuIs: (m: Rect) => overlaps(m, minimapFrame) && overlaps(m, VIEW_TOGGLE_RECT),
+    },
+  ] as const;
+
+  for (const c of CASES) {
+    test(`menu ${c.name}: every order's description`, async ({ page }) => {
+      await freshGame(page, ALL_HINTS);
+      await setPaused(page, true);
+      const door = await enemyDoor(page);
+      const pt = await putDoorAt(page, door, c.at);
+      // The click lands where asked, give or take the tile-snapped camera.
+      expect(Math.abs(pt.x - c.at.x)).toBeLessThanOrEqual(TILE_SIZE_PX);
+      expect(Math.abs(pt.y - c.at.y)).toBeLessThanOrEqual(TILE_SIZE_PX);
+      const box = await canvasBox(page);
+      await page.mouse.click(box.x + pt.x, box.y + pt.y, { button: 'right' });
+      await expect
+        .poll(async () => {
+          const m = await page.evaluate(
+            () =>
+              (
+                window as unknown as { __phase9_test?: TestHook }
+              ).__phase9_test?.getContextMenu?.() ?? null,
+          );
+          return m !== null && m.visible && m.kind === 'raid';
+        })
+        .toBe(true);
+      const m = await page.evaluate(() =>
+        (window as unknown as { __phase9_test?: TestHook }).__phase9_test!.getContextMenu!(),
+      );
+      const lastRow = contextMenuRowRect(m.screenX, m.screenY, RAID.Assault);
+      const menu: Rect = {
+        x: m.screenX,
+        y: m.screenY,
+        w: lastRow.w,
+        h: lastRow.y + lastRow.h - m.screenY,
+      };
+      expect(c.menuIs(menu), `menu at ${JSON.stringify(menu)}`).toBe(true);
+
+      const boxes: Rect[] = [];
+      for (const option of RAID_ORDER_OPTIONS) {
+        await hoverRow(page, { screenX: m.screenX, screenY: m.screenY }, option.raidType);
+        // The menu's words are the order caption's (one blurb, single-sourced).
+        await expect
+          .poll(async () => (await raidMenu(page))?.description ?? null)
+          .toBe(`${option.label}: ${option.blurb}`);
+        expect(raidOrderCaption(option.raidType)).toBe(`Raiding: ${option.label}. ${option.blurb}`);
+        const d = (await descriptionRect(page))!;
+        boxes.push(d);
+        const where = `${option.label} at ${JSON.stringify(d)}`;
+        // Wholly on the canvas, above the bottom HUD strip.
+        expect(d.x, where).toBeGreaterThanOrEqual(0);
+        expect(d.y, where).toBeGreaterThanOrEqual(0);
+        expect(d.x + d.w, where).toBeLessThanOrEqual(DEFAULT_LAYOUT.w);
+        expect(d.y + d.h, where).toBeLessThanOrEqual(hud.HINTS.y);
+        // Wrapped: never a ~500-px line, at most a couple of lines.
+        expect(d.w, where).toBeLessThanOrEqual(320);
+        expect(d.h, where).toBeLessThanOrEqual(60);
+        // Off the menu, and clear of every HUD control.
+        expect(overlaps(d, menu), where).toBe(false);
+        for (const [control, r] of HUD_CONTROLS) {
+          expect(overlaps(d, r), `${where} over the ${control}`).toBe(false);
+        }
+        if (option.raidType === RAID.Blockade) {
+          await page.screenshot({
+            path: `test-results/raid-menu-399-${c.name}-blockade.png`,
+            clip: { x: box.x, y: box.y, width: box.width, height: box.height },
+          });
+        }
+      }
+      // One box for every order: it keeps its place as the pointer moves down
+      // the menu, not each order's own width moving it about.
+      for (const d of boxes) expect(d).toEqual(boxes[0]);
+    });
+  }
 });

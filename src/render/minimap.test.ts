@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { COLOR_ENEMY_COLONY, TILE_SIZE_PX } from './sprites.js';
-import { buildHudLayout } from './hud-layout.js';
+import { buildHudLayout, minimapFrameRect } from './hud-layout.js';
 import { DEFAULT_LAYOUT } from './layout.js';
 import { COLOR_BARREN_EARTH, COLOR_BARREN_EARTH_DARK } from './terrain-atlas.js';
 import { createViewState } from './camera.js';
@@ -422,6 +422,18 @@ describe('#372 drawMinimapBorder — a visible frame outside the map', () => {
       const inside = x! < mm.x + mm.w && x! + w! > mm.x && y! < mm.y + mm.h && y! + h! > mm.y;
       expect(inside).toBe(false);
     }
+  });
+
+  it('minimapFrameRect is the painted frame: the outer edge of the dark line', () => {
+    // The raid-menu description placement and its e2e oracle both read
+    // minimapFrameRect, so pin it to the painted 3 px here, independently of both.
+    const mm = hud.MINIMAP;
+    expect(minimapFrameRect(hud)).toEqual({
+      x: mm.x - 3,
+      y: mm.y - 3,
+      w: mm.w + 6,
+      h: mm.h + 6,
+    });
   });
 
   it('drawMinimap draws the frame', () => {
