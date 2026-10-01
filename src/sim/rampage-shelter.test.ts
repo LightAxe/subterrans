@@ -10,7 +10,7 @@
 // every case through tick() at V67 and at V68 and checks the V68 outcome is the
 // rule's where one applies, and exactly V67's everywhere else. The rules are pinned
 // through tick() below it.
-import { describe, it, expect } from 'vitest';
+import { afterAll, describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
 import { createScenario } from './scenario.js';
 import {
@@ -394,7 +394,8 @@ const AUDIT_TICKS = 8;
 
 /** A pristine quiet() world per (version, tick), copied into one reused world per
  *  version for each case (copyWorldState leaves the copy exactly like a fresh one,
- *  #340) — a createScenario per case would make the audit minutes long. */
+ *  #340) — a createScenario per case would make the audit minutes long. The audit
+ *  alone uses them, and clears them when it is done (afterAll). */
 const templates = new Map<string, WorldState>();
 const scratchWorlds = new Map<number, WorldState>();
 function freshQuiet(version: number, at: number): WorldState {
@@ -571,6 +572,10 @@ function check(want: Expect, v67: Run, v68: Run): string {
 }
 
 describe('#377 (V68) — state-space audit: worker × spider × alarm × where × ratio, V67 vs V68', () => {
+  afterAll(() => {
+    templates.clear();
+    scratchWorlds.clear();
+  });
   const WORKERS: Worker[] = [
     'idleNear',
     'idleFar',
@@ -879,8 +884,16 @@ describe('#377 — a rampage that does not threaten this colony leaves its idle 
   it('just out of the radius (13 tiles), hungry: V68 is V67; at 12 the reserve goes in', () => {
     const out = (w: WorldState): void => holdSpider(w, THREAT_OUT.x, THREAT_OUT.y);
     expect(run(V68, out)).toEqual(run(V67, out));
-    const at = (w: WorldState): void => holdSpider(w, THREAT_EDGE.x, THREAT_EDGE.y);
-    expect(run(V68, at)).not.toEqual(run(V67, at));
+    const world = quiet(V68);
+    const ids = reserve(world);
+    for (let t = 0; t < 40; t++) {
+      holdSpider(world, THREAT_EDGE.x, THREAT_EDGE.y);
+      tick(world, []);
+    }
+    for (const id of ids) {
+      expect(world.ants.zone[id]).toBe(Zone.Underground);
+      expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(world.tick); // sheltering
+    }
   });
 
   it('camping the player colony from afar (on its way): it threatens — the reserve goes in', () => {

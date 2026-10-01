@@ -1267,8 +1267,13 @@ export const SPIDER_CHASE_TRIGGER_RADIUS = 4 as const;
  * at V67 (both-AI Normal seeds 1–20, 104 idle workers killed by the spider), with the
  * camp target it covers 95 of them with at least 12 ticks' warning (a worker at the
  * mill ring's far corner, 2 × IDLE_MILL_RADIUS tiles out, gets in in 12) against 25
- * at the chase radius (4) and 81 at 8, while the colony shelters for 43% of the
- * spider's hungry time instead of all of it.
+ * at the chase radius (4) and 81 at 8, while the colony would have sheltered for
+ * 43% of the spider's hungry time instead of all of it (a counterfactual on the
+ * V67 traces). The spider can pick a hunt target from further out — its search
+ * radius round a tile of the reserve milling up to 2 × IDLE_MILL_RADIUS tiles from
+ * the door puts it up to SPIDER_HUNT_SEARCH_RADIUS_TILES + 2 × IDLE_MILL_RADIUS (18)
+ * tiles away — but it walks to the reticle over the hunt telegraph, so the colony
+ * is threatened, and its reserve on its way in, before it gets there.
  */
 export const RAMPAGE_THREAT_RADIUS_TILES = SPIDER_HUNT_SEARCH_RADIUS_TILES;
 

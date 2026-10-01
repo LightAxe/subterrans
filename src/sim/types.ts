@@ -1595,9 +1595,11 @@ export const SIM_VERSION_V67_NO_MATCH_TIMEOUT = 67 as const;
  *     V67 (the rampage adds only the poke-out hold, which outlasts the all-clear).
  *     The spider-priority order moves fighters only: civilians shelter whether or
  *     not their colony has sent its fighters at the spider.
- * Read from saved state only (the spider's state, position and hungerTicks,
- * world.tick, world.difficulty, the colony's entrances and alarm, the DangerTrail,
- * ant positions and tasks, and the V34 flee column); the goal fields are the cached
+ * Read from saved state only (the spider's state, position, hungerTicks and
+ * rampageTargetColonyId — only a Rampaging spider's target counts — world.tick,
+ * world.difficulty, the colony's entrances and alarm, the DangerTrail, the hunt
+ * reticle (world.scatterReticleTile), ant positions and tasks, and the V34 flee
+ * column); the goal fields are the cached
  * derived surface fields. No new serialized field, command, world.rngState draw,
  * entity-ID advance or tick-order change. A V67 save replays byte-identically.
  * MIN_ACCEPTED is UNCHANGED (V50).

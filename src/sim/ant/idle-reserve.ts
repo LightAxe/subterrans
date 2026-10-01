@@ -488,8 +488,10 @@ export function holdAlarmedCivilianAtShaft(
  * step 10a (sheltering idle workers stay recruitable), step 15b (idle surface
  * workers go in, idle shelterers stay in) and step 16 (the routed dash, the hold at
  * the shaft) read. The spider does not move or change state between those steps
- * (it ticks at 17.5), so all three read the same answer within a tick. Always
- * false below V68.
+ * (it ticks at 17.5), so 15b and 16 always read the same answer within a tick; 10a
+ * can lag them by that tick when step 12 opens an entrance near the spider (one
+ * tick of the V34 recruit skip for a shelterer 15b keeps in anyway). Always false
+ * below V68.
  */
 export function rampageShelterActive(world: WorldState): boolean {
   return world.simVersion >= SIM_VERSION_V68_RAMPAGE_SHELTER && spiderOnRampage(world);
@@ -611,7 +613,9 @@ function pickRampageShelterEntrance(
       const spiderDist = Math.abs(sx - ex) + Math.abs(sy - ey);
       if (apart + spiderDist <= dist + 2 * SPIDER_CHASE_TRIGGER_RADIUS) continue;
     } else if (apart > 0) {
-      // Cornered: the next step there lands nearer the spider.
+      // Cornered: the next step there lands nearer the spider. The worker is not on
+      // the door (handled above), so dist > 0 and the step is a real one, never the
+      // SURFACE_STEP_AT_GOAL sentinel.
       const step = stepTowardReachable(world, tileX, tileY, ex, ey);
       const nextX = tileX + unpackStepDx(step);
       const nextY = tileY + unpackStepDy(step);
@@ -711,8 +715,9 @@ export function rampageShelterDashRoutes(world: WorldState, id: number): boolean
  *   -1 → 0 dashing (pickRampageShelterEntrance found a door; step 16 walks it
  *          there by path), or stays -1 holding (none)
  *    0 → re-picks every tick; -1 holding once no door is left
- *   >0 underground → the poke-out re-arms an Idle shelterer while the rampage
- *          lasts, alarm or not (a forager keeps the alarm-or-danger poke-out)
+ *   >0 underground → the poke-out re-arms an Idle shelterer while the spider
+ *          threatens the colony, alarm or not (a forager keeps the alarm-or-danger
+ *          poke-out)
  * An Idle worker climbing up from below is held at the shaft top as a shelterer
  * (holdAlarmedCivilianAtShaft).
  *
@@ -837,10 +842,10 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
         }
         if (task !== AntTask.Idle && task !== AntTask.Foraging) continue;
         if (rampageShelters && task === AntTask.Idle) {
-          // #377 (V68) — the spider on a rampage threatens the colony: go in, by path, down the
-          // nearest entrance whose way keeps out of its reach (dash, phase 0), or
-          // hold where it stands. Replaces the milling and the V34 danger flee for
-          // an Idle worker while the rampage lasts.
+          // #377 (V68) — the spider on a rampage threatens the colony: go in, by
+          // path, down the nearest entrance whose way keeps out of its reach (dash,
+          // phase 0), or hold where it stands. Replaces the milling and the V34
+          // danger flee for an Idle worker while the threat lasts.
           if (setRampageShelterTarget(world, colony, id, entrances, tileX, tileY, dangerGrid)) {
             ants.fleeShelterUntilTick[id] = 0;
           }
