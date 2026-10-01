@@ -95,6 +95,7 @@ import {
   idleMustersHome,
   idleWalksHome,
   rampageShelterDashRoutes,
+  rampageShelterHolds,
   shelterPassesThroughFriends,
   shelterRetreatDir,
 } from './idle-reserve.js';
@@ -2043,7 +2044,8 @@ function claimsNoTile(world: WorldState, id: number): boolean {
   if (idleMusterPassesThroughFriends(world, id)) return true;
   // #377 (V68): nor one dashing in from the spider's rampage. The reserve funnels
   // down one goal-field path to its door; bumped sideways off it, one could land
-  // within the spider's chase range.
+  // within the spider's chase range. (One holding instead still claims its tile, and
+  // resolveSameColonyOccupancy shifts it only to a tile no nearer the spider, #393.)
   if (rampageShelterDashRoutes(world, id)) return true;
   // #373 (V65): nor does a shelterer below ground while its nest is invaded. Bumped
   // like any ant, one filing down a one-wide shaft or tunnel past a friend standing
@@ -2149,6 +2151,19 @@ function resolveSameColonyOccupancy(world: WorldState): void {
       ants.subTask[id] === ForagingSubState.SearchingFood
         ? arena.surfaceDangerByColony[colonyId]
         : undefined;
+    // #393 (V68): a worker holding from the spider's rampage (rampageShelterHolds)
+    // is shifted only to a tile no nearer the spider — so never into its chase range
+    // from outside it, and never a step toward it when cornered — and, with no such
+    // tile, stays (the forced overlap below). The spider has not moved this tick (it
+    // ticks at 17.5): this is the tile step 15b judged the holder's ways against.
+    let holdSpiderX = -1;
+    let holdSpiderY = -1;
+    let holdSpiderDist = 0;
+    if (zone === Zone.Surface && rampageShelterHolds(world, id)) {
+      holdSpiderX = world.spider!.posX >> FP_SHIFT; // rampageShelterHolds: a spider
+      holdSpiderY = world.spider!.posY >> FP_SHIFT;
+      holdSpiderDist = Math.abs(tileX - holdSpiderX) + Math.abs(tileY - holdSpiderY);
+    }
     let shifted = false;
     for (let attempt = 0; attempt < 2 && !shifted; attempt++) {
       // attempt 0 = danger-safe-only; skipped entirely when there is no danger grid, so
@@ -2167,6 +2182,12 @@ function resolveSameColonyOccupancy(world: WorldState): void {
           if (ny < 0 || ny >= SURFACE_GRID_HEIGHT) continue;
           // Don't bump a same-colony collision into a HardBlock tile.
           if (!canEnterSurfaceTile(world, nx, ny)) continue;
+          if (
+            holdSpiderX !== -1 &&
+            Math.abs(nx - holdSpiderX) + Math.abs(ny - holdSpiderY) < holdSpiderDist
+          ) {
+            continue;
+          }
         }
         // Danger-safe pass (attempt 0): skip a spider-wake tile so the displacement
         // prefers a clean neighbour. attempt 1 takes it anyway if every neighbour is

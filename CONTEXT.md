@@ -371,11 +371,13 @@ scatter step within the scatter radius of the hunt reticle). Once the spider is 
 chase range of it, every way is within its reach, so it runs for the nearest such
 entrance whose next step in lands no nearer the spider than it stands (re-chosen every
 tick), and holds if there is none: its steps never end nearer the spider (a diagonal may
-dip one tile nearer for a tick). With the spider on its own tile it runs whatever its
-door reads. An idle worker coming up the shaft is held below too. They stay recruitable:
-the behaviour ratio still turns them into fighters, nurses, diggers or foragers. Once
-the spider eats, dies or moves off, the first poke-out whose exit reads no real danger
-lets them out. While the colony alarm sounds, the alarm governs its civilians as before.
+dip one tile nearer for a tick), and a friend jostling a holder off its tile moves it
+only to a tile no nearer the spider. With the spider on its own tile it runs whatever
+its door reads. An idle worker coming up the shaft is held below too. They stay
+recruitable: the behaviour ratio still turns them into fighters, nurses, diggers or
+foragers. Once the spider eats, dies or moves off, the first poke-out whose exit reads
+no real danger lets them out. While the colony alarm sounds, the alarm governs its
+civilians as before.
 _Avoid_: **alarm** (the colony alarm is the player's stance), **flee** (the dash to an
 entrance from danger on the ant's own tile).
 

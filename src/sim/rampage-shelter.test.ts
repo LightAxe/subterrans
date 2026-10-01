@@ -1414,3 +1414,245 @@ describe('#377 — a door reading real danger that is not the spider (an enemy k
     ]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #393 — the same-colony occupancy pass and a holder
+// ---------------------------------------------------------------------------
+//
+// The audit above runs one worker per case; a bump needs a friend on the same tile, so
+// the occupancy pass gets its own table here. The spider camps the player's only door:
+// no way in is safe, so every Idle worker on the surface holds where it stands, and a
+// higher-id holder stacked on a lower-id friend's tile is shifted by
+// resolveSameColonyOccupancy — at V68 only to a tile no nearer the spider.
+
+/** The occupancy pass's neighbour order: N, E, S, W. */
+const OCC_DIRS = [
+  [0, -1],
+  [1, 0],
+  [0, 1],
+  [-1, 0],
+] as const;
+const fromDoor = (x: number, y: number): number => Math.abs(x - DOOR.x) + Math.abs(y - DOOR.y);
+
+describe('#393 (V68) — a holder bumped off a friend’s tile never lands nearer the spider', () => {
+  /** Holder offsets from the camped door: adjacent (m = 1), cornered (m = 2), and out
+   *  of chase range at m = 5, where one step nearer would put it within range. */
+  const OFFSETS: readonly (readonly [number, number])[] = [
+    [0, -1],
+    [1, 0],
+    [0, 1],
+    [-1, 0],
+    [0, -2],
+    [2, 0],
+    [0, 2],
+    [-2, 0],
+    [1, 1],
+    [1, -1],
+    [-1, 1],
+    [-1, -1],
+    [0, -5],
+    [5, 0],
+    [0, 5],
+    [-5, 0],
+    [3, 2],
+    [2, -3],
+    [-3, 2],
+    [-2, -3],
+  ];
+
+  /** One tick: lower-id idle `blockers`, then a friend, then the holder on the
+   *  friend's tile, with the spider camping the player's door. */
+  function bump(
+    version: number,
+    hx: number,
+    hy: number,
+    blockers: readonly { x: number; y: number }[],
+  ): { world: WorldState; h: number } {
+    const world = quiet(version);
+    setSpider(world, 'rampaging', DOOR.x, DOOR.y);
+    for (const b of blockers) spawn(world, P, b.x, b.y, Zone.Surface);
+    spawn(world, P, hx, hy, Zone.Surface);
+    const h = spawn(world, P, hx, hy, Zone.Surface);
+    tick(world, []);
+    return { world, h };
+  }
+
+  const neighbours = (x: number, y: number): { x: number; y: number }[] =>
+    OCC_DIRS.map(([dx, dy]) => ({ x: x + dx, y: y + dy }));
+
+  for (const [ox, oy] of OFFSETS) {
+    const hx = DOOR.x + ox;
+    const hy = DOOR.y + oy;
+    const m = fromDoor(hx, hy);
+    it(`holder at (${ox}, ${oy}) from the camped door (m = ${m}): shifted away, or stays`, () => {
+      const world0 = quiet(V68);
+      const open = (t: { x: number; y: number }): boolean => canEnterSurfaceTile(world0, t.x, t.y);
+      const away = neighbours(hx, hy).filter((t) => open(t) && fromDoor(t.x, t.y) >= m);
+      const toward = neighbours(hx, hy).filter((t) => open(t) && fromDoor(t.x, t.y) < m);
+      // The case discriminates: a tile toward the spider is open (the bump V67 makes
+      // when it comes first, or when the others are taken).
+      expect(toward.length).toBeGreaterThan(0);
+      // A friend on its tile: it goes to the first open tile not nearer the spider.
+      const pair = bump(V68, hx, hy, []);
+      expect([tileX(pair.world, pair.h), tileY(pair.world, pair.h)]).toEqual([
+        away[0]!.x,
+        away[0]!.y,
+      ]);
+      expect(pair.world.ants.fleeShelterUntilTick[pair.h]).toBe(-1); // still holding
+      expect(pair.world.ants.targetPosX[pair.h]).toBe(-1);
+      // Every such tile taken: it stays on its tile (a forced overlap) rather than
+      // stepping toward the spider.
+      const boxed = bump(V68, hx, hy, away);
+      expect([tileX(boxed.world, boxed.h), tileY(boxed.world, boxed.h)]).toEqual([hx, hy]);
+      expect(boxed.world.ants.fleeShelterUntilTick[boxed.h]).toBe(-1);
+    });
+  }
+
+  it('the crowded reserve of #393: only the tile toward the spider free — it stays out of chase range', () => {
+    // m = 5, the spider straight north: the occupancy pass tries N first, which is
+    // within SPIDER_CHASE_TRIGGER_RADIUS (4) of the spider.
+    const hx = DOOR.x;
+    const hy = DOOR.y + 5;
+    const boxed = bump(V68, hx, hy, [
+      { x: hx + 1, y: hy },
+      { x: hx, y: hy + 1 },
+      { x: hx - 1, y: hy },
+    ]);
+    expect([tileX(boxed.world, boxed.h), tileY(boxed.world, boxed.h)]).toEqual([hx, hy]);
+    // With E free it goes east (6 from the spider), not north (4).
+    const pair = bump(V68, hx, hy, []);
+    expect([tileX(pair.world, pair.h), tileY(pair.world, pair.h)]).toEqual([hx + 1, hy]);
+  });
+
+  it('a stacked crowd of holders spreads out, never ends a tick nearer the spider, and settles', () => {
+    const world = quiet(V68);
+    setSpider(world, 'rampaging', DOOR.x, DOOR.y);
+    const pin = { ...world.spider! };
+    const ids: number[] = [];
+    // Two holders on every tile of a 5 × 3 block 5–7 rows below the door.
+    for (let y = DOOR.y + 5; y <= DOOR.y + 7; y++) {
+      for (let x = DOOR.x; x <= DOOR.x + 4; x++) {
+        ids.push(spawn(world, P, x, y, Zone.Surface), spawn(world, P, x, y, Zone.Surface));
+      }
+    }
+    const sharing = (): number => {
+      const seen = new Map<number, number>();
+      for (const id of ids) {
+        const k = tileY(world, id) * 1000 + tileX(world, id);
+        seen.set(k, (seen.get(k) ?? 0) + 1);
+      }
+      let n = 0;
+      for (const c of seen.values()) if (c > 1) n += c;
+      return n;
+    };
+    const before = sharing();
+    const frames: string[] = [];
+    for (let t = 0; t < 20; t++) {
+      const was = ids.map((id) => fromDoor(tileX(world, id), tileY(world, id)));
+      tick(world, []);
+      Object.assign(world.spider!, pin);
+      ids.forEach((id, i) => {
+        expect(world.ants.alive[id]).toBe(1);
+        expect(world.ants.fleeShelterUntilTick[id]).toBe(-1); // holding throughout
+        const now = fromDoor(tileX(world, id), tileY(world, id));
+        expect(now).toBeGreaterThanOrEqual(was[i]!);
+        expect(now).toBeGreaterThan(4); // never into chase range
+      });
+      frames.push(ids.map((id) => `${tileX(world, id)},${tileY(world, id)}`).join(' '));
+    }
+    expect(before).toBe(30);
+    expect(sharing()).toBeLessThan(before); // the occupancy pass still spreads them
+    expect(frames.slice(-5).every((f) => f === frames.at(-1))).toBe(true); // no livelock
+  });
+});
+
+describe('#393 — the occupancy rule moves only a threatened colony’s Idle holders (V68 is V67 otherwise)', () => {
+  /** `ticks` frames of every spawned ant, the spider held as `place` puts it. */
+  function frames(
+    version: number,
+    setup: (world: WorldState) => number[],
+    place: (world: WorldState) => void,
+    ticks = 4,
+  ): string[] {
+    const world = quiet(version);
+    place(world);
+    const ids = setup(world);
+    const out: string[] = [];
+    for (let t = 0; t < ticks; t++) {
+      tick(world, []);
+      place(world);
+      out.push(ids.map((id) => fingerprint(world, id)).join('|'));
+    }
+    return out;
+  }
+  const campDoor = (w: WorldState): void => {
+    holdSpider(w, DOOR.x, DOOR.y);
+    w.spider!.state = 'Rampaging';
+    w.spider!.rampageTargetColonyId = P;
+  };
+
+  it('a colony the spider is not threatening: its stacked idle workers are bumped as at V67', () => {
+    // The spider camps the enemy from its lair, south-east: with N taken, the first
+    // free tile (E) is nearer it.
+    const place = (w: WorldState): void => {
+      holdSpider(w, LAIR.x, LAIR.y);
+      w.spider!.state = 'Rampaging';
+      w.spider!.rampageTargetColonyId = E;
+    };
+    const setup = (w: WorldState): number[] => [
+      spawn(w, P, 30, 69, Zone.Surface),
+      spawn(w, P, 30, 70, Zone.Surface),
+      spawn(w, P, 30, 70, Zone.Surface),
+    ];
+    expect(frames(V68, setup, place)).toEqual(frames(V67, setup, place));
+  });
+
+  it('under the alarm its idle workers claim no tile (the V49 muster rule), as at V67', () => {
+    // Holding on a dangerous tile or walking home, an alarmed Idle worker on the
+    // surface passes through friends (idleMusterPassesThroughFriends), so the
+    // occupancy pass never reaches it: rampageShelterHolds' alarm test is belt and
+    // braces.
+    const setup = (w: WorldState): number[] => {
+      w.colonies[P]!.alarmActive = true;
+      spiderDanger(w, DOOR.x, DOOR.y + 5); // real danger on its tile: it holds
+      return [
+        spawn(w, P, DOOR.x, DOOR.y + 5, Zone.Surface),
+        spawn(w, P, DOOR.x, DOOR.y + 5, Zone.Surface),
+      ];
+    };
+    expect(frames(V68, setup, campDoor)).toEqual(frames(V67, setup, campDoor));
+  });
+
+  it('foragers of the threatened colony are bumped as at V67', () => {
+    const setup = (w: WorldState): number[] => [
+      spawn(
+        w,
+        P,
+        DOOR.x,
+        DOOR.y + 5,
+        Zone.Surface,
+        AntTask.Foraging,
+        ForagingSubState.ReturningToNest,
+      ),
+      spawn(
+        w,
+        P,
+        DOOR.x,
+        DOOR.y + 5,
+        Zone.Surface,
+        AntTask.Foraging,
+        ForagingSubState.ReturningToNest,
+      ),
+    ];
+    expect(frames(V68, setup, campDoor, 1)).toEqual(frames(V67, setup, campDoor, 1));
+  });
+
+  it('idle workers below ground in the threatened colony are bumped as at V67', () => {
+    // In the tunnel just west of the shaft: E (the shaft) is the first open tile.
+    const setup = (w: WorldState): number[] => [
+      spawn(w, P, DOOR.x - 1, TUNNEL_Y, Zone.Underground),
+      spawn(w, P, DOOR.x - 1, TUNNEL_Y, Zone.Underground),
+    ];
+    expect(frames(V68, setup, campDoor, 1)).toEqual(frames(V67, setup, campDoor, 1));
+  });
+});

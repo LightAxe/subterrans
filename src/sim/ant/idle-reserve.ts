@@ -691,6 +691,25 @@ export function rampageShelterDashRoutes(world: WorldState, id: number): boolean
 }
 
 /**
+ * #393 (V68) — `id` is an Idle worker holding on the surface from the spider's
+ * rampage: not fleeing (phase -1), of a colony whose alarm is off and which the
+ * spider threatens, so step 15b found it no entrance whose way keeps out of the
+ * spider's reach and it stands where it is. Unlike a dasher it still claims its tile
+ * in the same-colony occupancy pass (ant-movement.ts resolveSameColonyOccupancy), so
+ * a crowded reserve stays spread out instead of stacking into the dense tiles the
+ * spider's hunt picks; but a friend's bump may move it only to a tile no nearer the
+ * spider, and with none it stays. Always false below V68.
+ */
+export function rampageShelterHolds(world: WorldState, id: number): boolean {
+  const ants = world.ants;
+  if (ants.task[id] !== AntTask.Idle || ants.zone[id] !== ZONE_SURFACE) return false;
+  if (ants.fleeShelterUntilTick[id] !== -1) return false;
+  const colony = world.colonies[ants.colonyId[id]!];
+  if (colony === undefined || colony.alarmActive === true) return false;
+  return rampageThreatens(world, colony);
+}
+
+/**
  * Step 15b — surface idle-reserve milling + general pheromone-driven flee.
  *
  * For every adult worker (`colony.workers[]` — adult identity; never scan by

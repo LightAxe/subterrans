@@ -1569,7 +1569,9 @@ export const SIM_VERSION_V67_NO_MATCH_TIMEOUT = 67 as const;
  *     within its reach, so it must only not walk toward the spider: it runs for the
  *     nearest such entrance whose next step in (the goal field's, re-chosen every
  *     tick) lands no nearer the spider than it stands, and holds if there is none. A
- *     dasher claims no tile in the occupancy pass, so no friend bumps it sideways.
+ *     dasher claims no tile in the occupancy pass, so no friend bumps it sideways; a
+ *     holder still claims its tile, but a friend's bump shifts it only to a tile no
+ *     nearer the spider, and with none it stays (#393).
  *     With the spider on its own tile any way out beats staying: the door's danger
  *     reading (then the spider's own) is not consulted. One already standing on an entrance goes down it unless the
  *     descent there is blocked (a Rampaging spider on it, #165).
