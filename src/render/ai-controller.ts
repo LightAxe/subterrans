@@ -78,7 +78,12 @@ export const AI_EXTRA_FOOD_STORAGE_FULL_PCT = 90 as const;
 /**
  * #290 D14 (PR 6b) — most FoodStorage chambers the AI will own (the extra-storage
  * rule stops once this many are COMPLETED; at most one more is ever pending). A
- * bound on runaway digging, not a gameplay limit (a player may build more).
+ * bound on runaway digging (a player may build more). From V70 (#395) it is also a
+ * growth ceiling for the AI: the queen lays only while the stores cover the egg
+ * reserve (3600 fp + 1200 per brood + 64 per worker at the 60 s runway), and two
+ * chambers plus the entrance pool hold 12 288 fp — so she lays with up to 4 brood at
+ * 60 workers, up to 1 at 100, and never past 135. Unchanged here; flagged to the
+ * owner in #395.
  * Measured with V53 (no loot with full stores), --both-ai 200 seeds: uncapped, the
  * AI dug a median of ~9 and up to 29 chambers and its peak workers rose 60 %; a
  * cap of 3 raised them 31 %; a cap of 2 raised them 15 % and had the lowest share

@@ -1646,8 +1646,9 @@ export const SIM_VERSION_V69_FOOD_FAIRNESS = 69 as const;
  * boom the player could not stop (the standard opening: a median 16 brood at 3:00)
  * that ate the larder and starved the colony in the opening. From V70 that threshold
  * is gone, at every stage of the match: the queen lays an egg only while the colony's
- * stored food (colonyFoodTotal — the entrance pool and every FoodStorage chamber, what
- * meals are drawn from) is at least the egg reserve (lifecycle-system.ts eggReserveFp):
+ * stored food (colonyFoodTotal — the stores meals are drawn from: the entrance pool and
+ * every FoodStorage chamber; carried loads are not counted) is at least the egg reserve
+ * (lifecycle-system.ts eggReserveFp):
  * every meal the whole colony would eat over QUEEN_EGG_RESERVE_RUNWAY_TICKS with no
  * food coming in, by the hunger profiles (hunger.ts runwayFoodFp) — the queen, each
  * living worker and fighter (workerHungerProfile), each larva, and each egg plus the

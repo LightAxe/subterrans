@@ -75,12 +75,14 @@ import {
 //
 // The chamber gates turn reproduction into an explicit progression unlock: the
 // player must excavate both a Queen chamber and a Nursery before brood can
-// accumulate. From V70 a FoodStorage chamber is effectively required too: the
-// smallest egg reserve (3600 fp at the 60 s runway) is more than the entrance
-// pool holds (BASE_FOOD_STORAGE_CAPACITY, 2048), and storage capacity then caps
-// the brood (QUEEN_EGG_RESERVE_RUNWAY_TICKS). This prevents the pre-memo failure mode where a brand-new colony
+// accumulate. This prevents the pre-memo failure mode where a brand-new colony
 // started laying eggs against an empty tunnel, forcing every worker into
 // Nursing and starving the queen (see gsd-debug 09 session).
+//
+// From V70 (#395) a FoodStorage chamber is effectively required too: the smallest
+// egg reserve (3600 fp at the 60 s runway) is more than the entrance pool holds
+// (BASE_FOOD_STORAGE_CAPACITY, 2048), and storage capacity then caps the brood
+// (QUEEN_EGG_RESERVE_RUNWAY_TICKS).
 //
 // Pending chambers do NOT satisfy either gate — colony.chambers only contains
 // promoted entries (see checkPendingChambers, single-path creation invariant).
@@ -145,30 +147,25 @@ function eggIntervalForColony(world: WorldState, colony: ColonyRecord): number {
  * worst case: a larva that matures, or a forager that eats its own load, only lowers
  * the real draw. Read from world state only: the brood counts (death cleanup has
  * already run this tick), the worker roster and its tasks. The caller compares it
- * with colonyFoodTotal, which counts what meals are drawn from: the entrance pool
- * and every FoodStorage chamber, however many. Integer-only; no allocation;
- * O(workers).
+ * with colonyFoodTotal: the stores meals are drawn from, the entrance pool and every
+ * FoodStorage chamber however many (a worker's carried load is not counted, the
+ * conservative side). Integer-only; no allocation; O(workers).
  */
 export function eggReserveFp(world: WorldState, colony: ColonyRecord): number {
   const runway = QUEEN_EGG_RESERVE_RUNWAY_TICKS;
   const ants = world.ants;
   const brood = colony.larvaeCount + colony.eggCount + 1; // + the egg about to be laid
   let need = runwayFoodFp(QUEEN_HUNGER, runway) + brood * runwayFoodFp(LARVA_HUNGER, runway);
-  // The two worker profiles' runways once per call, not once per worker; any other
-  // profile workerHungerProfile might return is sized on its own.
+  // The two worker profiles' runways once per call, not once per worker.
+  // workerHungerProfile returns one of these two (egg-reserve.test.ts pins that for
+  // every task, so a third profile has to be added here too).
   const workerFp = runwayFoodFp(WORKER_HUNGER, runway);
   const fighterFp = runwayFoodFp(FIGHTER_HUNGER, runway);
   const roster = colony.workers;
   for (let i = 0; i < roster.length; i++) {
     const id = roster[i]!;
     if (ants.alive[id] !== 1) continue;
-    const profile = workerHungerProfile(world, id);
-    need +=
-      profile === WORKER_HUNGER
-        ? workerFp
-        : profile === FIGHTER_HUNGER
-          ? fighterFp
-          : runwayFoodFp(profile, runway);
+    need += workerHungerProfile(world, id) === FIGHTER_HUNGER ? fighterFp : workerFp;
   }
   return need;
 }

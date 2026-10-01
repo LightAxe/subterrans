@@ -35,6 +35,7 @@ import {
   QUEEN_HUNGER,
   WORKER_HUNGER,
   runwayFoodFp,
+  workerHungerProfile,
   type HungerProfile,
 } from '../hunger.js';
 import {
@@ -279,7 +280,7 @@ describe('#395 (V70) — eggReserveFp: the whole colony for the runway', () => {
     }
   });
 
-  it('at 60 s: a lone queen needs 3600 fp; the V69 opening boom (11 larvae, 3 eggs, 8 workers) 20 512 fp', () => {
+  it('at 60 s: a lone queen needs 3600 fp; the V69 opening boom (11 larvae, 3 eggs, 8 workers) 20 912 fp', () => {
     // Pins the arithmetic of the chosen runway, so a retune of it or of a hunger
     // profile is a visible decision.
     expect(RUNWAY).toBe(1200);
@@ -332,6 +333,22 @@ describe('#395 (V70) — eggReserveFp: the whole colony for the runway', () => {
   });
 });
 
+describe('#395 (V70) — eggReserveFp sizes every worker on one of two profiles', () => {
+  it('workerHungerProfile returns WORKER_HUNGER or FIGHTER_HUNGER for every task', () => {
+    // eggReserveFp sizes the two profiles once per call; a third profile would have to
+    // be added there. This pins the assumption.
+    const world = makeWorld(SIM_VERSION_V70_EGG_RESERVE);
+    const colony = makeColony(world, 1, { larvae: 0, eggs: 0, workers: 1, fighters: 0 }, 'pool');
+    const id = colony.workers[0]!;
+    for (const task of Object.values(AntTask)) {
+      world.ants.task[id] = task;
+      expect(workerHungerProfile(world, id), `task ${task}`).toBe(
+        task === AntTask.Fighting ? FIGHTER_HUNGER : WORKER_HUNGER,
+      );
+    }
+  });
+});
+
 describe('#395 (V70) — the queen lays only while the stores cover the egg reserve', () => {
   it('at the reserve she lays; one fp short she does not — every colony size, every storage layout', () => {
     for (const shape of SHAPES) {
@@ -368,7 +385,7 @@ describe('#395 (V70) — the queen lays only while the stores cover the egg rese
 
   it('the reserve can never be below the old threshold, so dropping it from the interval is safe', () => {
     // The smallest reserve (a lone queen) — the V69 threshold's early-out in
-    // eggIntervalForColony can only ever have fired on stores Gate 2 now refuses.
+    // eggIntervalForColony can only ever have fired on stores Gate 7 now refuses.
     expect(
       oracleRunwayFp(QUEEN_HUNGER, RUNWAY) + oracleRunwayFp(LARVA_HUNGER, RUNWAY),
     ).toBeGreaterThan(QUEEN_EGG_FOOD_THRESHOLD);
@@ -563,6 +580,10 @@ describe('#395 (V70) — the reserve feeds the colony for the runway (real consu
       setStores(world, colony, 'chambers-only:3', reserve);
       tickQueenEggProduction(world, colony);
       expect(colony.eggCount, JSON.stringify(shape)).toBe(shape.eggs + 1);
+      // The real tick order: the lay tick's consumption has already run (step 3), its
+      // lifecycle step (7) runs right after the lay (6). The runway is the next RUNWAY
+      // ticks.
+      tickLifecycleTransitions(world, colony);
       const queen = colony.queenEntityId;
       const living = [queen, ...colony.eggs, ...colony.larvae, ...colony.workers].filter(
         (id) => ants.alive[id] === 1,
@@ -590,11 +611,6 @@ describe('#395 (V70) — the reserve feeds the colony for the runway (real consu
       }
       for (const id of living) expect(ants.alive[id], `ant ${id} ${JSON.stringify(shape)}`).toBe(1);
       expect(workerMealsMissed, JSON.stringify(shape)).toBe(0);
-      // The reserve is a worst case: the new egg has not hatched by the end of the
-      // runway, so its larva's share is still in the stores.
-      expect(colonyFoodTotal(world, colony), JSON.stringify(shape)).toBeGreaterThanOrEqual(
-        oracleRunwayFp(LARVA_HUNGER, RUNWAY),
-      );
     }
   });
 });

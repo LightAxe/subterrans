@@ -22,11 +22,13 @@ import { hashWorldState } from './world-hash.js';
 
 type Difficulty = 'Easy' | 'Normal' | 'Hard';
 
-/** The opening run's hash at ticks 1200, 2400 and 3600 from the V69 world, on 86a2b09. */
-const GOLDEN_RUNS: ReadonlyArray<readonly [number, Difficulty, readonly string[]]> = [
-  [20, 'Normal', ['4d2a0a36', '5f7f396f', '9bbbb5ec']], // player brood at 3:00: 14
-  [12, 'Hard', ['b273bd06', '182530a3', '2de0c81c']], // 15
-  [5, 'Easy', ['06e19ad2', 'eebf63be', 'b4cc779c']], // 13
+/** The opening run's hash at ticks 1200, 2400 and 3600 from the V69 world, and the
+ *  player's brood at 3:00, on 86a2b09. */
+const GOLDEN_RUNS: ReadonlyArray<readonly [number, Difficulty, readonly string[], number]> = [
+  // seed, difficulty, hashes, the player's brood at 3:00 (V69)
+  [20, 'Normal', ['4d2a0a36', '5f7f396f', '9bbbb5ec'], 14],
+  [12, 'Hard', ['b273bd06', '182530a3', '2de0c81c'], 15],
+  [5, 'Easy', ['06e19ad2', 'eebf63be', 'b4cc779c'], 13],
 ];
 
 /** The standard opening, ordered for the player at tick 0. */
@@ -71,22 +73,21 @@ function runOpening(world: WorldState): string[] {
 describe('#395 part 2 — pinned V69: egg-laying is unchanged below V70', () => {
   it('the standard opening at V69 runs as before, hash for hash, to 3:00', () => {
     expect(GOLDEN_RUNS.length).toBe(3);
-    for (const [seed, difficulty, golden] of GOLDEN_RUNS) {
+    for (const [seed, difficulty, golden, v69Brood] of GOLDEN_RUNS) {
       const world = createScenario(seed, difficulty, SIM_VERSION_V69_FOOD_FAIRNESS);
       expect(runOpening(world), `seed ${seed} ${difficulty}`).toEqual(golden);
+      const c = world.colonies[PLAYER_COLONY_ID]!;
+      expect(c.eggCount + c.larvaeCount).toBe(v69Brood);
     }
   }, 120_000);
 
   it('non-vacuity: at V70 the same openings diverge, with a smaller brood', () => {
-    for (const [seed, difficulty, golden] of GOLDEN_RUNS) {
-      const v69 = createScenario(seed, difficulty, SIM_VERSION_V69_FOOD_FAIRNESS);
+    for (const [seed, difficulty, golden, v69Brood] of GOLDEN_RUNS) {
       const v70 = createScenario(seed, difficulty, SIM_VERSION_V70_EGG_RESERVE);
       const hashes = runOpening(v70);
-      runOpening(v69);
       expect(hashes[2], `seed ${seed} ${difficulty}`).not.toBe(golden[2]);
-      const brood = (w: WorldState): number =>
-        w.colonies[PLAYER_COLONY_ID]!.eggCount + w.colonies[PLAYER_COLONY_ID]!.larvaeCount;
-      expect(brood(v70), `seed ${seed} ${difficulty}`).toBeLessThan(brood(v69));
+      const c = v70.colonies[PLAYER_COLONY_ID]!;
+      expect(c.eggCount + c.larvaeCount, `seed ${seed} ${difficulty}`).toBeLessThan(v69Brood);
     }
   }, 120_000);
 });
