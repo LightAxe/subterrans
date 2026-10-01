@@ -59,6 +59,21 @@ export function buildHudLayout(layout: LayoutContext): HudLayout {
   };
 }
 
+/** #372 — width (px) of the minimap frame's light band (minimap.ts draws it); a
+ *  1-px dark line sits one px further out. */
+export const MINIMAP_BORDER_PX = 2;
+/** How far (px) the minimap's frame reaches outside its map rect: the band and
+ *  its 1-px line. */
+export const MINIMAP_FRAME_OUT_PX = MINIMAP_BORDER_PX + 1;
+
+/** #399 — the minimap's whole painted box: the map rect and the frame round it
+ *  (drawMinimapBorder's outer edge). What an overlay keeps clear of. */
+export function minimapFrameRect(hud: HudLayout): HudRect {
+  const mm = hud.MINIMAP;
+  const o = MINIMAP_FRAME_OUT_PX;
+  return { x: mm.x - o, y: mm.y - o, w: mm.w + 2 * o, h: mm.h + 2 * o };
+}
+
 /** Caption Text side padding (px), as UIScene.beginCaption styles it. */
 export const CAPTION_PAD_X = 8;
 /** Widest a caption line may wrap to (px); the pre-#372 fixed wrap width. */

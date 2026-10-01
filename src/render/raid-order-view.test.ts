@@ -11,8 +11,13 @@ import {
   drawRaidOrderBadge,
   raidBadgeStackLiftWorldPx,
   raidBadgeWorldPx,
+  RAID_MENU_DESCRIPTION_GAP_PX,
+  RAID_MENU_DESCRIPTION_PAD_X,
+  RAID_MENU_DESCRIPTION_WRAP_W,
   raidMenuDescription,
+  raidMenuDescriptionObstacles,
   raidMenuDescriptionPos,
+  raidMenuDescriptionWrapWidth,
   raidMenuHoveredOrder,
   raidMenuItemAt,
   raidOrderCaption,
@@ -34,6 +39,8 @@ import {
   isInsideContextMenu,
 } from './context-menu-layout.js';
 import { lerpColor } from './sprites.js';
+import { buildHudLayout } from './hud-layout.js';
+import { DEFAULT_LAYOUT, createLayoutContext } from './layout.js';
 import {
   createRaidCaptionState,
   nextRaidCaption,
@@ -574,8 +581,186 @@ describe('#378 — the raid menu: hover highlight and description', () => {
     expect(raidMenuDescriptionPos(680, ay, menuH, 400, 20, 800, 508).x).toBe(400);
     // Wider than the canvas: pinned at 0, never off the left.
     expect(raidMenuDescriptionPos(680, ay, menuH, 900, 20, 800, 508).x).toBe(0);
-    // Fits neither below nor above (not reachable at 800 × 592): pinned at the
-    // top — never off it — even though it then overlaps the menu.
-    expect(raidMenuDescriptionPos(ax, 0, menuH, 400, 20, 800, menuH + 10).y).toBe(0);
+    // #399 — fits neither below nor above (not reachable at 800 × 592): beside
+    // the menu instead, at the top, clear of it.
+    expect(raidMenuDescriptionPos(ax, 0, menuH, 400, 20, 800, menuH + 10)).toEqual({
+      x: ax + CONTEXT_MENU.WIDTH + 2,
+      y: 0,
+    });
+    // Fits nowhere at all (a box as wide as the canvas, no room above or below):
+    // the #378 rule — pinned at the top-left, never off the canvas.
+    expect(raidMenuDescriptionPos(ax, 0, menuH, 800, 20, 800, menuH + 10)).toEqual({ x: 0, y: 0 });
+  });
+});
+
+describe('#399 — the raid menu description: wrapped, on screen, clear of the HUD', () => {
+  const layout = DEFAULT_LAYOUT;
+  const hud = buildHudLayout(layout);
+  const obstacles = raidMenuDescriptionObstacles(hud);
+  const menuH = contextMenuHeight(RAID_ORDER_OPTIONS);
+  const strip = hud.HINTS.y;
+  const g = RAID_MENU_DESCRIPTION_GAP_PX;
+  type R = { x: number; y: number; w: number; h: number };
+  /** True if a and b are at least `gap` px apart (on one axis or the other). */
+  const apart = (a: R, b: R, gap: number): boolean =>
+    a.x + a.w + gap <= b.x ||
+    b.x + b.w + gap <= a.x ||
+    a.y + a.h + gap <= b.y ||
+    b.y + b.h + gap <= a.y;
+  /** The description box for a menu opened at (px, py), w × h. */
+  const place = (px: number, py: number, w: number, h: number): R & { menu: R } => {
+    const a = clampContextMenuAnchor(px, py, menuH, layout.w, strip);
+    const pos = raidMenuDescriptionPos(a.x, a.y, menuH, w, h, layout.w, strip, obstacles);
+    return { ...pos, w, h, menu: { x: a.x, y: a.y, w: CONTEXT_MENU.WIDTH, h: menuH } };
+  };
+  /** Greedy word wrap at `cols` characters (what Phaser's basic wrap does in a
+   *  monospace font). */
+  const wrap = (text: string, cols: number): string[] => {
+    const lines: string[] = [];
+    let line = '';
+    for (const word of text.split(' ')) {
+      if (line === '') line = word;
+      else if (line.length + 1 + word.length <= cols) line += ` ${word}`;
+      else {
+        lines.push(line);
+        line = word;
+      }
+    }
+    lines.push(line);
+    return lines;
+  };
+  /** The box of a two-line description at the full wrap width, and of a three-line
+   *  one (headroom for a wider font). 12-px monospace: ~7.2 px a glyph, ~14 px a line. */
+  const BOXES = [
+    { w: RAID_MENU_DESCRIPTION_WRAP_W + 2 * RAID_MENU_DESCRIPTION_PAD_X, h: 2 * 15 + 6 },
+    { w: RAID_MENU_DESCRIPTION_WRAP_W + 2 * RAID_MENU_DESCRIPTION_PAD_X, h: 3 * 15 + 6 },
+    { w: 160, h: 20 },
+  ] as const;
+
+  it('wraps at 288 px (40 monospace characters): every order is two short lines, the blurb unchanged', () => {
+    expect(raidMenuDescriptionWrapWidth(layout)).toBe(RAID_MENU_DESCRIPTION_WRAP_W);
+    expect(RAID_MENU_DESCRIPTION_WRAP_W).toBe(288);
+    // A canvas too narrow for the box: the box (text + padding) still fits it.
+    expect(raidMenuDescriptionWrapWidth(createLayoutContext(200, 592))).toBe(
+      200 - 2 * RAID_MENU_DESCRIPTION_PAD_X,
+    );
+    const cols = Math.floor(RAID_MENU_DESCRIPTION_WRAP_W / 7.2);
+    for (const o of RAID_ORDER_OPTIONS) {
+      const text = raidMenuDescription(o.raidType, null)!;
+      // The menu and the order caption say the same thing (one blurb).
+      expect(text).toBe(`${o.label}: ${o.blurb}`);
+      expect(raidOrderCaption(o.raidType)).toBe(`Raiding: ${o.label}. ${o.blurb}`);
+      const lines = wrap(text, cols);
+      expect(lines.length, text).toBe(2);
+      // The one-line description that ran to the canvas's edge was ~500 px.
+      for (const line of lines) expect(line.length * 7.2).toBeLessThanOrEqual(288);
+    }
+  });
+
+  it('keeps clear of the minimap frame, the right-hand toggles, the tool palette, the stats and the save icon', () => {
+    const frame = obstacles[0]!;
+    // The minimap's painted frame reaches 3 px outside the map rect.
+    expect(frame).toEqual({
+      x: hud.MINIMAP.x - 3,
+      y: hud.MINIMAP.y - 3,
+      w: hud.MINIMAP.w + 6,
+      h: hud.MINIMAP.h + 6,
+    });
+    expect(obstacles.slice(1)).toEqual([
+      hud.VIEW_TOGGLE,
+      hud.ALARM_TOGGLE,
+      hud.TOOLS,
+      hud.STATS,
+      hud.SAVE_ICON,
+    ]);
+  });
+
+  it('the playtest case (Blockade, menu by the Underground button): under the menu, left of the minimap and the button', () => {
+    // shots/04-raid-menu-hover-3-blockade.png: the menu at (424, 296).
+    const b = place(424, 296, BOXES[0].w, BOXES[0].h);
+    expect(b.y).toBe(296 + menuH + g); // still just under the menu
+    expect(b.x + b.w + g).toBeLessThanOrEqual(hud.MINIMAP.x - 3); // left of the minimap frame
+    expect(b.x + b.w + g).toBeLessThanOrEqual(hud.VIEW_TOGGLE.x);
+    expect(b.x + b.w).toBeGreaterThan(424); // and still under (part of) the menu
+  });
+
+  it('near the right edge: under the menu, inside the canvas, clear of the right-hand column', () => {
+    const b = place(790, 150, BOXES[0].w, BOXES[0].h);
+    expect(b.menu.x).toBe(layout.w - CONTEXT_MENU.WIDTH);
+    expect(b.y).toBe(b.menu.y + menuH + g);
+    expect(b.x + b.w).toBeLessThanOrEqual(layout.w);
+    for (const r of obstacles) expect(apart(b, r, g)).toBe(true);
+  });
+
+  it('near the bottom: above the menu (the menu sits on the HUD strip)', () => {
+    const b = place(300, 560, BOXES[0].w, BOXES[0].h);
+    expect(b.menu.y).toBe(strip - menuH);
+    expect(b.y + b.h + g).toBe(b.menu.y);
+    expect(b.x).toBe(300);
+  });
+
+  it('over the minimap: above the menu and left of the right-hand toggles', () => {
+    const b = place(700, 470, BOXES[0].w, BOXES[0].h);
+    // The menu itself lies over the minimap.
+    expect(apart(b.menu, obstacles[0]!, 0)).toBe(false);
+    expect(b.y + b.h).toBeLessThanOrEqual(b.menu.y - g);
+    expect(b.x + b.w + g).toBeLessThanOrEqual(hud.ALARM_TOGGLE.x);
+    for (const r of obstacles) expect(apart(b, r, g)).toBe(true);
+  });
+
+  it('slides past a control toward 0 first, else the other way; beside the menu, up first, else down', () => {
+    const w = 300;
+    const h = 36;
+    // Below the menu, a control under its left end, by the canvas's left edge: no
+    // room to its left, so the box goes just right of it.
+    const control = { x: 0, y: 160, w: 100, h: 40 };
+    expect(raidMenuDescriptionPos(10, 30, menuH, w, h, 800, 508, [control])).toEqual({
+      x: control.x + control.w + g,
+      y: 30 + menuH + g,
+    });
+    // The same control further right: room to its left, so just left of it.
+    const right = { x: 400, y: 160, w: 100, h: 40 };
+    expect(raidMenuDescriptionPos(350, 30, menuH, w, h, 800, 508, [right])).toEqual({
+      x: right.x - g - w,
+      y: 30 + menuH + g,
+    });
+    // No room above or below (a short canvas): beside the menu, left first,
+    // top-aligned with it…
+    const short = menuH + 10;
+    expect(raidMenuDescriptionPos(700, 0, menuH, w, 20, 800, short)).toEqual({
+      x: 700 - g - w,
+      y: 0,
+    });
+    // …slid down past a control there (no room above it).
+    const beside = { x: 380, y: 0, w: 50, h: 30 };
+    expect(raidMenuDescriptionPos(700, 0, menuH, w, 20, 800, short, [beside])).toEqual({
+      x: 700 - g - w,
+      y: beside.y + beside.h + g,
+    });
+  });
+
+  it('wherever the menu opens, the box is on screen above the strip, off the menu, and clear of every HUD control', () => {
+    let checked = 0;
+    const bad: string[] = [];
+    for (const box of BOXES) {
+      for (let py = -20; py <= layout.h + 20; py += 3) {
+        for (let px = -20; px <= layout.w + 20; px += 3) {
+          const b = place(px, py, box.w, box.h);
+          const ok =
+            b.x >= 0 &&
+            b.y >= 0 &&
+            b.x + b.w <= layout.w &&
+            b.y + b.h <= strip &&
+            apart(b, b.menu, g) &&
+            obstacles.every((r) => apart(b, r, g));
+          if (!ok && bad.length < 5) {
+            bad.push(`menu (${b.menu.x}, ${b.menu.y}), box ${box.w}×${box.h} at (${b.x}, ${b.y})`);
+          }
+          checked++;
+        }
+      }
+    }
+    expect(bad).toEqual([]);
+    expect(checked).toBeGreaterThan(100_000);
   });
 });

@@ -107,7 +107,7 @@ import {
   drawUndergroundEntities,
   restampUndergroundTiles,
 } from './draw-underground.js';
-import { drawPheromoneOverlay } from './draw-pheromone.js';
+import { drawPheromoneOverlay, PHEROMONE_OVERLAY_DEPTH } from './draw-pheromone.js';
 import { publishSpeedMultiplier, type DifficultySelectCallbacks } from './ui-scene.js';
 import { AntFacingCache } from './ant-facing-cache.js';
 import {
@@ -119,6 +119,7 @@ import {
   FOOD_CACHE_SPRITE_HEIGHT,
   FOOD_CACHE_SPRITE_WIDTH,
   FOOD_CACHE_TEXTURE,
+  ENTITY_GFX_DEPTH,
   LARVA_SPRITE_HEIGHT,
   LARVA_SPRITE_WIDTH,
   LARVA_TEXTURE,
@@ -491,6 +492,20 @@ declare global {
       /** #378 — the raid menu description line's box (canvas px) as last drawn,
        *  or null while it is not shown. Dev-build only. */
       getRaidMenuDescriptionRect?(): { x: number; y: number; w: number; h: number } | null;
+      /** #399 — the live depths of the world layers as last rendered: the visible
+       *  terrain RenderTexture(s), the pheromone overlay layer (and whether it holds
+       *  any drawing), the entity Graphics layer (strategic-zoom ant dots), and
+       *  each texture a visible sprite is drawn with (ants, brood, food caches,
+       *  carried food, the spider) with its depth. Lets a spec assert in the real
+       *  scene that ants draw above the overlay. Reads the display list only.
+       *  Dev-build only. */
+      getLayerDepths?(): {
+        terrain: number[];
+        pheromone: number;
+        pheromoneDrawn: boolean;
+        entityGfx: number;
+        sprites: Array<{ texture: string; depth: number }>;
+      };
     };
   }
 }
@@ -821,6 +836,27 @@ export class GameScene extends Phaser.Scene {
         );
         return { x: Math.round(p.screenX), y: Math.round(p.screenY) };
       },
+      getLayerDepths: () => {
+        const sprites: Array<{ texture: string; depth: number }> = [];
+        const terrain: number[] = [];
+        for (const go of this.children.list) {
+          if (go instanceof Phaser.GameObjects.RenderTexture) {
+            if (go.visible) terrain.push(go.depth);
+          } else if (go instanceof Phaser.GameObjects.Image && go.visible) {
+            const texture = go.texture.key;
+            if (!sprites.some((s) => s.texture === texture && s.depth === go.depth)) {
+              sprites.push({ texture, depth: go.depth });
+            }
+          }
+        }
+        return {
+          terrain,
+          pheromone: this.pheromoneGfx.depth,
+          pheromoneDrawn: this.pheromoneGfx.commandBuffer.length > 0,
+          entityGfx: this.gfx.depth,
+          sprites,
+        };
+      },
       getEnemyEntrances: () =>
         (this.world?.colonies[ENEMY_COLONY_ID]?.entrances ?? []).map((e) => ({
           tileX: e.surfaceTileX,
@@ -972,14 +1008,16 @@ export class GameScene extends Phaser.Scene {
     setViewportSize(this.layout.w, this.layout.h);
     this.viewState = createViewState(PLAYER_START_X, PLAYER_START_Y);
     this.gfx = this.add.graphics();
+    this.gfx.setDepth(ENTITY_GFX_DEPTH);
     this.overlayGfx = this.add.graphics();
     this.overlayGfx.setDepth(SPIDER_SPRITE_DEPTH + 1);
-    // #236 PR1 — pheromone overlay layer. Depth -5: above the terrain RT (-10),
-    // below the dynamic gfx (0) → pheromone under entities, over terrain,
-    // preserving the pre-#236 draw order. Persistent (not cleared each frame) so
-    // updatePheromoneLayer can skip the redraw when nothing changed.
+    // #236 PR1 — pheromone overlay layer. PHEROMONE_OVERLAY_DEPTH (-5): above the
+    // terrain RT (-10), below the dynamic gfx (ENTITY_GFX_DEPTH 0) and every ant /
+    // brood / spider sprite layer → pheromone under entities, over terrain (#399
+    // pins it: ants always draw above the overlay). Persistent (not cleared each
+    // frame) so updatePheromoneLayer can skip the redraw when nothing changed.
     this.pheromoneGfx = this.add.graphics();
-    this.pheromoneGfx.setDepth(-5);
+    this.pheromoneGfx.setDepth(PHEROMONE_OVERLAY_DEPTH);
     this.antSprites = new AntSpritePool(this);
     // #236 PR3 — NEAREST-filter the pooled sprite textures (they finished loading in
     // preload), matching the terrain RT's filter below, so ants / brood / food-cache
@@ -1279,7 +1317,8 @@ export class GameScene extends Phaser.Scene {
     this.input.keyboard!.on('keydown-TAB', (event: KeyboardEvent) => {
       if (!this.keyEvents.claim(event) || event.repeat) return;
       if (!this.canAcceptWorldHotkey()) return;
-      toggleView(this.viewState);
+      // #399 — going down shows the player's own nest (found in the live world).
+      toggleView(this.viewState, this.world);
       // The toggle happens at dispatch time, not inside update() next to the
       // per-frame reconcileContext(), so a pointer event in the same task can
       // otherwise land in the new view under the arbiter's stale fingerprint —

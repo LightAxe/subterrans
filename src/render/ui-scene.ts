@@ -269,8 +269,12 @@ import {
 } from './context-menu-layout.js';
 import {
   RAID_ORDER_OPTIONS,
+  RAID_MENU_DESCRIPTION_PAD_X,
+  RAID_MENU_DESCRIPTION_PAD_Y,
   raidMenuDescription,
+  raidMenuDescriptionObstacles,
   raidMenuDescriptionPos,
+  raidMenuDescriptionWrapWidth,
   raidMenuHoveredOrder,
   raidMenuItemAt,
   raidOrderOnTile,
@@ -666,9 +670,11 @@ export class UIScene extends Phaser.Scene {
   private contextMenuVisibleItems: readonly ContextMenuItem[] = CONTEXT_MENU_ITEMS;
   /** #352 — the raid menu's row labels (one per raid order), created once. */
   private raidMenuLabels!: Phaser.GameObjects.Text[];
-  /** #378 — the raid menu's one-line description (the hovered order, else the
-   *  order in force), created once, placed and shown per frame. */
+  /** #378 — the raid menu's description (the hovered order, else the order in
+   *  force), created once, placed and shown per frame. */
   private raidMenuDescText!: Phaser.GameObjects.Text;
+  /** #399 — the HUD controls the description is kept clear of (built in create). */
+  private raidMenuDescObstacles: readonly HudRect[] = [];
   private antActivityText!: Phaser.GameObjects.Text;
   private dragState!: SliderDragState;
 
@@ -940,21 +946,35 @@ export class UIScene extends Phaser.Scene {
       t.setDepth(10);
       return t;
     });
-    // #378 — the raid menu's description line, in the tooltip style. One line for
-    // every order today; should a layout ever be narrower than a line, it wraps so
-    // the whole box (text + padding on both sides) still fits the canvas.
-    const descPadX = 6;
+    // #378 — the raid menu's description, in the tooltip style. #399: wrapped to
+    // a compact box (two short lines) that raidMenuDescriptionPos can always place
+    // clear of the HUD controls (raidMenuDescriptionObstacles, built once here).
     this.raidMenuDescText = this.add.text(0, 0, '', {
       color: '#ffffcc',
       fontSize: '12px',
       fontFamily: 'monospace',
       backgroundColor: '#000000cc',
-      padding: { x: descPadX, y: 3 },
-      wordWrap: { width: this.layout.w - 2 * descPadX },
+      padding: { x: RAID_MENU_DESCRIPTION_PAD_X, y: RAID_MENU_DESCRIPTION_PAD_Y },
+      wordWrap: { width: raidMenuDescriptionWrapWidth(this.layout) },
     });
     this.raidMenuDescText.setScrollFactor(0);
     this.raidMenuDescText.setVisible(false);
     this.raidMenuDescText.setDepth(10);
+    // #399 — one box for every order: the widest and tallest description's, so it
+    // keeps its place (and its text its left edge) as the pointer moves down the
+    // menu, rather than each order's own width moving it past the HUD controls.
+    let descW = 0;
+    let descH = 0;
+    for (const option of RAID_ORDER_OPTIONS) {
+      this.raidMenuDescText.setText(raidMenuDescription(option.raidType, null) ?? '');
+      descW = Math.max(descW, this.raidMenuDescText.width);
+      descH = Math.max(descH, this.raidMenuDescText.height);
+    }
+    this.raidMenuDescText.setFixedSize(descW, descH);
+    this.raidMenuDescText.setText('');
+    // Built once, like the wrap width and the box above: the layout is fixed today.
+    // A future resize reflow must rebuild all three (as it must the minimap RT).
+    this.raidMenuDescObstacles = raidMenuDescriptionObstacles(this.hud);
 
     // Ant-activity popup body — single multi-line Text widget anchored to the
     // top-left of the ant-activity panel rect. Created once, shown/hidden and
@@ -1184,9 +1204,10 @@ export class UIScene extends Phaser.Scene {
           requestHideContextMenu();
           return;
         }
-        // #378 — the raid menu's description line is painted over whatever lies
-        // under it, HUD controls included (the minimap, say): a click on it only
-        // dismisses the menu, like a click on the menu itself.
+        // #378 — the raid menu's description is painted over whatever lies under
+        // it (#399: the world; it is kept clear of the HUD controls, but this
+        // guard does not rely on that): a click on it only dismisses the menu,
+        // like a click on the menu itself.
         if (this.isOverRaidMenuDescription(pointer.x, pointer.y)) {
           requestHideContextMenu();
           return;
@@ -1265,9 +1286,10 @@ export class UIScene extends Phaser.Scene {
         requestHideAntActivityPanel();
       }
 
-      // View toggle button
+      // View toggle button. #399 — going down shows the player's own nest, so it
+      // needs the live world to find it.
       if (this.isInsideRect(pointer.x, pointer.y, this.hud.VIEW_TOGGLE)) {
-        toggleView(this.viewState);
+        toggleView(this.viewState, this.getWorld());
         return;
       }
       // C1 — colony alarm toggle. One-shot command like SetBehaviorRatio: it
@@ -1816,8 +1838,9 @@ export class UIScene extends Phaser.Scene {
         this.raidMenuLabels[i]!.setPosition(pos.x, pos.y);
         this.raidMenuLabels[i]!.setVisible(true);
       }
-      // #378 — what the hovered order does (else the order in force), one line
-      // below the menu, or above it when below would run into the bottom HUD strip.
+      // #378 — what the hovered order does (else the order in force), by the
+      // menu: #399, on screen above the bottom HUD strip and clear of the minimap
+      // and the other HUD controls (raidMenuDescriptionPos).
       const description = raidMenuDescription(hovered, current);
       if (description !== null) {
         const t = this.raidMenuDescText;
@@ -1830,6 +1853,7 @@ export class UIScene extends Phaser.Scene {
           t.height,
           this.layout.w,
           this.hud.HINTS.y,
+          this.raidMenuDescObstacles,
         );
         t.setPosition(pos.x, pos.y);
         t.setVisible(true);

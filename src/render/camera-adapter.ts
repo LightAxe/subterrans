@@ -473,8 +473,9 @@ export function panByKeyboard(
  * (mutated in place). For the entering view we:
  *   1. cancel any in-flight zoom-lerp (targetZoom ← zoom) so the toggle doesn't carry a
  *      stale zoom destination across views;
- *   2. (caller has already restored the entering view's stored zoom and, for a first
- *      underground visit, its initial center BEFORE the X-link — see game-scene wiring);
+ *   2. (caller has already restored the entering view's stored zoom and set its
+ *      center — #399: the viewer's own nest or their remembered spot there, going down;
+ *      see camera.ts toggleView);
  *   3. clamp the restored center at the restored zoom.
  * Restoring zoom BEFORE clamping matters: the clamp's center-when-undersized test
  * depends on the zoomed viewport size, which depends on zoom.

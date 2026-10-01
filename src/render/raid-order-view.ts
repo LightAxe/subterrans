@@ -5,7 +5,8 @@
 // pure and Phaser-free so it unit-tests without a canvas:
 //   - the raid menu's rows (label + stripe colour), in RaidType order, and its
 //     hit test (the geometry is the chamber menu's, context-menu-layout.ts);
-//   - (#378) the menu's hovered row and the one-line description shown with it;
+//   - (#378) the menu's hovered row and the description shown with it (#399: wrapped,
+//     and placed clear of the HUD);
 //   - the caption that names the order when the player gives it (#378: a newer
 //     one replaces an older one still up or waiting, RAID_ORDER_CAPTION_SUPERSEDE_KEY);
 //   - the rally-marker badge: a 5×5 pixel letter above the rally tile, sized in
@@ -21,6 +22,8 @@ import type { ColonyId } from '../sim/colony/colony-store.js';
 import { CONTEXT_MENU, type ContextMenuRow } from './context-menu-layout.js';
 import type { GfxLike } from './draw-surface.js';
 import { TILE_SIZE_PX } from './sprites.js';
+import { minimapFrameRect, type HudLayout, type HudRect } from './hud-layout.js';
+import type { LayoutContext } from './layout.js';
 
 /** One raid order as the player sees it. */
 export interface RaidOrderOption extends ContextMenuRow {
@@ -199,7 +202,8 @@ export function raidMenuHoveredOrder(
 }
 
 /**
- * #378 — the one-line explanation shown with the open raid menu: the hovered
+ * #378 — the explanation shown with the open raid menu (#399: wrapped to two
+ * short lines by UIScene, RAID_MENU_DESCRIPTION_WRAP_W): the hovered
  * order's, else (no hover: touch, a mouse not yet moved, or the pointer off the
  * menu) that of the order in force on this entrance, the outlined row; else none. "Deny: <blurb>"
  * — the blurb is the order caption's, so the menu and the "Raiding: …" caption
@@ -215,17 +219,122 @@ export function raidMenuDescription(
   return `${o.label}: ${o.blurb}`;
 }
 
-/** Gap (px) between the raid menu and its description line. */
-const RAID_MENU_DESCRIPTION_GAP_PX = 2;
+/** Gap (px) kept between the raid menu's description box and the menu, and
+ *  between the box and every HUD control it stays clear of. */
+export const RAID_MENU_DESCRIPTION_GAP_PX = 2;
+
+/** #399 — the description box's padding round its text (px), as UIScene styles it. */
+export const RAID_MENU_DESCRIPTION_PAD_X = 6;
+export const RAID_MENU_DESCRIPTION_PAD_Y = 3;
 
 /**
- * #378 — the top-left of the raid menu's description line, `w` × `h` px: just
- * below the menu (`menuH` tall, top-left at anchorX/anchorY) and left-aligned
- * with it; just above the menu instead when below would run into the bottom HUD
- * strip (`maxBottom`, where the menu itself is kept above); moved left as far as
- * needed to end inside `maxRight`, never past 0. If it fits neither below nor
- * above (impossible in the 800×592 layout: the menu is 120 px tall, the strip
- * ~508 px down), it is pinned at the top and may overlap the menu.
+ * #399 — the widest a description line may run (px of text) before it wraps: 40
+ * characters of 12 px monospace, so each order's description is two short lines
+ * in a box of at most 300 px, which fits beside the menu and clear of the HUD
+ * wherever the menu opens. On one line the longest ran ~500 px: below a menu
+ * near the right-hand HUD column it reached the canvas's edge and the minimap.
+ */
+export const RAID_MENU_DESCRIPTION_WRAP_W = 288;
+
+/** #399 — the description's word-wrap width (px) in `layout`: RAID_MENU_DESCRIPTION_WRAP_W,
+ *  or less on a canvas too narrow for that box. */
+export function raidMenuDescriptionWrapWidth(layout: LayoutContext): number {
+  return Math.max(
+    0,
+    Math.min(RAID_MENU_DESCRIPTION_WRAP_W, layout.w - 2 * RAID_MENU_DESCRIPTION_PAD_X),
+  );
+}
+
+/**
+ * #399 — the HUD controls the raid menu's description stays clear of (the bottom
+ * HUD strip is its `maxBottom` instead): the minimap with its frame, the
+ * right-hand column's toggles, the tool palette, the stats panel and the save
+ * icon. The raid menu is surface-only, so the underground colony toggle (hidden
+ * there) is not one of them. Pure; build once per layout.
+ */
+export function raidMenuDescriptionObstacles(hud: HudLayout): readonly HudRect[] {
+  return [
+    minimapFrameRect(hud),
+    hud.VIEW_TOGGLE,
+    hud.ALARM_TOGGLE,
+    hud.TOOLS,
+    hud.STATS,
+    hud.SAVE_ICON,
+  ];
+}
+
+/** True if the w×h box at (x, y) comes within RAID_MENU_DESCRIPTION_GAP_PX of `r`. */
+function boxNear(x: number, y: number, w: number, h: number, r: HudRect): boolean {
+  const g = RAID_MENU_DESCRIPTION_GAP_PX;
+  return x < r.x + r.w + g && r.x < x + w + g && y < r.y + r.h + g && r.y < y + h + g;
+}
+
+/** The first rect of `avoid` that the w×h box at (x, y) comes too near (boxNear),
+ *  or null when it is clear of them all. */
+function firstHit(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  avoid: readonly HudRect[],
+): HudRect | null {
+  for (const r of avoid) if (boxNear(x, y, w, h, r)) return r;
+  return null;
+}
+
+/**
+ * Slide the w×h box along one axis — x for a box in a row above/below the menu
+ * (`y` fixed), y for one in a column beside it (`x` fixed) — from its start
+ * position until it is clear of `avoid`: first toward 0, each step putting it just
+ * before the rect it hit, then from the start the other way, each step just past
+ * it. Returns the clear position, or null if it runs out of room ([0, `max`]) both
+ * ways. A step always passes the rect it hit, so one step per rect is enough. (The
+ * row or column already lies RAID_MENU_DESCRIPTION_GAP_PX off the menu, so no
+ * slide along it can reach the menu.)
+ */
+function slideClear(
+  axis: 'x' | 'y',
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  max: number,
+  avoid: readonly HudRect[],
+): number | null {
+  const g = RAID_MENU_DESCRIPTION_GAP_PX;
+  const size = axis === 'x' ? w : h;
+  const start = axis === 'x' ? x : y;
+  for (let dir = -1; dir <= 1; dir += 2) {
+    let v = start;
+    for (let i = 0; i <= avoid.length && v >= 0 && v + size <= max; i++) {
+      const hit = axis === 'x' ? firstHit(v, y, w, h, avoid) : firstHit(x, v, w, h, avoid);
+      if (hit === null) return v;
+      v =
+        dir < 0
+          ? (axis === 'x' ? hit.x : hit.y) - g - size
+          : (axis === 'x' ? hit.x + hit.w : hit.y + hit.h) + g;
+    }
+  }
+  return null;
+}
+
+/**
+ * #378 / #399 — the top-left of the raid menu's description box, `w` × `h` px.
+ * The menu is CONTEXT_MENU.WIDTH × `menuH` with its top-left at (anchorX,
+ * anchorY). The box lies wholly inside [0, maxRight] × [0, maxBottom] — the
+ * canvas above the bottom HUD strip — and at least RAID_MENU_DESCRIPTION_GAP_PX
+ * clear of the menu (every place tried is a row above/below it or a column
+ * beside it) and of every rect in `avoid` (raidMenuDescriptionObstacles: the
+ * minimap, the right-hand toggles, …). In order of preference:
+ *   1. just below the menu, left-aligned with it (moved left to end inside the
+ *      canvas), then slid left — else right — past any control in the way;
+ *   2. just above the menu, the same way;
+ *   3. just left of the menu, then just right of it, top-aligned with it (moved
+ *      up to end above the strip), slid up — else down — past any control.
+ * If none is clear (never, in the 800×592 layout, for a wrapped description:
+ * raid-order-view.test.ts sweeps every menu position), the #378 rule: below the
+ * menu, else above it, moved left to end inside the canvas, pinned at 0 — it may
+ * then overlap a control, or the menu.
  */
 export function raidMenuDescriptionPos(
   anchorX: number,
@@ -235,12 +344,26 @@ export function raidMenuDescriptionPos(
   h: number,
   maxRight: number,
   maxBottom: number,
+  avoid: readonly HudRect[] = [],
 ): { x: number; y: number } {
-  const x = Math.max(0, Math.min(anchorX, maxRight - w));
-  const below = anchorY + menuH + RAID_MENU_DESCRIPTION_GAP_PX;
-  const y =
-    below + h <= maxBottom ? below : Math.max(0, anchorY - RAID_MENU_DESCRIPTION_GAP_PX - h);
-  return { x, y };
+  const g = RAID_MENU_DESCRIPTION_GAP_PX;
+  const x0 = Math.max(0, Math.min(anchorX, maxRight - w));
+  const below = anchorY + menuH + g;
+  const above = anchorY - g - h;
+  for (let i = 0; i < 2; i++) {
+    const y = i === 0 ? below : above;
+    if (y < 0 || y + h > maxBottom) continue;
+    const x = slideClear('x', x0, y, w, h, maxRight, avoid);
+    if (x !== null) return { x, y };
+  }
+  const y0 = Math.max(0, Math.min(anchorY, maxBottom - h));
+  for (let i = 0; i < 2; i++) {
+    const x = i === 0 ? anchorX - g - w : anchorX + CONTEXT_MENU.WIDTH + g;
+    if (x < 0 || x + w > maxRight) continue;
+    const y = slideClear('y', x, y0, w, h, maxBottom, avoid);
+    if (y !== null) return { x, y };
+  }
+  return { x: x0, y: below + h <= maxBottom ? below : Math.max(0, above) };
 }
 
 // #378 — the rally badge is sized in SCREEN pixels, not world pixels. It is a label

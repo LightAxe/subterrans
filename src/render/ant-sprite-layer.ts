@@ -99,7 +99,22 @@ export const FOOD_CACHE_TEXTURE = 'food-cache';
 export const SPIDER_TEXTURE = 'spider';
 export const SPIDER_SPRITE_WIDTH = 48;
 export const SPIDER_SPRITE_HEIGHT = 48;
-export const SPIDER_SPRITE_DEPTH = 52; // above ants (depth 50); exported unlike ant/static depths which are pool-internal
+export const SPIDER_SPRITE_DEPTH = 52; // above ants (depth 50)
+
+// Scene depths of the layers ants (and what they stand on or carry) are drawn
+// on. #399: exported (they were pool-internal) so the pheromone overlay's depth
+// (PHEROMONE_OVERLAY_DEPTH, draw-pheromone.ts) can be pinned below all of them.
+/** GameScene's entity Graphics layer: chambers, food piles, entrances, and the
+ *  ants themselves as dots at the strategic zoom (§C13). */
+export const ENTITY_GFX_DEPTH = 0;
+/** Static entities sit just below ants so a queen standing in the Nursery still
+ *  reads on top of its own eggs. Keeps Z order predictable. */
+export const STATIC_SPRITE_DEPTH = 48;
+/** Ant sprites, above the entity Graphics layer. */
+export const ANT_SPRITE_DEPTH = 50;
+/** #290 PR 6 — a carried-food crumb sits on top of the ant carrying it (and below
+ *  the spider, SPIDER_SPRITE_DEPTH 52). */
+export const CARRIED_FOOD_DEPTH = 51;
 
 // Rasterization sizes — keep in sync with the SVG viewBox values in
 // code/public/assets/sprites/{worker,queen}-ant.svg. Phaser's load.svg
