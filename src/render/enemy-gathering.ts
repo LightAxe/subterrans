@@ -267,9 +267,13 @@ function compassName(dx: number, dy: number): string | null {
   return `${ns}-${ew}`;
 }
 
+/** The hint both army warnings end with (#394: one wording for a march and a
+ *  gathering, so the two read the same). */
+export const ARMY_WARNING_HINT = 'Train fighters and rally there.';
+
 /** The warning caption naming `entrance` of `colony`, an army gathering near it. */
 export function gatheringWarningText(colony: ColonyRecord, entrance: NestEntrance): string {
-  const hint = 'Train fighters and rally them there.';
+  const hint = ARMY_WARNING_HINT;
   if (colony.entrances.filter((e) => e.isOpen).length < 2) {
     return `An enemy army is gathering near your entrance. ${hint}`;
   }
@@ -282,7 +286,7 @@ export function gatheringWarningText(colony: ColonyRecord, entrance: NestEntranc
 
 /** #394 — the warning caption naming `entrance` of `colony`, an army marching on it. */
 export function marchWarningText(colony: ColonyRecord, entrance: NestEntrance): string {
-  const hint = 'Train fighters and rally there.';
+  const hint = ARMY_WARNING_HINT;
   if (colony.entrances.filter((e) => e.isOpen).length < 2) {
     return `An enemy army is marching on your entrance. ${hint}`;
   }

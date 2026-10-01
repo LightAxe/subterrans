@@ -3,6 +3,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  ARMY_WARNING_HINT,
   GATHER_CAPTION_OWED_TICKS,
   GATHER_DWELL_TICKS,
   GATHER_HOME_RADIUS_TILES,
@@ -357,16 +358,16 @@ describe('gatheringWarningText', () => {
     const { world: w, player } = raidWorld();
     const door = player.entrances[0]!;
     expect(gatheringWarningText(player, door)).toBe(
-      'An enemy army is gathering near your entrance. Train fighters and rally them there.',
+      'An enemy army is gathering near your entrance. Train fighters and rally there.',
     );
     addEntrance(w, player, 40, 64);
     expect(gatheringWarningText(player, door)).toBe(
-      'An enemy army is gathering near your west entrance. Train fighters and rally them there.',
+      'An enemy army is gathering near your west entrance. Train fighters and rally there.',
     );
     addEntrance(w, player, 32, 64); // the old door is still the west one
     const mid = player.entrances[2]!;
     expect(gatheringWarningText(player, mid)).toBe(
-      'An enemy army is gathering near one of your entrances, ringed on the minimap. Train fighters and rally them there.',
+      'An enemy army is gathering near one of your entrances, ringed on the minimap. Train fighters and rally there.',
     );
   });
 });
@@ -378,7 +379,7 @@ describe('nextArmyWarning — a gathering, once per wave', () => {
     army(w, GATHER_MIN_FIGHTERS, 36, 62);
     expect(run(s, w, GATHER_DWELL_TICKS)).toEqual([]); // ticks +0 .. +DWELL-1
     expect(run(s, w, 1)).toEqual([
-      'An enemy army is gathering near your entrance. Train fighters and rally them there.',
+      'An enemy army is gathering near your entrance. Train fighters and rally there.',
     ]);
     expect(s.armed).toBe(false);
     expect(run(s, w, 2000)).toEqual([]);
@@ -546,7 +547,7 @@ describe('nextArmyWarning — a gathering, once per wave', () => {
     const s = createArmyWarningState();
     army(w, GATHER_MIN_FIGHTERS, 36, 62);
     expect(run(s, w, GATHER_DWELL_TICKS + 1)).toEqual([
-      'An enemy army is gathering near your east entrance. Train fighters and rally them there.',
+      'An enemy army is gathering near your east entrance. Train fighters and rally there.',
     ]);
   });
 
@@ -579,6 +580,19 @@ describe('nextArmyWarning — a gathering, once per wave', () => {
       expect(nextArmyWarning(s, w, 99)).toBeNull();
       advance(w, 1);
     }
+  });
+});
+
+describe('ARMY_WARNING_HINT (#394)', () => {
+  it('both army warnings end with the same hint', () => {
+    const { world: w, player } = raidWorld();
+    const door = player.entrances[0]!;
+    expect(ARMY_WARNING_HINT).toBe('Train fighters and rally there.');
+    expect(gatheringWarningText(player, door).endsWith(` ${ARMY_WARNING_HINT}`)).toBe(true);
+    expect(marchWarningText(player, door).endsWith(` ${ARMY_WARNING_HINT}`)).toBe(true);
+    addEntrance(w, player, 10, 64);
+    expect(gatheringWarningText(player, door).endsWith(` ${ARMY_WARNING_HINT}`)).toBe(true);
+    expect(marchWarningText(player, door).endsWith(` ${ARMY_WARNING_HINT}`)).toBe(true);
   });
 });
 
@@ -767,7 +781,7 @@ describe('nextArmyWarning — an army marching (#394)', () => {
     expect(s.invadedUnwarned).toBe(false);
     army(w, GATHER_MIN_FIGHTERS, 36, 62);
     expect(run(s, w, GATHER_DWELL_TICKS + 1)).toEqual([
-      'An enemy army is gathering near your entrance. Train fighters and rally them there.',
+      'An enemy army is gathering near your entrance. Train fighters and rally there.',
     ]);
   });
 
@@ -848,7 +862,7 @@ describe('nextArmyWarning — an army marching (#394)', () => {
     const raiders = [70, 71, 72].map((x) => addFighter(w, P, x, 62 + (x % 2), null));
     const both = [...sally, ...raiders];
     expect(march(s, w, both, GATHER_DWELL_TICKS + 1, -0.2, 0, false).at(-1)).toBe(
-      'An enemy army is gathering near your entrance. Train fighters and rally them there.',
+      'An enemy army is gathering near your entrance. Train fighters and rally there.',
     );
     expect(measureEnemyMarchThisTick(w, P)).toMatchObject({
       fighters: 0,
@@ -895,7 +909,7 @@ describe('nextArmyWarning — an army marching (#394)', () => {
     // Still marching: the march text; then it stops 6 tiles short of the door.
     expect(march(s, w, ids, 1, -0.5, 0, false)).toEqual([ONE_DOOR]);
     expect(run(s, w, MARCH_WINDOW_TICKS + 1, false).at(-1)).toBe(
-      'An enemy army is gathering near your entrance. Train fighters and rally them there.',
+      'An enemy army is gathering near your entrance. Train fighters and rally there.',
     );
     // In it goes: an army already inside is too late to warn of.
     kill(w, ids);
