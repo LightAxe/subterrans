@@ -150,17 +150,16 @@ describe('checkAndTrigger — chamber type substitution', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Event → caption policy (captionForEvent)
+// Caption text named by an event type (captionForEvent)
 // ---------------------------------------------------------------------------
 
-describe('captionForEvent — recurring alerts fire every time', () => {
-  it('spider_rampage_start returns its caption on EVERY call (per-event dispatch)', () => {
+describe('captionForEvent — the rampage warning text, not a one-shot', () => {
+  it('spider_rampage_start returns its text on EVERY call', () => {
+    // A text lookup that marks nothing: the warning recurs once per hungry spell
+    // (#397, recurring-captions.ts), not only in the first one (#190).
     const expected = 'The spider has gone hungry and is hunting on the surface.';
-    // Two separate rampage events must both produce the caption — this is the
-    // regression guard for #190 (rampage popup only fired on the first rampage).
     expect(captionForEvent('spider_rampage_start')).toBe(expected);
     expect(captionForEvent('spider_rampage_start')).toBe(expected);
-    // ...and again after many occurrences.
     expect(captionForEvent('spider_rampage_start')).toBe(expected);
   });
 
@@ -170,7 +169,7 @@ describe('captionForEvent — recurring alerts fire every time', () => {
     expect(text?.toLowerCase()).not.toContain('tunnel');
   });
 
-  it('recurring dispatch does not touch the one-shot triggered map', () => {
+  it('the lookup does not touch the one-shot triggered map', () => {
     captionForEvent('spider_rampage_start');
     captionForEvent('spider_rampage_start');
     expect(triggered.has('spiderRampage')).toBe(false);

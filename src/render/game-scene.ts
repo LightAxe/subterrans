@@ -209,11 +209,11 @@ import {
 import { TILE_SIZE_PX } from './sprites.js';
 import {
   createRampageCaptionState,
+  noteRampageThreat,
   offerOwedRampageCaption,
   offerRecurringCaption,
   recurringCaptionStillOwed,
   resetRampageCaptionState,
-  routeEventCaption,
 } from './recurring-captions.js';
 import {
   createArmyWarningState,
@@ -469,6 +469,20 @@ declare global {
        *  no march — a gathering, or chasers only). Lets a spec assert the warning
        *  came early in the march without timing it. */
       getArmyWarningLog?(): ArmyWarningLogEntry[];
+      /** #397 — the tick of each spider-rampage warning the caption queue took
+       *  this round, oldest first. Dev-build only. */
+      getRampageWarningTicks?(): number[];
+      /** #397 — the spider's state now (null: no spider): which rampage it is on
+       *  (the tick it started, the colony and entrance it camps) and its hunger,
+       *  so a spec can tell a rampage restart from a new hungry spell. Read-only.
+       *  Dev-build only. */
+      getSpider?(): {
+        state: string;
+        hungerTicks: number;
+        rampageStartTick: number;
+        rampageTargetColonyId: number;
+        rampageEntranceId: number;
+      } | null;
       /** #394 — the enemy fighters marching on the player's entrances now, as
        *  measureEnemyMarchThisTick reports them (null when it reports none; it may
        *  be fewer than an army, or chasers only — fighters 0), with the entrance
@@ -848,6 +862,18 @@ export class GameScene extends Phaser.Scene {
       getCaptionsShown: (): string[] => this.getUIScene()?.captionsShown?.() ?? [],
       getCaptionHolds: () => this.getUIScene()?.captionHolds?.() ?? [],
       getArmyWarningLog: (): ArmyWarningLogEntry[] => [...this.armyWarningLog],
+      getRampageWarningTicks: (): number[] => [...this.rampageWarningTicks],
+      getSpider: () => {
+        const sp = this.world?.spider ?? null;
+        if (sp === null) return null;
+        return {
+          state: sp.state,
+          hungerTicks: sp.hungerTicks,
+          rampageStartTick: sp.rampageStartTick,
+          rampageTargetColonyId: sp.rampageTargetColonyId,
+          rampageEntranceId: sp.rampageEntranceId,
+        };
+      },
       getEnemyMarch: () => {
         if (this.world === undefined) return null;
         const m = measureEnemyMarchThisTick(this.world, PLAYER_COLONY_ID);
@@ -1046,7 +1072,8 @@ export class GameScene extends Phaser.Scene {
   // #290 PR 6 — raid captions: last-seen player raid counters + per-caption
   // throttle. Re-baselined in finishBoot (fresh or loaded world).
   private readonly raidCaptions = createRaidCaptionState();
-  // #350 — the spider-rampage warning owed until the caption queue is idle.
+  // #350/#397 — the spider-rampage warning: owed until the caption queue is
+  // idle, and whether it has been shown this hungry spell.
   private readonly rampageCaption = createRampageCaptionState();
   // #372/#394 — the army warning: an enemy army marching on or gathering near an
   // entrance, once per wave (re-armed in finishBoot).
@@ -1054,6 +1081,9 @@ export class GameScene extends Phaser.Scene {
   // #394 — dev-only log of the army warnings the caption queue took this round
   // (__phase9_test.getArmyWarningLog); empty in production builds.
   private armyWarningLog: ArmyWarningLogEntry[] = [];
+  // #397 — dev-only: the tick of each spider-rampage warning the caption queue
+  // took this round (__phase9_test.getRampageWarningTicks).
+  private rampageWarningTicks: number[] = [];
   private renderFrame = 0; // frame counter for glow fade maps
   private readonly contestedGlowFrames: Map<number, number> = new Map(); // surface glow fade
   private readonly undergroundGlowFrames: Map<number, number> = new Map(); // underground glow fade
@@ -1772,6 +1802,7 @@ export class GameScene extends Phaser.Scene {
     this.undergroundGlowFrames.clear();
     resetCaptions();
     this.armyWarningLog = [];
+    this.rampageWarningTicks = [];
     // Stage 3b (#3): reset the per-session first-world-input latch so the
     // proactive [Tab] nudge can re-evaluate on a fresh round (the cross-session
     // shown-flags persist in settings and are NOT cleared here).
@@ -1801,7 +1832,8 @@ export class GameScene extends Phaser.Scene {
 
   /**
    * Drain world.events from the last-seen index, dispatching each new event
-   * to render-side effects (screen flash, camera nudge, captions).
+   * to render-side effects (the invasion screen flash). No event raises a
+   * caption (#394, #397).
    * Called once per render frame while Playing.
    */
   private consumeEventsForRender(): void {
@@ -1816,9 +1848,9 @@ export class GameScene extends Phaser.Scene {
     // length-based cursor stale, and keeps the length at the cap so a length
     // cursor would see nothing new. Tick-based filtering is invariant to splice
     // position: eviction takes the OLDEST evictable event, and a new structural
-    // event (invasion_start, spider_rampage_start, …) is always appended (unless
-    // the buffer holds nothing but terminal events), so the ones this drain acts
-    // on reach it with ticks newer than lastProcessedEventTick.
+    // event (invasion_start, …) is always appended (unless the buffer holds
+    // nothing but terminal events), so the ones this drain acts on reach it with
+    // ticks newer than lastProcessedEventTick.
     //
     // Safety of `ev.tick <= lastProcessedEventTick` (strict skip on boundary tick):
     // All sim ticks for a render frame complete synchronously before this method
@@ -1833,11 +1865,10 @@ export class GameScene extends Phaser.Scene {
       if (!ev || ev.tick <= this.lastProcessedEventTick) continue;
       if (ev.tick > maxTickSeen) maxTickSeen = ev.tick;
 
-      // The event's caption, if it has one (recurring-captions.ts): the
-      // spider-rampage warning is only marked owed (#350) and shown by
-      // checkQueenStatusForEffects once the caption queue is idle, so it never
-      // takes a one-shot caption's slot.
-      routeEventCaption(ev, this.rampageCaption);
+      // (#397: no event drives a caption here. The spider-rampage warning is owed
+      // from world state — the rampage threatening the player's colony, once per
+      // hungry spell — by checkQueenStatusForEffects, which shows it once the
+      // caption queue is idle, so it never takes a one-shot caption's slot.)
 
       // #404 review — an invasion launched at the player is noted for the army
       // warning's fallback (enemy-gathering.ts nextArmyWarning).
@@ -1982,12 +2013,17 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
-    // #350 — the spider-rampage warning, owed from its spider_rampage_start until
-    // it shows or goes stale. Offered after the army warning: it outranks raid
-    // news. (Owed news behind the long army warning shortens that warning to
-    // a readable floor, below.)
+    // #350/#397 — the spider-rampage warning: shown once per hungry spell, owed
+    // while the rampage threatens the player's colony (as its idle workers head
+    // underground), until it shows or goes stale. Offered after the army
+    // warning: it outranks raid news. (Owed news behind the long army warning
+    // shortens that warning to a readable floor, below.)
+    noteRampageThreat(this.rampageCaption, this.world, PLAYER_COLONY_ID);
     if (uiScene) {
-      offerOwedRampageCaption(this.rampageCaption, this.world, uiScene, this.layout.w / 2, 60);
+      const cx = this.layout.w / 2;
+      if (offerOwedRampageCaption(this.rampageCaption, this.world, uiScene, cx, 60)) {
+        if (import.meta.env.DEV) this.rampageWarningTicks.push(this.world.tick);
+      }
     }
 
     // #290 PR 6 — raid captions (being raided / raiding / a haul home), driven by
@@ -2248,7 +2284,8 @@ export class GameScene extends Phaser.Scene {
     // #290 PR 6 — only raid-counter increases from here on raise a caption (a
     // loaded save's earlier raids must not).
     resetRaidCaptionState(this.raidCaptions, this.world, PLAYER_COLONY_ID);
-    // #350 — a prior round's owed rampage warning must not carry over.
+    // #350/#397 — a prior round's owed rampage warning must not carry over, nor
+    // its "shown this hungry spell" (a loaded save mid-rampage warns afresh).
     resetRampageCaptionState(this.rampageCaption);
     // #372 — a new round or loaded save starts armed with nothing owed; and (#404
     // review) an invasion a loaded save was taken in the middle of is warned of,

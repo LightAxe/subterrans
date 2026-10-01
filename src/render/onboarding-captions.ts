@@ -100,38 +100,36 @@ export function checkAndTrigger(key: CaptionKey, textOverride?: string): string 
 }
 
 // ---------------------------------------------------------------------------
-// Event → caption policy
+// Caption text named by an event type
 // ---------------------------------------------------------------------------
 //
-// `captionForEvent` is the text policy for captions driven by WorldState events
-// (`world.events`). It is keyed by the event `type` string — NOT by a
-// CaptionKey. GameScene's event loop hands each event to routeEventCaption
-// (recurring-captions.ts), which decides when a caption shows; the only event
-// with one is spider_rampage_start, whose text offerOwedRampageCaption takes
-// from here.
+// `captionForEvent` looks up caption text by a WorldState event `type` string —
+// NOT by a CaptionKey. It only supplies text: since #397 no event raises a
+// caption. The one entry left is the spider-rampage warning's text, which
+// offerOwedRampageCaption (recurring-captions.ts) shows once per hungry spell,
+// owed from world state while the rampage threatens the viewing colony — not on
+// each spider_rampage_start (every chase divert restarts the rampage).
 //
 // Captions that are driven by world-state polling or input commands (dig,
 // chamber, spider, foodMark, rally, rallyRaid, spiderPriority, queenDamage,
-// queenStarvation, foodStorageNeeded) are NOT events — they keep using checkAndTrigger directly.
+// queenStarvation, foodStorageNeeded) keep using checkAndTrigger directly.
 //
-// #394 — every event caption is now recurring. The one-shot invasion caption
-// ('The enemy is attacking your hive.', on the first invasion_start only) is
-// gone: the army warning (enemy-gathering.ts) announces every invasion wave
-// instead, naming the threatened entrance — read from world state, with the AI's
-// invasion_start only as its fallback.
+// #394 — the one-shot invasion caption ('The enemy is attacking your hive.', on
+// the first invasion_start only) is gone: the army warning (enemy-gathering.ts)
+// announces every invasion wave instead, naming the threatened entrance — read
+// from world state, with the AI's invasion_start only as its fallback.
 
-// Recurring alerts re-fire their caption on EVERY occurrence of the event
-// (e.g. every spider rampage, not just the first). These never consult the
-// one-shot `triggered` map.
+// Recurring alerts are not one-shots: they never consult the one-shot
+// `triggered` map (#397: the rampage warning comes once per hungry spell, not
+// once per session).
 const RECURRING_EVENT_CAPTIONS = new Map<SimEvent['type'], CaptionKey>([
   ['spider_rampage_start', 'spiderRampage'],
 ]);
 
 /**
- * Map a WorldState event type to the caption that should display for it, or
- * null if the event has no caption. Recurring events (e.g.
- * 'spider_rampage_start') return their caption on every call. Unknown event
- * types return null.
+ * The caption text for a WorldState event type, or null if it has none
+ * ('spider_rampage_start' only). It returns the text on every call (it marks
+ * nothing). Unknown event types return null.
  */
 export function captionForEvent(eventType: SimEvent['type']): string | null {
   const recurringKey = RECURRING_EVENT_CAPTIONS.get(eventType);

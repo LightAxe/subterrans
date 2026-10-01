@@ -11,29 +11,41 @@
 // (recurringCaptionMayEnter), and each one stays owed until it gets in:
 //
 //   - raid news (raid-captions.ts) stays owed for RAID_CAPTION_OWED_TICKS;
-//   - the spider-rampage warning stays owed while the spider is still out
-//     hunting hungry, capped at RAMPAGE_CAPTION_OWED_TICKS after the start.
-//     The sim's Rampaging state itself is too short-lived to key on: a rampage
-//     ends as soon as the spider diverts to chase a nearby ant, often within a
-//     second or two, and at 4x speed a start and that divert can land in the
-//     same render frame. The spider is then still hunting, so the warning is
-//     still true. It goes stale only when the spider has eaten, been driven off
-//     (Retreating) or is gone, or when the window runs out. "Has eaten" is read
+//   - the spider-rampage warning (#397) is shown ONCE per hungry spell: owed
+//     while the rampage threatens the viewing colony — the V68 rampage
+//     shelter's rampageThreatens, so it comes as that colony's idle workers head
+//     underground — and, once shown, not owed again until the spider has fed
+//     (spiderOnRampage false: it has eaten, or is gone). Every chase divert
+//     restarts the sim's rampage (88-144 starts in a long match), so keying the
+//     warning on spider_rampage_start, as #350 did, showed it again and again;
+//     and a rampage at another colony's door does not concern the viewer at all.
+//     Once owed it stays owed while the spider is still out hunting hungry,
+//     whether or not it still threatens the colony (it was at the door a moment
+//     ago), for up to RAMPAGE_CAPTION_OWED_TICKS; if that runs out unshown, a
+//     threat that is still there owes it afresh. It goes stale when the spider
+//     has eaten or is gone (or is in Retreating, a pre-V23 state the spider
+//     normalizes away every tick). "Has eaten" is read
 //     from its hunger, not its state: a kill always resets hungerTicks to 0, but
 //     a kill made while a fighter is still adjacent does not enter Feeding (the
 //     spider stays in its state and keeps fighting). Without a meal hungerTicks
-//     never decreases, so it falling below its value at the rampage start means the
-//     spider has eaten by some path. The owed window (RAMPAGE_CAPTION_OWED_TICKS)
-//     is far shorter than any hunger threshold, so a spider that ate cannot grow
-//     back past that value before the warning expires anyway.
+//     never decreases, so it falling below its value when the warning became
+//     owed means the spider has eaten by some path.
 //
 // GameScene offers the owed rampage warning before raid news each frame, so a
 // rampage outranks raid news when both wait on the same idle queue.
 //
 // Pure + Phaser-free: GameScene owns the state and passes its UIScene in.
 
-import type { SpiderBehaviorState, WorldState } from '../sim/types.js';
-import type { SimEvent } from '../sim/telemetry.js';
+import {
+  SIM_VERSION_V68_RAMPAGE_SHELTER,
+  type SpiderBehaviorState,
+  type WorldState,
+} from '../sim/types.js';
+import type { ColonyId } from '../sim/colony/colony-store.js';
+import { rampageThreatens } from '../sim/ant/idle-reserve.js';
+import { spiderOnRampage } from '../sim/spider.js';
+import { RAMPAGE_THREAT_RADIUS_TILES } from '../sim/constants.js';
+import { FP_SHIFT } from '../sim/fixed.js';
 import { captionForEvent } from './onboarding-captions.js';
 
 /** The part of UIScene a recurring caption needs. */
@@ -89,33 +101,36 @@ export function offerRecurringCaption(
  */
 export const RAMPAGE_CAPTION_OWED_TICKS = 200;
 
-/** Spider states in which the warning is stale: it is eating or has been driven
- *  off. A meal is also detected from hunger (see offerOwedRampageCaption). */
+/** Spider states in which the warning is stale: it is eating, or in Retreating (a
+ *  pre-V23 state tickSpiderV23 turns back into Patrolling every tick). A meal is
+ *  also detected from hunger (see offerOwedRampageCaption). */
 const RAMPAGE_OVER_STATES: ReadonlySet<SpiderBehaviorState> = new Set(['Feeding', 'Retreating']);
 
 export interface RampageCaptionState {
-  /** world.tick of a spider_rampage_start whose warning has not shown yet
-   *  (-Infinity: none owed). */
+  /** world.tick the warning became owed and has not shown yet (-Infinity: none
+   *  owed). */
   owedSinceTick: number;
-  /** The spider's hungerTicks at that rampage start (from the event payload).
-   *  Hunger below this means the spider has eaten since. */
+  /** The spider's hungerTicks then. Hunger below this means the spider has eaten
+   *  since. */
   owedHungerTicks: number;
+  /** #397 — the warning has been shown this hungry spell: it is not owed again
+   *  until the spider has fed. */
+  announced: boolean;
 }
 
 export function createRampageCaptionState(): RampageCaptionState {
-  return { owedSinceTick: -Infinity, owedHungerTicks: 0 };
+  return { owedSinceTick: -Infinity, owedHungerTicks: 0, announced: false };
 }
 
-/** New round or loaded save: nothing owed. */
+/** New round or loaded save: nothing owed, nothing announced. */
 export function resetRampageCaptionState(state: RampageCaptionState): void {
   state.owedSinceTick = -Infinity;
   state.owedHungerTicks = 0;
+  state.announced = false;
 }
 
-/** A spider_rampage_start event at `tick`, with the spider's hungerTicks from its
- *  payload: the warning is owed until it shows. A later rampage while one is
- *  still owed restarts the window. */
-export function noteRampageStart(
+/** Owe the warning from `tick`, with the spider's `hungerTicks` then. */
+export function oweRampageCaption(
   state: RampageCaptionState,
   tick: number,
   hungerTicks: number,
@@ -125,9 +140,62 @@ export function noteRampageStart(
 }
 
 /**
- * Called each frame. Shows the owed rampage warning once the queue is idle, or
- * drops it unshown once it is stale (see the header). Returns true iff it was
- * shown this call.
+ * #397 — the spider on a rampage threatens colony `viewerColonyId`: from V68 the
+ * rampage shelter's own rampageThreatens (idle-reserve.ts), so the warning comes
+ * exactly as that colony's idle workers head underground. Below V68 (an older
+ * save, which has no shelter rule and whose rampageThreatens is always false) the
+ * same test without the version gate: on a rampage (spiderOnRampage) and camping,
+ * or on its way to camp, one of the colony's entrances, or within
+ * RAMPAGE_THREAT_RADIUS_TILES (Manhattan) of one of its open entrances. Reads
+ * only; any colony may be the viewer (CLNY-08).
+ */
+export function rampageThreatensViewer(world: WorldState, viewerColonyId: ColonyId): boolean {
+  const colony = world.colonies[viewerColonyId];
+  if (colony === undefined) return false;
+  if (world.simVersion >= SIM_VERSION_V68_RAMPAGE_SHELTER) return rampageThreatens(world, colony);
+  if (!spiderOnRampage(world)) return false;
+  const spider = world.spider!; // spiderOnRampage: there is a spider
+  if (spider.state === 'Rampaging' && spider.rampageTargetColonyId === colony.colonyId) {
+    return true;
+  }
+  const sx = spider.posX >> FP_SHIFT;
+  const sy = spider.posY >> FP_SHIFT;
+  for (const e of colony.entrances ?? []) {
+    if (!e.isOpen) continue;
+    const d = Math.abs(e.surfaceTileX - sx) + Math.abs(e.surfaceTileY - sy);
+    if (d <= RAMPAGE_THREAT_RADIUS_TILES) return true;
+  }
+  return false;
+}
+
+/**
+ * #397 — called each frame, before offerOwedRampageCaption. While the rampage
+ * threatens the viewing colony (rampageThreatensViewer) and nothing is owed, it
+ * owes the warning — unless it has already been shown this hungry spell. The
+ * spell ends when the spider is no longer on a rampage (spiderOnRampage false: a
+ * meal resets its hunger; a spider that is gone hunts nothing), which re-arms
+ * it. Nothing else does: not its state (a hungry spider in the leftover
+ * Retreating state has not fed).
+ */
+export function noteRampageThreat(
+  state: RampageCaptionState,
+  world: WorldState,
+  viewerColonyId: ColonyId,
+): void {
+  if (!spiderOnRampage(world)) {
+    state.announced = false;
+    return;
+  }
+  if (state.announced || state.owedSinceTick !== -Infinity) return;
+  if (!rampageThreatensViewer(world, viewerColonyId)) return;
+  oweRampageCaption(state, world.tick, world.spider!.hungerTicks);
+}
+
+/**
+ * Called each frame. Shows the owed rampage warning once the queue is idle — it
+ * is then announced for this hungry spell (noteRampageThreat) — or drops it
+ * unshown once it is stale (see the header). Returns true iff it was shown this
+ * call.
  */
 export function offerOwedRampageCaption(
   state: RampageCaptionState,
@@ -150,6 +218,7 @@ export function offerOwedRampageCaption(
   }
   if (!offerRecurringCaption(ui, text, screenX, screenY)) return false;
   state.owedSinceTick = -Infinity;
+  state.announced = true;
   return true;
 }
 
@@ -173,19 +242,4 @@ export function recurringCaptionStillOwed(
   armyWarningOwed: boolean,
 ): boolean {
   return armyWarningOwed || rampage.owedSinceTick !== -Infinity || raidCaption !== null;
-}
-
-/**
- * GameScene's caption handling for one sim event, per the event→caption policy
- * in onboarding-captions.ts. The spider_rampage_start warning is NOT shown here:
- * it is marked owed and shown by offerOwedRampageCaption once the queue is idle
- * (#350); shown here, it would take the pending slot behind an active caption and
- * the next one-shot caption would be dropped. Other events have no caption (#394:
- * invasion_start's one-shot caption is gone — the army warning announces every
- * invasion wave instead).
- */
-export function routeEventCaption(ev: SimEvent, rampage: RampageCaptionState): void {
-  if (ev.type === 'spider_rampage_start') {
-    noteRampageStart(rampage, ev.tick, ev.payload.hungerTicks);
-  }
 }
