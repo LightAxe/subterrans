@@ -183,13 +183,10 @@ describe('#399 — the overlay draws beneath every layer ants are drawn on', () 
     // …and above the terrain RenderTexture (depth -10, game-scene.ts).
     expect(PHEROMONE_OVERLAY_DEPTH).toBeGreaterThan(-10);
   });
-
-  it('GameScene puts the overlay layer at PHEROMONE_OVERLAY_DEPTH and the entity gfx at ENTITY_GFX_DEPTH', () => {
-    const __dirname = dirname(fileURLToPath(import.meta.url));
-    const src = readFileSync(join(__dirname, 'game-scene.ts'), 'utf8');
-    expect(src).toMatch(/this\.pheromoneGfx\.setDepth\(PHEROMONE_OVERLAY_DEPTH\)/);
-    expect(src).toMatch(/this\.gfx\.setDepth\(ENTITY_GFX_DEPTH\)/);
-  });
+  // That GameScene actually puts its layers at these depths is pinned on the live
+  // scene, not here: tests/pheromone-overlay.spec.ts reads every layer's depth
+  // (__phase9_test.getLayerDepths) on the surface and underground and checks
+  // terrain < overlay < entity gfx and every ant-layer sprite.
 });
 
 // ---------------------------------------------------------------------------

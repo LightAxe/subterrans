@@ -309,10 +309,9 @@ function slideClear(
     for (let i = 0; i <= avoid.length && v >= 0 && v + size <= max; i++) {
       const hit = axis === 'x' ? firstHit(v, y, w, h, avoid) : firstHit(x, v, w, h, avoid);
       if (hit === null) return v;
-      v =
-        dir < 0
-          ? (axis === 'x' ? hit.x : hit.y) - g - size
-          : (axis === 'x' ? hit.x + hit.w : hit.y + hit.h) + g;
+      const hitStart = axis === 'x' ? hit.x : hit.y;
+      const hitSize = axis === 'x' ? hit.w : hit.h;
+      v = dir < 0 ? hitStart - g - size : hitStart + hitSize + g;
     }
   }
   return null;

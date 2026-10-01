@@ -313,15 +313,17 @@ describe('toggleUndergroundColony', () => {
     expect(vs.activeView).toBe('surface');
   });
 
-  it('without a world, and nothing remembered, leaves both camera centers where they were', () => {
+  it('without a world, and nothing remembered, still switches colony but leaves both camera centers where they were', () => {
     // #378 — with a world the toggle moves the underground camera (below); with
     // none it has nowhere to go. Start tile 64 keeps the centre inside the clamp.
+    // The documented silent fallback: the colony flips, the camera does not.
     const vs = createViewState(64, 64);
     const sx = vs.surfaceCamera.centerX;
     const sy = vs.surfaceCamera.centerY;
     const ux = vs.undergroundCamera.centerX;
     const uy = vs.undergroundCamera.centerY;
     toggleUndergroundColony(vs);
+    expect(vs.activeUndergroundColonyId).toBe(ENEMY_COLONY_ID);
     expect(vs.surfaceCamera.centerX).toBe(sx);
     expect(vs.surfaceCamera.centerY).toBe(sy);
     expect(vs.undergroundCamera.centerX).toBe(ux);

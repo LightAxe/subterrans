@@ -358,9 +358,17 @@ export function undergroundNestCenterPx(
  * left (undergroundCenterByColony) and the one being entered gets its remembered
  * centre back, so peeking at the enemy and toggling back returns the player to
  * exactly where they were working in their own nest. A colony not looked at yet
- * (none remembered) is shown centred on its nest (undergroundNestCenterPx); if
- * it has none to find, or no `world` is given, the camera stays where it is (only
- * clamped). Zoom is untouched (it belongs to the underground view); the move
+ * (none remembered) is shown centred on its nest (undergroundNestCenterPx).
+ *
+ * `world` is optional, and leaving it out is a silent fallback. If the colony
+ * being entered has no remembered spot and either no `world` is given or the
+ * colony has no nest to find, the active colony STILL switches, but the camera
+ * stays where it was (only clamped). It is then showing the entered colony's grid
+ * at the left colony's spot. Showing the colony is the toggle's contract; the
+ * move is best-effort. Production callers always pass the live world: GameScene's
+ * X handler passes `this.world`, and UIScene's button passes `getWorld()`, which
+ * is undefined only before boot. Only that pre-boot case and the camera unit
+ * tests omit it. Zoom is untouched (it belongs to the underground view); the move
  * settles like a view toggle (in-flight zoom-lerp cancelled, clamped). Nothing
  * here names a colony but the flip itself. A remembered spot is written whenever
  * the player leaves that colony's view — by this toggle, or (#399) by going up to

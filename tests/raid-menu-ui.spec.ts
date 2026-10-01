@@ -21,13 +21,12 @@ import { test, expect, type Page } from '@playwright/test';
 import { clickCanvasRect, settleToPlaying, waitForUiHook } from './helpers/boot.js';
 import {
   ALARM_TOGGLE_RECT,
-  MINIMAP_RECT,
   VIEW_TOGGLE_RECT,
   contextMenuRowRect,
   type Rect,
 } from './helpers/geometry.js';
 import { TILE_SIZE_PX } from '../src/render/sprites.js';
-import { buildHudLayout } from '../src/render/hud-layout.js';
+import { buildHudLayout, minimapFrameRect } from '../src/render/hud-layout.js';
 import { DEFAULT_LAYOUT } from '../src/render/layout.js';
 import { RAID_ORDER_OPTIONS, raidOrderCaption } from '../src/render/raid-order-view.js';
 
@@ -605,13 +604,9 @@ test.describe('#378 — the raid menu', () => {
 // is the HUD layout itself, not the placement code (raid-order-view.ts).
 test.describe('#399 — the raid menu description stays on screen and clear of the HUD', () => {
   const hud = buildHudLayout(DEFAULT_LAYOUT);
-  /** The minimap as painted: its rect and the 3-px frame round it (#372). */
-  const minimapFrame: Rect = {
-    x: MINIMAP_RECT.x - 3,
-    y: MINIMAP_RECT.y - 3,
-    w: MINIMAP_RECT.w + 6,
-    h: MINIMAP_RECT.h + 6,
-  };
+  /** The minimap as painted: its rect and the frame round it (#372). Same
+   *  outline the minimap's painter draws to (MINIMAP_FRAME_OUT_PX, hud-layout.ts). */
+  const minimapFrame: Rect = minimapFrameRect(hud);
   const HUD_CONTROLS: ReadonlyArray<[string, Rect]> = [
     ['minimap', minimapFrame],
     ['view toggle', VIEW_TOGGLE_RECT],
