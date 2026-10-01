@@ -7,7 +7,12 @@
 // reach the interval), not from runwayFoodFp's bisection.
 
 import { describe, it, expect } from 'vitest';
-import { eggReserveFp, tickQueenEggProduction } from './lifecycle-system.js';
+import {
+  eggReserveFp,
+  tickLifecycleTransitions,
+  tickQueenEggProduction,
+} from './lifecycle-system.js';
+import { tickDeathCleanup, tickFoodConsumption } from './colony-system.js';
 import {
   createWorldState,
   SIM_VERSION_V69_FOOD_FAIRNESS,
@@ -22,7 +27,7 @@ import { despawnAnt } from '../ant-death.js';
 import { AntTask, ChamberType } from '../enums.js';
 import { Zone } from '../terrain.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
-import { colonyFoodTotal } from '../food/food-api.js';
+import { colonyFoodCapacity, colonyFoodTotal } from '../food/food-api.js';
 import { addChamberForTest, setColonyFoodForTest } from '../food/food-test-utils.js';
 import {
   FIGHTER_HUNGER,
@@ -33,6 +38,8 @@ import {
   type HungerProfile,
 } from '../hunger.js';
 import {
+  BASE_FOOD_STORAGE_CAPACITY,
+  FOOD_CHAMBER_CAPACITY,
   QUEEN_EGG_FOOD_THRESHOLD,
   QUEEN_EGG_RESERVE_RUNWAY_TICKS,
   WORKER_BASE_SPEED,
@@ -80,7 +87,12 @@ interface Shape {
   dead?: number;
 }
 
-/** The storage layouts a colony's stores can be split across. */
+/**
+ * The storage layouts a colony's stores can be split across. The formula tests fill
+ * them through the test setters, which ignore capacity, so a 'pool' colony can hold
+ * more than the 2048 fp the game lets it; the "storage capacity" describe below plays
+ * the rule against real capacities.
+ */
 type Layout = 'pool' | 'pool+1' | 'chambers-only:3' | 'pool+2';
 const LAYOUTS: readonly Layout[] = ['pool', 'pool+1', 'chambers-only:3', 'pool+2'];
 
@@ -302,7 +314,12 @@ describe('#395 (V70) — eggReserveFp: the whole colony for the runway', () => {
     expect(sameAtOtherId).toBe(base);
   });
 
-  it('a worker that dies leaves the reserve; one that becomes a fighter is counted by its new profile', () => {
+  it('a worker that dies leaves the reserve; one that becomes a fighter is still counted', () => {
+    // Fighters and workers share every hunger value today, so this cannot tell the two
+    // profiles apart; egg-reserve-fighter-profile.test.ts does, with a distinct
+    // fighter meal. If the two are ever split, that file is the one to keep honest.
+    expect(FIGHTER_HUNGER.mealFp).toBe(WORKER_HUNGER.mealFp);
+    expect(FIGHTER_HUNGER.mealIntervalTicks).toBe(WORKER_HUNGER.mealIntervalTicks);
     const world = makeWorld(SIM_VERSION_V70_EGG_RESERVE);
     const colony = makeColony(world, 1, { larvae: 2, eggs: 1, workers: 5, fighters: 0 }, 'pool');
     const before = eggReserveFp(world, colony);
@@ -456,5 +473,128 @@ describe('#395 (V70) — over time: steady in a healthy colony, paused while the
         oracleRunwayFp(LARVA_HUNGER, RUNWAY) +
         300 * oracleRunwayFp(WORKER_HUNGER, RUNWAY),
     );
+  });
+});
+
+describe('#395 (V70) — storage capacity caps what the reserve allows', () => {
+  /** Every store of the colony at its real cap: the entrance pool and each chamber full. */
+  function fillToCapacity(world: WorldState, colony: ColonyRecord): void {
+    const stocks: number[] = [];
+    for (const ch of colony.chambers) {
+      if (ch.chamberType === ChamberType.FoodStorage) stocks.push(FOOD_CHAMBER_CAPACITY);
+    }
+    setColonyFoodForTest(world, colony, BASE_FOOD_STORAGE_CAPACITY, stocks);
+    expect(colonyFoodTotal(world, colony)).toBe(colonyFoodCapacity(colony));
+  }
+
+  it('with no FoodStorage chamber she never lays, even with the entrance pool full (V69 did)', () => {
+    for (const workers of [0, 3, 10]) {
+      for (const [simVersion, lays] of [
+        [SIM_VERSION_V70_EGG_RESERVE, 0],
+        [SIM_VERSION_V69_FOOD_FAIRNESS, 1],
+      ] as const) {
+        const world = makeWorld(simVersion);
+        const colony = makeColony(world, 1, { larvae: 0, eggs: 0, workers, fighters: 0 }, 'pool');
+        fillToCapacity(world, colony);
+        expect(colonyFoodCapacity(colony)).toBe(BASE_FOOD_STORAGE_CAPACITY);
+        tickQueenEggProduction(world, colony);
+        expect(colony.eggCount, `${workers} workers at V${simVersion}`).toBe(lays);
+      }
+    }
+  });
+
+  it('with the larder full, the number of chambers sets the brood ceiling', () => {
+    const layouts: ReadonlyArray<readonly [Layout, number]> = [
+      ['pool+1', 1],
+      ['pool+2', 2],
+      ['chambers-only:3', 3],
+    ];
+    for (const [layout, chambers] of layouts) {
+      const capacity = BASE_FOOD_STORAGE_CAPACITY + chambers * FOOD_CHAMBER_CAPACITY;
+      for (const workers of [3, 25, 60, 140]) {
+        // The oracle ceiling: the most brood she can already have and still lay
+        // (-1: she never lays, at any brood).
+        let ceiling = -1;
+        while (oracleReserve(ceiling + 1, 0, workers, 0) <= capacity) ceiling++;
+        for (const brood of [ceiling, ceiling + 1]) {
+          if (brood < 0) continue;
+          const world = makeWorld(SIM_VERSION_V70_EGG_RESERVE);
+          const shape = { larvae: brood, eggs: 0, workers, fighters: 0 };
+          const colony = makeColony(world, 1, shape, layout);
+          fillToCapacity(world, colony);
+          tickQueenEggProduction(world, colony);
+          expect(colony.eggCount, `${chambers} chambers, ${workers} workers, ${brood} brood`).toBe(
+            brood <= ceiling ? 1 : 0,
+          );
+        }
+      }
+    }
+  });
+
+  it('at 60 s: one chamber and 3 workers lays up to 2 brood; two chambers stop for good past 135 workers', () => {
+    const one = BASE_FOOD_STORAGE_CAPACITY + FOOD_CHAMBER_CAPACITY;
+    const two = BASE_FOOD_STORAGE_CAPACITY + 2 * FOOD_CHAMBER_CAPACITY;
+    expect(oracleReserve(2, 0, 3, 0)).toBeLessThanOrEqual(one);
+    expect(oracleReserve(3, 0, 3, 0)).toBeGreaterThan(one);
+    expect(oracleReserve(0, 0, 135, 0)).toBeLessThanOrEqual(two);
+    expect(oracleReserve(0, 0, 136, 0)).toBeGreaterThan(two);
+    // The smallest reserve of all (a lone queen) is above the entrance pool's cap.
+    expect(oracleReserve(0, 0, 0, 0)).toBeGreaterThan(BASE_FOOD_STORAGE_CAPACITY);
+  });
+});
+
+describe('#395 (V70) — the reserve feeds the colony for the runway (real consumption)', () => {
+  it('laid at exactly the reserve, with no food coming in nobody starves or misses a meal for the runway', () => {
+    for (const shape of [SHAPES[1]!, SHAPES[4]!, SHAPES[5]!, SHAPES[6]!]) {
+      const world = makeWorld(SIM_VERSION_V70_EGG_RESERVE);
+      const colony = makeColony(world, 1, shape, 'chambers-only:3');
+      const ants = world.ants;
+      // The worst case: every worker's meal is due now. Some eggs hatch, and some
+      // larvae mature, during the runway (lifecycle transitions run below).
+      for (const id of colony.workers)
+        ants.lastMealTick[id] = world.tick - WORKER_MEAL_INTERVAL_TICKS;
+      colony.eggs.forEach((id, i) => {
+        ants.age[id] = i % 2 === 0 ? 600 : 0;
+      });
+      colony.larvae.forEach((id, i) => {
+        ants.age[id] = i % 3 === 0 ? 1000 : 0;
+      });
+      const reserve = eggReserveFp(world, colony);
+      setStores(world, colony, 'chambers-only:3', reserve);
+      tickQueenEggProduction(world, colony);
+      expect(colony.eggCount, JSON.stringify(shape)).toBe(shape.eggs + 1);
+      const queen = colony.queenEntityId;
+      const living = [queen, ...colony.eggs, ...colony.larvae, ...colony.workers].filter(
+        (id) => ants.alive[id] === 1,
+      );
+      const start = world.tick;
+      let workerMealsMissed = 0;
+      for (let t = 1; t <= RUNWAY; t++) {
+        world.tick = start + t;
+        tickFoodConsumption(world, colony);
+        expect(ants.lastMealTick[queen], `queen fed at tick ${t}`).toBe(world.tick);
+        for (const id of colony.larvae) {
+          if (ants.alive[id] === 1)
+            expect(ants.lastMealTick[id], `larva fed at tick ${t}`).toBe(world.tick);
+        }
+        for (const id of colony.workers) {
+          if (
+            ants.alive[id] === 1 &&
+            world.tick - ants.lastMealTick[id]! >= WORKER_MEAL_INTERVAL_TICKS
+          ) {
+            workerMealsMissed++;
+          }
+        }
+        tickDeathCleanup(world, colony);
+        tickLifecycleTransitions(world, colony);
+      }
+      for (const id of living) expect(ants.alive[id], `ant ${id} ${JSON.stringify(shape)}`).toBe(1);
+      expect(workerMealsMissed, JSON.stringify(shape)).toBe(0);
+      // The reserve is a worst case: the new egg has not hatched by the end of the
+      // runway, so its larva's share is still in the stores.
+      expect(colonyFoodTotal(world, colony), JSON.stringify(shape)).toBeGreaterThanOrEqual(
+        oracleRunwayFp(LARVA_HUNGER, RUNWAY),
+      );
+    }
   });
 });

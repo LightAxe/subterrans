@@ -168,8 +168,12 @@ That covers the queen, each worker and fighter, each larva, and each egg plus th
 about to be laid, counted as the larvae they become. It is compared with all of the
 colony's stored food (the entrance pool and every FoodStorage chamber). It applies all
 match: the queen pauses while the stores are short (in the opening, after a raid,
-in a famine) and lays at her usual interval once they cover it again. Before V70 she
-laid whenever the stores held 3 food (`QUEEN_EGG_FOOD_THRESHOLD`).
+in a famine) and lays at her usual interval once they cover it again. A lone queen's
+reserve (14 food) is more than the entrance pool holds (8), so a colony needs a
+FoodStorage chamber before its first egg, and its storage then caps its brood: a full
+larder with one chamber covers a queen, 3 workers and 3 brood; past about 135 workers,
+two chambers cannot cover even the queen and one new egg. Before V70 she laid
+whenever the stores held 3 food (`QUEEN_EGG_FOOD_THRESHOLD`).
 _Avoid_: egg threshold (the pre-V70 rule); don't confuse it with the queen's share of a
 famine (`QUEEN_MEAL_RESERVE_FP`, which workers' meals leave in the stores).
 

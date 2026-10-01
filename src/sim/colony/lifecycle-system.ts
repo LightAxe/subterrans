@@ -24,7 +24,14 @@ import type { ColonyRecord } from './colony-store.js';
 import { AntTask, ChamberType } from '../enums.js';
 import { hasCompletedChamber } from './colony-system.js';
 import { colonyFoodTotal } from '../food/food-api.js';
-import { LARVA_HUNGER, QUEEN_HUNGER, runwayFoodFp, workerHungerProfile } from '../hunger.js';
+import {
+  FIGHTER_HUNGER,
+  LARVA_HUNGER,
+  QUEEN_HUNGER,
+  WORKER_HUNGER,
+  runwayFoodFp,
+  workerHungerProfile,
+} from '../hunger.js';
 import { Zone, ugGet, UndergroundTileState } from '../terrain.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import {
@@ -49,11 +56,10 @@ import {
 //
 // Gating order (PRD §4b line 980 + 09 reproduction-gate memo):
 //   1. Tick-modulo gate:  world.tick % QUEEN_EGG_INTERVAL_TICKS !== 0 → return
-//   2. Food:              colonyFoodTotal(colony) < QUEEN_EGG_FOOD_THRESHOLD → return
-//                         before V70; from V70 (#395) colonyFoodTotal(colony) <
-//                         eggReserveFp(colony) → return (the egg reserve)
-//                         (issue #15 — total stash = entrance pool + every
-//                         FoodStorage chamber, NOT the entrance pool alone)
+//   2. Food threshold:    colonyFoodTotal(colony) < QUEEN_EGG_FOOD_THRESHOLD → return
+//                         (before V70 only; issue #15 — total stash = entrance
+//                         pool + every FoodStorage chamber, NOT the entrance pool
+//                         alone)
 //   3. Queen alive:       world.ants.alive[colony.queenEntityId] !== 1 → return
 //   4. Queen chamber:     colony has at least one COMPLETED Queen chamber (09 memo)
 //   5. Nursery chamber:   colony has at least one COMPLETED Nursery chamber (09 memo)
@@ -61,10 +67,18 @@ import {
 //                         footprint — debug seed936214196-tick2401 fix. While
 //                         she is still routing (Surface / tunnel), no eggs lay
 //                         so brood never spawns on the surface.
+//   7. Egg reserve:       from V70 (#395), in place of Gate 2:
+//                         colonyFoodTotal(colony) < eggReserveFp(colony) → return.
+//                         Last because it is the only gate that walks the worker
+//                         roster; the gates are pure early returns, so their order
+//                         changes nothing else.
 //
 // The chamber gates turn reproduction into an explicit progression unlock: the
 // player must excavate both a Queen chamber and a Nursery before brood can
-// accumulate. This prevents the pre-memo failure mode where a brand-new colony
+// accumulate. From V70 a FoodStorage chamber is effectively required too: the
+// smallest egg reserve (3600 fp at the 60 s runway) is more than the entrance
+// pool holds (BASE_FOOD_STORAGE_CAPACITY, 2048), and storage capacity then caps
+// the brood (QUEEN_EGG_RESERVE_RUNWAY_TICKS). This prevents the pre-memo failure mode where a brand-new colony
 // started laying eggs against an empty tunnel, forcing every worker into
 // Nursing and starving the queen (see gsd-debug 09 session).
 //
@@ -91,7 +105,8 @@ import {
 //
 // Before V70, returns QUEEN_EGG_INTERVAL_DISABLED (-1) when food is below the
 // gate threshold (Gate 2 absorbs this; returning -1 keeps Gate 1 clean). From
-// V70 (#395) there is no threshold here: Gate 2's egg reserve decides alone.
+// V70 (#395) there is no threshold here: Gate 7's egg reserve decides alone (it
+// is never below 3 food, so dropping the early-out changes no outcome).
 // Returns one of four interval constants based on surplus ratio. Uses pure
 // integer multiplication comparisons to avoid division and bitwise truncation:
 //   food10 >= K * denom  ↔  surplus ratio ≥ K/10
@@ -139,11 +154,21 @@ export function eggReserveFp(world: WorldState, colony: ColonyRecord): number {
   const ants = world.ants;
   const brood = colony.larvaeCount + colony.eggCount + 1; // + the egg about to be laid
   let need = runwayFoodFp(QUEEN_HUNGER, runway) + brood * runwayFoodFp(LARVA_HUNGER, runway);
+  // The two worker profiles' runways once per call, not once per worker; any other
+  // profile workerHungerProfile might return is sized on its own.
+  const workerFp = runwayFoodFp(WORKER_HUNGER, runway);
+  const fighterFp = runwayFoodFp(FIGHTER_HUNGER, runway);
   const roster = colony.workers;
   for (let i = 0; i < roster.length; i++) {
     const id = roster[i]!;
     if (ants.alive[id] !== 1) continue;
-    need += runwayFoodFp(workerHungerProfile(world, id), runway);
+    const profile = workerHungerProfile(world, id);
+    need +=
+      profile === WORKER_HUNGER
+        ? workerFp
+        : profile === FIGHTER_HUNGER
+          ? fighterFp
+          : runwayFoodFp(profile, runway);
   }
   return need;
 }
@@ -160,17 +185,12 @@ export function tickQueenEggProduction(world: WorldState, colony: ColonyRecord):
   // tier changes mid-cycle.
   if (world.tick - colony.queenLastEggTick < eggInterval) return;
 
-  // Gate 2: food — issue #15: read the TOTAL stockpile (entrance pool + every
-  // FoodStorage chamber's stock). The entrance pool alone would miss a colony
-  // whose entire stash lives in chambers, which would then never lay. Before V70
-  // the stockpile must reach QUEEN_EGG_FOOD_THRESHOLD; from V70 (#395) the egg
-  // reserve: enough to feed the whole colony, the new egg's larva included, for
-  // QUEEN_EGG_RESERVE_RUNWAY_TICKS.
-  if (world.simVersion >= SIM_VERSION_V70_EGG_RESERVE) {
-    if (colonyFoodTotal(world, colony) < eggReserveFp(world, colony)) return;
-  } else if (colonyFoodTotal(world, colony) < QUEEN_EGG_FOOD_THRESHOLD) {
-    return;
-  }
+  // Gate 2: food threshold — issue #15: read the TOTAL stockpile (entrance pool +
+  // every FoodStorage chamber's stock). The entrance pool alone would miss a
+  // colony whose entire stash lives in chambers, which would then never lay.
+  // Before V70 only: from V70 (#395) Gate 7, the egg reserve, replaces it.
+  const reserveRule = world.simVersion >= SIM_VERSION_V70_EGG_RESERVE;
+  if (!reserveRule && colonyFoodTotal(world, colony) < QUEEN_EGG_FOOD_THRESHOLD) return;
 
   // Gate 3: queen alive
   if (world.ants.alive[colony.queenEntityId] !== 1) return;
@@ -205,6 +225,11 @@ export function tickQueenEggProduction(world: WorldState, colony: ColonyRecord):
     }
   }
   if (!queenHome) return;
+
+  // Gate 7 (V70, #395): the egg reserve. The stores (the same total stockpile as
+  // Gate 2) must feed the whole colony, the new egg's larva included, for
+  // QUEEN_EGG_RESERVE_RUNWAY_TICKS.
+  if (reserveRule && colonyFoodTotal(world, colony) < eggReserveFp(world, colony)) return;
 
   // Issue #22 — pick a "drop tile" inside a Queen chamber that is NOT the
   // queen's current tile so her sprite (depth 50) does not visually cover

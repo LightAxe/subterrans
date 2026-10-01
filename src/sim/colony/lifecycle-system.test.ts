@@ -12,7 +12,7 @@ import {
   tickQueenEggProduction,
   tickLifecycleTransitions,
 } from './lifecycle-system.js';
-import { createWorldState } from '../types.js';
+import { createWorldState, SIM_VERSION_V69_FOOD_FAIRNESS } from '../types.js';
 import { createColonyRecord } from './colony-store.js';
 import { setPoolFoodForTest } from '../food/food-test-utils.js';
 import { initAnt } from '../ant/ant-store.js';
@@ -120,6 +120,8 @@ describe('tickQueenEggProduction — CLNY-01', () => {
 
   it('2. does NOT produce an egg when foodStored is below threshold', () => {
     const { world, colony } = setupWorldWithQueen(QUEEN_EGG_FOOD_THRESHOLD - 1);
+    // The 3-food boundary is a pre-V70 rule (#395): pin the world to V69.
+    world.simVersion = SIM_VERSION_V69_FOOD_FAIRNESS;
     world.tick = 0;
 
     tickQueenEggProduction(world, colony);

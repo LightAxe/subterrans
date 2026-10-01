@@ -1695,7 +1695,7 @@ describe('#293 survival mode', () => {
     return counts(world);
   }
 
-  it('constants: the worker bound is below the starting cohort; the larder bound is above the egg threshold', () => {
+  it('constants: the worker bound is below the starting cohort; the larder bound is above the (pre-V70) egg threshold', () => {
     expect(AI_SURVIVAL_MAX_WORKERS).toBeLessThan(STARTING_WORKERS);
     expect(AI_SURVIVAL_FOOD_MULTIPLIER).toBeGreaterThan(1);
   });

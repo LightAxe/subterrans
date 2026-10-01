@@ -12,17 +12,11 @@ import { createScenario } from '../sim/scenario.js';
 import { tick } from '../sim/tick.js';
 import { pushCommand } from '../sim/commands.js';
 import type { SimCommand } from '../sim/commands.js';
-import { SIM_VERSION_V70_EGG_RESERVE } from '../sim/types.js';
+import { SIM_VERSION_V69_FOOD_FAIRNESS, SIM_VERSION_V70_EGG_RESERVE } from '../sim/types.js';
 import type { WorldState } from '../sim/types.js';
 import { eggReserveFp } from '../sim/colony/lifecycle-system.js';
-import { colonyFoodTotal } from '../sim/food/food-api.js';
 import { ChamberType } from '../sim/enums.js';
-import {
-  ENEMY_COLONY_ID,
-  PLAYER_COLONY_ID,
-  QUEEN_EGG_FOOD_THRESHOLD,
-  QUEEN_EGG_INTERVAL_BASE_TICKS,
-} from '../sim/constants.js';
+import { ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
 import { runAIController } from '../render/ai-controller.js';
 
 const P = PLAYER_COLONY_ID;
@@ -72,33 +66,31 @@ describe('#395 (V70) — a world saved mid-game continues exactly as the unsaved
       expect(eggReserveFp(loaded, loaded.colonies[c]!)).toBe(eggReserveFp(live, live.colonies[c]!));
     }
 
-    let lays = 0;
-    let held = 0;
-    let lastLay = live.colonies[P]!.queenLastEggTick;
-    for (let t = 1; t <= 2400; t++) {
-      // Held back by the reserve alone: the old 3-food threshold would pass, the
-      // player's interval has elapsed (it never exceeds the base interval), and the
-      // stores are below the reserve.
-      const c = live.colonies[P]!;
-      const stores = colonyFoodTotal(live, c);
-      if (
-        live.tick - c.queenLastEggTick >= QUEEN_EGG_INTERVAL_BASE_TICKS &&
-        stores >= QUEEN_EGG_FOOD_THRESHOLD &&
-        stores < eggReserveFp(live, c)
-      ) {
-        held += 1;
+    // The same saved world played on under the V69 rule (the only thing V70 changes
+    // is the egg gate): if it lays more, the reserve held the V70 queen back during
+    // the continuation, so the round trip was tested where the rule bites.
+    const asV69 = deserializeWorldState(JSON.parse(JSON.stringify(serializeWorldState(live))));
+    asV69.simVersion = SIM_VERSION_V69_FOOD_FAIRNESS;
+    const lays = (w: WorldState, last: { at: number; n: number }): void => {
+      const tickNow = w.colonies[P]!.queenLastEggTick;
+      if (tickNow !== last.at) {
+        last.at = tickNow;
+        last.n += 1;
       }
+    };
+    const liveLays = { at: live.colonies[P]!.queenLastEggTick, n: 0 };
+    const v69Lays = { at: asV69.colonies[P]!.queenLastEggTick, n: 0 };
+    for (let t = 1; t <= 2400; t++) {
       step(live);
       step(loaded);
-      if (live.colonies[P]!.queenLastEggTick !== lastLay) {
-        lays += 1;
-        lastLay = live.colonies[P]!.queenLastEggTick;
-      }
+      step(asV69);
+      lays(live, liveLays);
+      lays(asV69, v69Lays);
       if (t % 200 === 0)
         expect(hashWorldState(loaded), `tick ${live.tick}`).toBe(hashWorldState(live));
     }
-    // Non-vacuity: across the continuation the queen both laid and was held back.
-    expect(lays).toBeGreaterThan(0);
-    expect(held).toBeGreaterThan(0);
+    // Non-vacuity: across the continuation the V70 queen laid, and was held back.
+    expect(liveLays.n).toBeGreaterThan(0);
+    expect(v69Lays.n).toBeGreaterThan(liveLays.n);
   }, 60_000);
 });

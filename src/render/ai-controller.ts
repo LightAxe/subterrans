@@ -241,8 +241,16 @@ export const AI_SURVIVAL_MAX_WORKERS = 2 as const;
  * many times the threshold. Set above 1x so a 1-2 worker colony with no Queen chamber
  * yet (which cannot lay — Gate 4/5 — and so cannot grow its way out) still gets a
  * stretch of undisturbed foraging past the egg threshold before it resumes digging.
- * From V70 (#395) the queen's egg gate is the egg reserve, not that threshold; this
- * bound keeps its value (1536 fp) as a plain larder size, at every version.
+ *
+ * That rationale is pre-V70. From V70 (#395) the queen lays only above the egg
+ * reserve (at least 3728 fp for 2 workers, and only with a FoodStorage chamber), so a
+ * colony leaving survival mode at 1536 fp goes back to digging before it can lay. The
+ * bound is kept, unchanged at every version, because the measurement does not ask for
+ * more: on both-AI Normal and Hard seeds 0-99 (12k ticks), 38 of 400 V69 colonies
+ * entered survival mode (22 recovered to 6+ workers; 13 queens starved), against 8 of
+ * 400 at V70 (5 recovered; 1 starved). A bound tied to the reserve would also have to
+ * be capped by storage: a colony with no FoodStorage chamber can never reach the
+ * reserve, so it would never leave the mode to dig one.
  */
 export const AI_SURVIVAL_FOOD_MULTIPLIER = 2 as const;
 /** CancelDigMark commands issued per AI_DIG_INTERVAL tick while in survival mode (64-cap headroom). */
