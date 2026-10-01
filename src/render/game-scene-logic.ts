@@ -4,6 +4,7 @@
 // GameScene imports and uses these; Plan 07 covers Phaser-coupled integration via Playwright.
 
 import type { WorldState } from '../sim/types.js';
+import { createScenario } from '../sim/scenario.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import type { SimCommand } from '../sim/commands.js';
 import type { ToolId, ViewState } from './camera.js';
@@ -182,6 +183,38 @@ export function resetInputLog(log: SimCommand[]): void {
  */
 export function generateFreshSeed(nowMs: number): number {
   return (nowMs & 0x7fffffff) | 0;
+}
+
+// ---------------------------------------------------------------------------
+// Retry — the same map the player just lost on (#131, #395)
+// ---------------------------------------------------------------------------
+
+/** What Retry needs to rebuild the map the player just lost on. */
+export interface RetryTarget {
+  readonly seed: number;
+  readonly difficulty: WorldState['difficulty'];
+  /** The lost world's simVersion: map generation is version-gated from V69 (#395). */
+  readonly simVersion: number;
+}
+
+/**
+ * Capture the Retry target from the world the player is about to leave. Take it
+ * before the session resets: `seed` is the session's seed (GameScene.currentSeed),
+ * and the difficulty and simVersion are the world's own.
+ */
+export function captureRetryTarget(world: WorldState, seed: number): RetryTarget {
+  return { seed, difficulty: world.difficulty, simVersion: world.simVersion };
+}
+
+/**
+ * #395 — the world Retry starts: the lost world's seed, difficulty AND simVersion.
+ * From V69 the same seed generates a different map (food fairness moves piles), so
+ * a game resumed from a V68 save and retried must be regenerated at V68 for "the
+ * exact same map". The retried world keeps that version's rules too, as the resumed
+ * game did. Only Retry does this: a new game is always created at LATEST.
+ */
+export function createRetryWorld(target: RetryTarget): WorldState {
+  return createScenario(target.seed, target.difficulty, target.simVersion);
 }
 
 // ---------------------------------------------------------------------------
