@@ -161,6 +161,18 @@ Eggs and larvae collectively — tracked separately from (mature) workers. Lifec
 **egg** → **larva** → worker.
 _Avoid_: babies, young; don't call eggs "larvae".
 
+**Egg reserve** (#395, simVersion V70):
+The stored food a colony must hold for its queen to lay an egg: every meal the whole
+colony would eat over `QUEEN_EGG_RESERVE_RUNWAY_TICKS` (60 s) with no food coming in.
+That covers the queen, each worker and fighter, each larva, and each egg plus the one
+about to be laid, counted as the larvae they become. It is compared with all of the
+colony's stored food (the entrance pool and every FoodStorage chamber). It applies all
+match: the queen pauses while the stores are short (in the opening, after a raid,
+in a famine) and lays at her usual interval once they cover it again. Before V70 she
+laid whenever the stores held 3 food (`QUEEN_EGG_FOOD_THRESHOLD`).
+_Avoid_: egg threshold (the pre-V70 rule); don't confuse it with the queen's share of a
+famine (`QUEEN_MEAL_RESERVE_FP`, which workers' meals leave in the stores).
+
 **Hunger / meal** (#288; workers and fighters from simVersion V51, #290):
 Every ant that eats has a **hunger clock** — the tick of its last **meal**
 (`ants.lastMealTick`; "ticks since meal" counts up) — and a **hunger profile** per

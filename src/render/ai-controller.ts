@@ -241,6 +241,8 @@ export const AI_SURVIVAL_MAX_WORKERS = 2 as const;
  * many times the threshold. Set above 1x so a 1-2 worker colony with no Queen chamber
  * yet (which cannot lay — Gate 4/5 — and so cannot grow its way out) still gets a
  * stretch of undisturbed foraging past the egg threshold before it resumes digging.
+ * From V70 (#395) the queen's egg gate is the egg reserve, not that threshold; this
+ * bound keeps its value (1536 fp) as a plain larder size, at every version.
  */
 export const AI_SURVIVAL_FOOD_MULTIPLIER = 2 as const;
 /** CancelDigMark commands issued per AI_DIG_INTERVAL tick while in survival mode (64-cap headroom). */

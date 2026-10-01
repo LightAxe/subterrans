@@ -17,17 +17,19 @@
 // array.length > 0, so array[length-1] is always defined.
 
 import type { WorldState } from '../types.js';
-import { allocateEntityId, INVALID_ENTITY_ID } from '../types.js';
+import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V70_EGG_RESERVE } from '../types.js';
 import { initAnt } from '../ant/ant-store.js';
 import { despawnAnt } from '../ant-death.js';
 import type { ColonyRecord } from './colony-store.js';
 import { AntTask, ChamberType } from '../enums.js';
 import { hasCompletedChamber } from './colony-system.js';
 import { colonyFoodTotal } from '../food/food-api.js';
+import { LARVA_HUNGER, QUEEN_HUNGER, runwayFoodFp, workerHungerProfile } from '../hunger.js';
 import { Zone, ugGet, UndergroundTileState } from '../terrain.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import {
   QUEEN_EGG_FOOD_THRESHOLD,
+  QUEEN_EGG_RESERVE_RUNWAY_TICKS,
   QUEEN_EGG_INTERVAL_DISABLED,
   QUEEN_EGG_INTERVAL_BASE_TICKS,
   QUEEN_EGG_INTERVAL_MEDIUM_TICKS,
@@ -47,7 +49,9 @@ import {
 //
 // Gating order (PRD §4b line 980 + 09 reproduction-gate memo):
 //   1. Tick-modulo gate:  world.tick % QUEEN_EGG_INTERVAL_TICKS !== 0 → return
-//   2. Food threshold:    colonyFoodTotal(colony) < QUEEN_EGG_FOOD_THRESHOLD → return
+//   2. Food:              colonyFoodTotal(colony) < QUEEN_EGG_FOOD_THRESHOLD → return
+//                         before V70; from V70 (#395) colonyFoodTotal(colony) <
+//                         eggReserveFp(colony) → return (the egg reserve)
 //                         (issue #15 — total stash = entrance pool + every
 //                         FoodStorage chamber, NOT the entrance pool alone)
 //   3. Queen alive:       world.ants.alive[colony.queenEntityId] !== 1 → return
@@ -85,8 +89,9 @@ import {
 // ---------------------------------------------------------------------------
 // eggIntervalForColony — surplus-scaled egg interval
 //
-// Returns QUEEN_EGG_INTERVAL_DISABLED (-1) when food is below the gate
-// threshold (Gate 2 absorbs this; returning -1 keeps Gate 1 clean).
+// Before V70, returns QUEEN_EGG_INTERVAL_DISABLED (-1) when food is below the
+// gate threshold (Gate 2 absorbs this; returning -1 keeps Gate 1 clean). From
+// V70 (#395) there is no threshold here: Gate 2's egg reserve decides alone.
 // Returns one of four interval constants based on surplus ratio. Uses pure
 // integer multiplication comparisons to avoid division and bitwise truncation:
 //   food10 >= K * denom  ↔  surplus ratio ≥ K/10
@@ -96,7 +101,9 @@ import {
 
 function eggIntervalForColony(world: WorldState, colony: ColonyRecord): number {
   const foodTotal = colonyFoodTotal(world, colony);
-  if (foodTotal < QUEEN_EGG_FOOD_THRESHOLD) return QUEEN_EGG_INTERVAL_DISABLED;
+  if (world.simVersion < SIM_VERSION_V70_EGG_RESERVE && foodTotal < QUEEN_EGG_FOOD_THRESHOLD) {
+    return QUEEN_EGG_INTERVAL_DISABLED;
+  }
   const mouthsRaw = colony.workerCount + colony.larvaeCount + colony.eggCount + 1; // +1 queen
   const mouths = Math.max(mouthsRaw, COLONY_SIZE_FLOOR);
   const denom = mouths * FOOD_PER_ANT_BASELINE;
@@ -105,6 +112,40 @@ function eggIntervalForColony(world: WorldState, colony: ColonyRecord): number {
   if (food10 >= 50 * denom) return QUEEN_EGG_INTERVAL_FAST_TICKS;
   if (food10 >= 30 * denom) return QUEEN_EGG_INTERVAL_MEDIUM_TICKS;
   return QUEEN_EGG_INTERVAL_BASE_TICKS;
+}
+
+/**
+ * #395 (V70) — the egg reserve (fp): the stored food `colony` must hold for its queen
+ * to lay. It is every meal the whole colony would eat over
+ * QUEEN_EGG_RESERVE_RUNWAY_TICKS with no food coming in, by each kind's hunger
+ * profile (hunger.ts runwayFoodFp):
+ *   - the queen (QUEEN_HUNGER);
+ *   - each larva, each egg, and the egg about to be laid (LARVA_HUNGER). An egg does
+ *     not eat, but it becomes a larva that does. Counting it now is what stops a run
+ *     of eggs from being laid against food their larvae will need;
+ *   - each living worker by its profile now (workerHungerProfile: FIGHTER_HUNGER
+ *     while Fighting). Fighters, nurses, foragers and diggers are all in
+ *     colony.workers.
+ * Every mouth counts as eating from the stores for the whole runway. That is the
+ * worst case: a larva that matures, or a forager that eats its own load, only lowers
+ * the real draw. Read from world state only: the brood counts (death cleanup has
+ * already run this tick), the worker roster and its tasks. The caller compares it
+ * with colonyFoodTotal, which counts what meals are drawn from: the entrance pool
+ * and every FoodStorage chamber, however many. Integer-only; no allocation;
+ * O(workers).
+ */
+export function eggReserveFp(world: WorldState, colony: ColonyRecord): number {
+  const runway = QUEEN_EGG_RESERVE_RUNWAY_TICKS;
+  const ants = world.ants;
+  const brood = colony.larvaeCount + colony.eggCount + 1; // + the egg about to be laid
+  let need = runwayFoodFp(QUEEN_HUNGER, runway) + brood * runwayFoodFp(LARVA_HUNGER, runway);
+  const roster = colony.workers;
+  for (let i = 0; i < roster.length; i++) {
+    const id = roster[i]!;
+    if (ants.alive[id] !== 1) continue;
+    need += runwayFoodFp(workerHungerProfile(world, id), runway);
+  }
+  return need;
 }
 
 export function tickQueenEggProduction(world: WorldState, colony: ColonyRecord): void {
@@ -119,10 +160,17 @@ export function tickQueenEggProduction(world: WorldState, colony: ColonyRecord):
   // tier changes mid-cycle.
   if (world.tick - colony.queenLastEggTick < eggInterval) return;
 
-  // Gate 2: food threshold — issue #15: read the TOTAL stockpile (entrance pool +
-  // every FoodStorage chamber's stock). The entrance pool alone would miss a
-  // colony whose entire stash lives in chambers, which would then never lay.
-  if (colonyFoodTotal(world, colony) < QUEEN_EGG_FOOD_THRESHOLD) return;
+  // Gate 2: food — issue #15: read the TOTAL stockpile (entrance pool + every
+  // FoodStorage chamber's stock). The entrance pool alone would miss a colony
+  // whose entire stash lives in chambers, which would then never lay. Before V70
+  // the stockpile must reach QUEEN_EGG_FOOD_THRESHOLD; from V70 (#395) the egg
+  // reserve: enough to feed the whole colony, the new egg's larva included, for
+  // QUEEN_EGG_RESERVE_RUNWAY_TICKS.
+  if (world.simVersion >= SIM_VERSION_V70_EGG_RESERVE) {
+    if (colonyFoodTotal(world, colony) < eggReserveFp(world, colony)) return;
+  } else if (colonyFoodTotal(world, colony) < QUEEN_EGG_FOOD_THRESHOLD) {
+    return;
+  }
 
   // Gate 3: queen alive
   if (world.ants.alive[colony.queenEntityId] !== 1) return;

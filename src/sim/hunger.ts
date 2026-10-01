@@ -69,6 +69,27 @@ export function hungerState(ticksSinceMeal: number, profile: HungerProfile): Hun
 }
 
 /**
+ * #395 (V70) — the most food (fp) one creature of `profile` can eat over the next
+ * `runwayTicks` ticks: one meal now if one is due, then one every mealIntervalTicks,
+ * so ⌈runwayTicks / mealIntervalTicks⌉ meals of mealFp. The egg reserve
+ * (lifecycle-system.ts eggReserveFp) sums it over the colony. The ceiling is found by
+ * bisection — the smallest k with k × interval ≥ runway — so there is no division:
+ * about log2(runwayTicks) steps. Requires mealIntervalTicks ≥ 1 and runwayTicks ≥ 0
+ * (0 ticks: 0 fp). Pure; no allocation.
+ */
+export function runwayFoodFp(profile: HungerProfile, runwayTicks: number): number {
+  const interval = profile.mealIntervalTicks;
+  let lo = 0;
+  let hi = runwayTicks; // interval ≥ 1, so runwayTicks meals always cover the runway
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (mid * interval >= runwayTicks) hi = mid;
+    else lo = mid + 1;
+  }
+  return lo * profile.mealFp;
+}
+
+/**
  * The queen: 2 fp every tick; dies 300 ticks after her last meal. From V66 (#375)
  * her starvation is an HP drain (colony-system.ts feedQueenOrDrain): a full-HP
  * queen still dies 300 ticks after, a wounded one sooner.

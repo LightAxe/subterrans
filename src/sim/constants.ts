@@ -41,8 +41,21 @@ export const WORKER_LIFESPAN_TICKS = 0x7fffffff;
 /** PRD §9c — Ticks between queen egg-laying events (pre-V21 static value). */
 export const QUEEN_EGG_INTERVAL_TICKS = 300;
 
-/** PRD §9c — Minimum food units (fp) the colony must hold for queen to lay. */
+/**
+ * PRD §9c — Minimum food units (fp) the colony must hold for queen to lay — before
+ * V70 only. From V70 (#395) the egg reserve (QUEEN_EGG_RESERVE_RUNWAY_TICKS) replaces
+ * it; the AI's survival-mode larder bound still counts in multiples of it.
+ */
 export const QUEEN_EGG_FOOD_THRESHOLD = 768; // 3 × FP_ONE
+
+/**
+ * #395 (V70) — the egg reserve's runway: the queen lays an egg only while the colony's
+ * stored food would feed every mouth for this many ticks with no food coming in — the
+ * queen, every worker and fighter, every larva, and every egg plus the new one counted
+ * as the larvae they become (lifecycle-system.ts eggReserveFp). 1200 ticks = 60 s.
+ * Chosen by measurement from 600 / 1200 / 2400 (#395 part 2).
+ */
+export const QUEEN_EGG_RESERVE_RUNWAY_TICKS = 1200;
 
 // ---------------------------------------------------------------------------
 // S4 (V21) — Reproduction lever: surplus-scaled egg interval
