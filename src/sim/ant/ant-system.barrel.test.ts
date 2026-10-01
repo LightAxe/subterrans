@@ -45,7 +45,7 @@ const PUBLIC_FUNCTIONS = [
   'releaseBlockaderToSpider', // V60 (#352) — step 10d, consumed by tick.ts
   'shelterRetreatDir', // V65 (#373) — the shelter retreat step, pinned by its unit tests
   'shelterPassesThroughFriends', // V65 (#373) — occupancy pass-through rule, pinned by its unit test
-  'rampageShelterActive', // V68 (#377) — the rampage shelter's gate, consumed by tick.ts step 10a
+  'rampageThreatens', // V68 (#377) — the rampage shelter's per-colony gate, consumed by tick.ts step 10a
 ] as const;
 
 describe('ant-system barrel public API (#212)', () => {

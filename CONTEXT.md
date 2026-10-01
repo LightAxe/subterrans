@@ -358,21 +358,24 @@ patrols, still hungry, until it has eaten.
 _Avoid_: frenzy, attack.
 
 **Rampage shelter** (simVersion V68, #377):
-While the spider is on a rampage, every colony's **Idle** workers on the surface go in
-and shelter at the shaft top until it is over (foragers keep working; fighters, nurses
-and diggers are untouched). Each heads for the nearest of its colony's open entrances by
-path that reads no real danger and whose way there keeps out of the spider's reach (it
-is not within its chase radius of the way, door included — judged conservatively); with
-none, it holds where it stands until one opens up (keeping its scatter step within the
-scatter radius of the hunt reticle). Once the spider is within chase range of it, every
-way is within its reach, so it runs for the nearest such entrance whose next step in
-lands no nearer the spider than it stands (re-chosen every tick), and holds if there is
-none: its steps never end nearer the spider (a diagonal may dip one tile nearer for a
-tick). With the spider on its own tile it runs whatever its door reads. An idle worker
-coming up the shaft is held below too. They stay recruitable: the behaviour ratio still
-turns them into fighters, nurses, diggers or foragers. After the spider eats or dies,
-the first poke-out whose exit reads no real danger lets them out. While the colony alarm
-sounds, the alarm governs its civilians as before.
+While the spider is on a rampage and **threatens** a colony — it is camping, or on its
+way to camp, one of the colony's entrances, or it is within its hunt-search radius (12
+tiles) of one of them, whatever it is doing — that colony's **Idle** workers on the
+surface go in and shelter at the shaft top until the threat is over; a colony it is not
+threatening keeps its idle reserve out, as before (foragers keep working; fighters,
+nurses and diggers are untouched). Each heads for the nearest of its colony's open
+entrances by path that reads no real danger and whose way there keeps out of the
+spider's reach (it is not within its chase radius of the way, door included — judged
+conservatively); with none, it holds where it stands until one opens up (keeping its
+scatter step within the scatter radius of the hunt reticle). Once the spider is within
+chase range of it, every way is within its reach, so it runs for the nearest such
+entrance whose next step in lands no nearer the spider than it stands (re-chosen every
+tick), and holds if there is none: its steps never end nearer the spider (a diagonal may
+dip one tile nearer for a tick). With the spider on its own tile it runs whatever its
+door reads. An idle worker coming up the shaft is held below too. They stay recruitable:
+the behaviour ratio still turns them into fighters, nurses, diggers or foragers. Once
+the spider eats, dies or moves off, the first poke-out whose exit reads no real danger
+lets them out. While the colony alarm sounds, the alarm governs its civilians as before.
 _Avoid_: **alarm** (the colony alarm is the player's stance), **flee** (the dash to an
 entrance from danger on the ant's own tile).
 

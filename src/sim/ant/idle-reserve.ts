@@ -10,10 +10,10 @@
 // #373 (V65): the shelter retreat (its section at the end of this file) is read
 // by step 16 too.
 //
-// #377 (V68): the rampage shelter — while the spider is on a rampage, idle workers
-// go in (pickRampageShelterEntrance; step 16 walks them there by path,
-// rampageShelterDashRoutes) and stay in; step 10a reads rampageShelterActive to
-// keep them recruitable.
+// #377 (V68): the rampage shelter — while the spider on a rampage threatens their
+// colony (rampageThreatens), idle workers go in (pickRampageShelterEntrance; step
+// 16 walks them there by path, rampageShelterDashRoutes) and stay in; step 10a
+// reads rampageThreatens to keep them recruitable.
 //
 // One hook runs INSIDE step 16 rather than at 15b: holdAlarmedCivilianAtShaft
 // (C1, V42), which movement's ascent calls so the colony alarm can keep a
@@ -61,6 +61,7 @@ import {
   SPIDER_SCATTER_RADIUS_TILES,
   FLEE_HOMEBOUND_PUSH_THROUGH_TILES,
   SPIDER_CHASE_TRIGGER_RADIUS,
+  RAMPAGE_THREAT_RADIUS_TILES,
 } from '../constants.js';
 import {
   canEnterSurfaceTile,
@@ -451,8 +452,8 @@ function setFleeTarget(
  * colony's entrances, find none at that column, and be held there. Fighters are
  * not civilians and keep movement's existing rule.
  *
- * #377 (V68): while the spider is on a rampage an IDLE worker is held the same
- * way, alarm or not (rampageShelterActive), so an idle worker that surfaces from
+ * #377 (V68): while the spider on a rampage threatens its colony an IDLE worker is
+ * held the same way, alarm or not (rampageThreatens), so an idle worker that surfaces from
  * below — a carrier that has just banked its load, a matured larva, a worker the
  * #373 retreat released below — stays in instead of climbing out into the hunt
  * and fleeing back down. A forager still climbs out to work (the alarm alone holds
@@ -470,7 +471,10 @@ export function holdAlarmedCivilianAtShaft(
   if (task !== AntTask.Idle && task !== AntTask.Foraging) return false;
   if (ants.speed[id]! <= 0) return false; // brood (and the queen)
   const colony = world.colonies[ants.colonyId[id]!];
-  if (colony?.alarmActive !== true && !(task === AntTask.Idle && rampageShelterActive(world))) {
+  if (
+    colony?.alarmActive !== true &&
+    !(task === AntTask.Idle && colony !== undefined && rampageThreatens(world, colony))
+  ) {
     return false;
   }
   ants.fleeShelterUntilTick[id] = world.tick + SHELTER_COOLDOWN_TICKS;
@@ -478,16 +482,53 @@ export function holdAlarmedCivilianAtShaft(
 }
 
 /**
- * #377 (V68) — idle workers shelter from the spider: it is on a rampage
+ * #377 (V68) — the rampage shelter's global gate: the spider is on a rampage
  * (spider.ts spiderOnRampage — out hunting hungry, until it eats or dies) and the
- * world is V68 or later. Read by step 10a (sheltering idle workers stay
- * recruitable), step 15b (idle surface workers go in, idle shelterers stay in)
- * and step 16 (the routed dash, the hold at the shaft). The spider does not move
- * or change state between those steps (it ticks at 17.5), so all three read the
- * same answer within a tick. Always false below V68.
+ * world is V68 or later. rampageThreatens (below) decides per colony; it is what
+ * step 10a (sheltering idle workers stay recruitable), step 15b (idle surface
+ * workers go in, idle shelterers stay in) and step 16 (the routed dash, the hold at
+ * the shaft) read. The spider does not move or change state between those steps
+ * (it ticks at 17.5), so all three read the same answer within a tick. Always
+ * false below V68.
  */
 export function rampageShelterActive(world: WorldState): boolean {
   return world.simVersion >= SIM_VERSION_V68_RAMPAGE_SHELTER && spiderOnRampage(world);
+}
+
+/**
+ * #377 (V68) — the spider THREATENS `colony`: it is on a rampage
+ * (rampageShelterActive) and it is
+ *  - camping, or on its way to camp, one of this colony's entrances (Rampaging with
+ *    rampageTargetColonyId this colony — a V54 rotation's target included), or
+ *  - within RAMPAGE_THREAT_RADIUS_TILES (Manhattan) of one of its open entrances,
+ *    whatever it is doing: chasing a straggler between camps (the camper's divert
+ *    clears its target), hunting, patrolling hungry, or camping the other colony's
+ *    door nearby.
+ * Only then does the rampage shelter apply to the colony — every V68 rule reads
+ * this (steps 10a, 15b and 16), not rampageShelterActive — so a colony the spider is
+ * not hunting keeps its idle reserve out, as at V67. Pure: the spider's saved state
+ * and position, and the colony's entrances. Always false below V68.
+ */
+export function rampageThreatens(world: WorldState, colony: ColonyRecord): boolean {
+  if (!rampageShelterActive(world)) return false;
+  const spider = world.spider!; // rampageShelterActive: a spider on a rampage
+  if (spider.state === 'Rampaging' && spider.rampageTargetColonyId === colony.colonyId) {
+    return true;
+  }
+  const sx = spider.posX >> FP_SHIFT;
+  const sy = spider.posY >> FP_SHIFT;
+  const entrances = colony.entrances ?? NO_ENTRANCES;
+  for (let e = 0; e < entrances.length; e++) {
+    const ent = entrances[e]!;
+    if (!ent.isOpen) continue;
+    if (
+      Math.abs(ent.surfaceTileX - sx) + Math.abs(ent.surfaceTileY - sy) <=
+      RAMPAGE_THREAT_RADIUS_TILES
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -640,8 +681,9 @@ export function rampageShelterDashRoutes(world: WorldState, id: number): boolean
   const ants = world.ants;
   if (ants.task[id] !== AntTask.Idle || ants.zone[id] !== ZONE_SURFACE) return false;
   if (ants.fleeShelterUntilTick[id] !== 0 || ants.targetPosX[id] === -1) return false;
-  if (world.colonies[ants.colonyId[id]!]?.alarmActive === true) return false;
-  return rampageShelterActive(world);
+  const colony = world.colonies[ants.colonyId[id]!];
+  if (colony === undefined || colony.alarmActive === true) return false;
+  return rampageThreatens(world, colony);
 }
 
 /**
@@ -662,7 +704,8 @@ export function rampageShelterDashRoutes(world: WorldState, id: number): boolean
  *   >0 surface      → re-check each tick: dash (0) once a safe entrance appears,
  *                     release (-1) if no longer homebound, else re-arm the hold
  *
- * #377 (V68), while the spider is on a rampage and the colony's alarm is off, an
+ * #377 (V68), while the spider on a rampage threatens the colony (rampageThreatens)
+ * and its alarm is off, an
  * IDLE surface worker takes the rampage shelter's rules instead of the mill and the
  * V34 danger flee:
  *   -1 → 0 dashing (pickRampageShelterEntrance found a door; step 16 walks it
@@ -687,10 +730,6 @@ export function rampageShelterDashRoutes(world: WorldState, id: number): boolean
 export function tickIdleReserveAndFlee(world: WorldState): void {
   const ants = world.ants;
   const tick = world.tick;
-  // #377 (V68) — the spider is on a rampage: idle workers go in and stay in (see
-  // SIM_VERSION_V68_RAMPAGE_SHELTER). The same for every colony. Always false below V68.
-  const rampage = rampageShelterActive(world);
-
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
     const colony = world.colonies[key as unknown as ColonyId];
@@ -711,10 +750,12 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
     // behaviour — see the V42 note in types.ts).
     // #322 (V49) — the alarm musters civilians home instead of freezing them.
     const alarmed = colony.alarmActive === true;
-    // #377 (V68) — this colony's idle surface workers take the rampage shelter's
-    // way in. Not while its alarm sounds: the alarm already brings every civilian
-    // in and keeps its own V42/V49 rules for how.
-    const rampageShelters = rampage && !alarmed;
+    // #377 (V68) — the spider on a rampage threatens this colony: its idle workers go
+    // in and stay in (see SIM_VERSION_V68_RAMPAGE_SHELTER). Always false below V68.
+    const threatened = rampageThreatens(world, colony);
+    // ... by the rampage shelter's way in. Not while its alarm sounds: the alarm
+    // already brings every civilian in and keeps its own V42/V49 rules for how.
+    const rampageShelters = threatened && !alarmed;
     // #373 (V65) — an enemy ant is below ground in this colony's nest and it has a
     // shelterer below: build this tick's retreat field (read here and by step 16).
     // Always false below V65.
@@ -796,7 +837,7 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
         }
         if (task !== AntTask.Idle && task !== AntTask.Foraging) continue;
         if (rampageShelters && task === AntTask.Idle) {
-          // #377 (V68) — the spider is on a rampage: go in, by path, down the
+          // #377 (V68) — the spider on a rampage threatens the colony: go in, by path, down the
           // nearest entrance whose way keeps out of its reach (dash, phase 0), or
           // hold where it stands. Replaces the milling and the V34 danger flee for
           // an Idle worker while the rampage lasts.
@@ -1018,9 +1059,14 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
               dangerGrid !== undefined
                 ? phGet(dangerGrid, exit.surfaceTileX, exit.surfaceTileY)
                 : 0;
-            // #377 (V68): an Idle shelterer stays in while the spider is on a
-            // rampage, alarm or not; a forager keeps the alarm-or-danger poke-out.
-            if (!alarmed && !(rampage && task === AntTask.Idle) && surfaceDanger < FLEE_THRESHOLD) {
+            // #377 (V68): an Idle shelterer stays in while the spider on a rampage
+            // threatens its colony, alarm or not; a forager keeps the alarm-or-danger
+            // poke-out.
+            if (
+              !alarmed &&
+              !(threatened && task === AntTask.Idle) &&
+              surfaceDanger < FLEE_THRESHOLD
+            ) {
               ants.fleeShelterUntilTick[id] = -1; // all-clear → resume (ascend + mill)
               // #209 PR C (V35) — clear the stale camped-entrance SURFACE flee
               // target that survived descent + shelter. On this release tick the

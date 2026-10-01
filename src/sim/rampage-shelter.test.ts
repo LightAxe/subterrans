@@ -24,8 +24,8 @@ import type { SpiderBehaviorState, WorldState } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { killAnt } from './ant-death.js';
 import { addChamberForTest } from './food/food-test-utils.js';
-import { rampageShelterActive } from './ant/ant-system.js';
-import { rampageShelterDashRoutes } from './ant/idle-reserve.js';
+import { rampageThreatens } from './ant/ant-system.js';
+import { rampageShelterActive, rampageShelterDashRoutes } from './ant/idle-reserve.js';
 import { spiderOnRampage } from './spider.js';
 import { depositDangerCross } from './pheromone/danger.js';
 import { pheromoneGridKey } from './pheromone/pheromone-store.js';
@@ -49,6 +49,7 @@ import {
   SPIDER_GRACE_TICKS,
   SPIDER_HUNGER_THRESHOLD_TICKS,
   FOOD_PICKUP_AMOUNT,
+  RAMPAGE_THREAT_RADIUS_TILES,
 } from './constants.js';
 
 const P = PLAYER_COLONY_ID;
@@ -58,6 +59,13 @@ const V68 = SIM_VERSION_V68_RAMPAGE_SHELTER;
 /** Seed 7: the player's entrance, and the spider's lair (far from both colonies). */
 const DOOR = { x: 24, y: 64 } as const;
 const LAIR = { x: 67, y: 117 } as const;
+/** Eight tiles below the player's door: a hungry spider here threatens the player's
+ *  colony (within RAMPAGE_THREAT_RADIUS_TILES, with room to take a step) while out of
+ *  chase range of, and out of the way in for, the idle reserve round the door. */
+const THREAT_SPOT = { x: 24, y: 64 + 8 } as const;
+/** Below the player's door at exactly the threat radius, and one tile beyond it. */
+const THREAT_EDGE = { x: 24, y: 64 + RAMPAGE_THREAT_RADIUS_TILES } as const;
+const THREAT_OUT = { x: 24, y: 64 + RAMPAGE_THREAT_RADIUS_TILES + 1 } as const;
 /** Row of the nest's tunnel (the shaft runs down to it). */
 const TUNNEL_Y = 3;
 /** Past the start-of-match grace, so a hungry spider hunts. */
@@ -152,10 +160,16 @@ type Spider =
   | 'feeding' // Feeding
   | 'grace' // hungry, but in the start-of-match grace
   | 'rampaging' // hungry, camping (or walking to) the player's entrance
+  | 'rampagingOther' // hungry, camping (or walking to) the ENEMY's entrance
   | 'chasing' // hungry, Chasing (its target gone)
   | 'hungryPatrol'; // hungry, Patrolling (about to pick a hunt)
 
-const ON_RAMPAGE: ReadonlySet<Spider> = new Set(['rampaging', 'chasing', 'hungryPatrol']);
+const ON_RAMPAGE: ReadonlySet<Spider> = new Set([
+  'rampaging',
+  'rampagingOther',
+  'chasing',
+  'hungryPatrol',
+]);
 
 /** Put the spider at (x, y) doing `s` (with the DangerTrail it leaves there). */
 function setSpider(world: WorldState, s: Spider, x: number, y: number): void {
@@ -167,7 +181,7 @@ function setSpider(world: WorldState, s: Spider, x: number, y: number): void {
   const state: SpiderBehaviorState =
     s === 'feeding'
       ? 'Feeding'
-      : s === 'rampaging'
+      : s === 'rampaging' || s === 'rampagingOther'
         ? 'Rampaging'
         : s === 'chasing'
           ? 'Chasing'
@@ -176,7 +190,7 @@ function setSpider(world: WorldState, s: Spider, x: number, y: number): void {
   sp.posX = x << FP_SHIFT;
   sp.posY = y << FP_SHIFT;
   sp.hungerTicks = s === 'sated' || s === 'feeding' ? 0 : HUNGRY;
-  sp.rampageTargetColonyId = s === 'rampaging' ? P : -1;
+  sp.rampageTargetColonyId = s === 'rampaging' ? P : s === 'rampagingOther' ? E : -1;
   sp.rampageEntranceId = -1;
   sp.rampageStartTick = world.tick;
   sp.rampageKillsThisRampage = 0;
@@ -244,7 +258,11 @@ type Where =
   | 'cornerOff' // m = 2, off to the side: the next step lands 3 from it
   | 'adjacentAway' // m = 1, on the far side from the door: it runs
   | 'adjacentAhead' // m = 1, between it and the door: the next step is its tile
-  | 'onWorker'; // m = 0, on the worker's own tile: every way leads away
+  | 'onWorker' // m = 0, on the worker's own tile: every way leads away
+  // Whether it threatens the player's colony at all (option 3): a spider not camping
+  // it threatens it only within RAMPAGE_THREAT_RADIUS_TILES of its open entrance.
+  | 'threatEdge' // RAMPAGE_THREAT_RADIUS_TILES from the player's door: it threatens
+  | 'threatOut'; // one tile further: it threatens only as the camp target
 
 /** Where the spider's position matters only to an idle worker: the others run the
  *  three that change what their door and exit read. */
@@ -263,6 +281,8 @@ const ALL_WHERES: Where[] = [
   'adjacentAway',
   'adjacentAhead',
   'onWorker',
+  'threatEdge',
+  'threatOut',
 ];
 const SOME_WHERES: Where[] = ['far', 'atDoor', 'close'];
 
@@ -313,11 +333,25 @@ function spiderTile(where: Where, far: boolean): { x: number; y: number } {
       return far ? { x: 43, y: 64 } : { x: 26, y: 64 };
     case 'onWorker':
       return far ? FAR_WORKER : NEAR_WORKER;
+    case 'threatEdge':
+      return { x: DOOR.x, y: DOOR.y + RAMPAGE_THREAT_RADIUS_TILES };
+    case 'threatOut':
+      return { x: DOOR.x, y: DOOR.y + RAMPAGE_THREAT_RADIUS_TILES + 1 };
   }
 }
 
+/** Option 3: the spider on a rampage threatens the player's colony — it camps (or is
+ *  on its way to camp) its entrance, or it is within RAMPAGE_THREAT_RADIUS_TILES of
+ *  it. Only then does V68 differ from V67. */
+function threatened(s: Spider, where: Where, far: boolean): boolean {
+  if (!ON_RAMPAGE.has(s)) return false;
+  if (s === 'rampaging') return true;
+  const t = spiderTile(where, far);
+  return Math.abs(t.x - DOOR.x) + Math.abs(t.y - DOOR.y) <= RAMPAGE_THREAT_RADIUS_TILES;
+}
+
 function expected(w: Worker, s: Spider, a: Alarm, where: Where, ratio: Ratio): Expect {
-  if (!ON_RAMPAGE.has(s)) return 'same';
+  if (!threatened(s, where, w === 'idleFar')) return 'same';
   switch (w) {
     case 'idleNear':
     case 'idleFar':
@@ -328,14 +362,17 @@ function expected(w: Worker, s: Spider, a: Alarm, where: Where, ratio: Ratio): E
       if (ratio === 'fight' || a === 'on') return 'same';
       // On the door it goes down, unless a Rampaging spider on it blocks the descent
       // (a Chasing or Patrolling one does not: the descent comes before the bite).
-      if (w === 'idleOnDoor') return where === 'atDoor' && s === 'rampaging' ? 'hold' : 'in';
+      if (w === 'idleOnDoor') {
+        return where === 'atDoor' && (s === 'rampaging' || s === 'rampagingOther') ? 'hold' : 'in';
+      }
       // The door itself reads the spider's danger (atDoor; onPath, cornered, beside
       // it), or the way passes within its chase range (besidePath, and wayEdge on
       // the bound), or — cornered — the next step lands nearer the spider than the
       // worker stands (cornerPath, adjacentAhead).
       if (where === 'atDoor' || where === 'onPath' || where === 'besidePath') return 'hold';
       if (where === 'wayEdge' || where === 'cornerPath' || where === 'adjacentAhead') return 'hold';
-      // 'far', 'behind' and 'wayOut' keep out of its chase range; 'close', 'edge',
+      // 'far', 'behind', 'wayOut', 'threatEdge' and 'threatOut' keep out of its chase
+      // range (a camp target far off, or near enough to threaten); 'close', 'edge',
       // 'cornerOff', 'adjacentAway' and 'onWorker' are cornered, and the next step
       // leads no nearer the spider: it runs.
       return 'in';
@@ -479,8 +516,13 @@ function runCase(version: number, w: Worker, s: Spider, a: Alarm, where: Where, 
   let zone1 = -1;
   let phase1 = 0;
   let target1: [number, number] = [0, 0];
+  // The spider stays where, and as what, the case put it: a hungry Patrolling spider
+  // would start a rampage at once, and any spider would walk in or out of the threat
+  // radius — the audit isolates the ants' rule.
+  const pin = world.spider === null ? null : { ...world.spider };
   for (let t = 0; t < AUDIT_TICKS; t++) {
     tick(world, []);
+    if (pin !== null && world.spider !== null) Object.assign(world.spider, pin);
     if (t === 0) {
       task1 = world.ants.task[id]!;
       zone1 = world.ants.zone[id]!;
@@ -551,6 +593,7 @@ describe('#377 (V68) — state-space audit: worker × spider × alarm × where �
     'feeding',
     'grace',
     'rampaging',
+    'rampagingOther',
     'chasing',
     'hungryPatrol',
   ];
@@ -565,6 +608,7 @@ describe('#377 (V68) — state-space audit: worker × spider × alarm × where �
   ]);
   const RATIOS: Ratio[] = ['none', 'fight'];
   const tally: Record<Expect, number> = { same: 0, in: 0, hold: 0, stays: 0, held: 0, recruit: 0 };
+  let offThreat = 0; // on a rampage, but not threatening the player's colony: V67
   for (const w of WORKERS) {
     for (const s of SPIDERS) {
       const cases: [Alarm, Where, Ratio, Expect][] = [];
@@ -573,6 +617,7 @@ describe('#377 (V68) — state-space audit: worker × spider × alarm × where �
           for (const ratio of RATIOS) {
             const want = expected(w, s, a, where, ratio);
             tally[want] += 1;
+            if (ON_RAMPAGE.has(s) && !threatened(s, where, w === 'idleFar')) offThreat += 1;
             cases.push([a, where, ratio, want]);
           }
         }
@@ -593,11 +638,15 @@ describe('#377 (V68) — state-space audit: worker × spider × alarm × where �
   it('the audit covers every class', () => {
     expect(tally.in).toBeGreaterThan(20);
     expect(tally.hold).toBeGreaterThan(10);
-    // 3 rampaging spiders × the 12 wheres whose danger does not reach the exit.
-    expect(tally.stays).toBe(36);
-    expect(tally.held).toBe(42); // 3 spiders × 14 wheres, alarm off, ratio none
-    expect(tally.recruit).toBe(42); // 3 spiders × 14 wheres, alarm off, ratio fight
-    expect(tally.same).toBeGreaterThan(1700);
+    // The threatening (spider, where) pairs for the near tiles: the camp target at all
+    // 16 wheres, and the other three on-rampage spiders at the 14 within the radius
+    // (all but 'far' and 'threatOut') — 58. 'stays' leaves out the two wheres whose
+    // danger reaches the exit (atDoor, onPath).
+    expect(tally.stays).toBe(14 + 3 * 12);
+    expect(tally.held).toBe(16 + 3 * 14); // alarm off, ratio none
+    expect(tally.recruit).toBe(16 + 3 * 14); // alarm off, ratio fight
+    expect(tally.same).toBeGreaterThan(2000);
+    expect(offThreat).toBeGreaterThan(200);
   });
 });
 
@@ -708,15 +757,37 @@ function reserve(world: WorldState): number[] {
   return ids;
 }
 
-describe('#377 — the idle reserve goes in when the spider goes hungry, and out after it eats', () => {
+/** Hold the spider hungry and Patrolling at (x, y) for this tick. */
+function holdSpider(world: WorldState, x: number, y: number): void {
+  const sp = world.spider!;
+  sp.state = 'Patrolling';
+  sp.posX = x << FP_SHIFT;
+  sp.posY = y << FP_SHIFT;
+  sp.hungerTicks = HUNGRY;
+  sp.rampageTargetColonyId = -1;
+}
+
+describe('#377 — the idle reserve goes in when the spider threatens its colony, and out after it eats', () => {
   function run(version: number): { world: WorldState; ids: number[] } {
     const world = quiet(version);
     const ids = reserve(world);
-    // It grows hungry at its lair, far from both colonies.
-    world.spider!.hungerTicks = HUNGRY;
-    for (let t = 0; t < 20; t++) tick(world, []);
+    // It grows hungry within RAMPAGE_THREAT_RADIUS_TILES of the player's door.
+    for (let t = 0; t < 20; t++) {
+      holdSpider(world, THREAT_SPOT.x, THREAT_SPOT.y);
+      tick(world, []);
+    }
     return { world, ids };
   }
+
+  it('the fixture: the threat spot is within the radius (with a step to spare), the edge on it', () => {
+    const dist = (t: { x: number; y: number }): number =>
+      Math.abs(t.x - DOOR.x) + Math.abs(t.y - DOOR.y);
+    expect(dist(THREAT_SPOT)).toBeLessThan(RAMPAGE_THREAT_RADIUS_TILES - 1);
+    expect([dist(THREAT_EDGE), dist(THREAT_OUT)]).toEqual([
+      RAMPAGE_THREAT_RADIUS_TILES,
+      RAMPAGE_THREAT_RADIUS_TILES + 1,
+    ]);
+  });
 
   it('V67: the reserve keeps milling on the surface', () => {
     const { world, ids } = run(V67);
@@ -737,13 +808,9 @@ describe('#377 — the idle reserve goes in when the spider goes hungry, and out
 
   it('V68: they stay in while it hunts, however long, and come out once it has eaten', () => {
     const { world, ids } = run(V68);
-    // Keep it hungry and away from the player's door for three shelter windows.
+    // Keep it hungry and threatening for three shelter windows.
     for (let t = 0; t < 3 * SHELTER_COOLDOWN_TICKS; t++) {
-      const sp = world.spider!;
-      sp.state = 'Patrolling';
-      sp.posX = LAIR.x << FP_SHIFT;
-      sp.posY = LAIR.y << FP_SHIFT;
-      sp.hungerTicks = HUNGRY;
+      holdSpider(world, THREAT_SPOT.x, THREAT_SPOT.y);
       tick(world, []);
     }
     for (const id of ids) expect(world.ants.zone[id]).toBe(Zone.Underground);
@@ -768,6 +835,110 @@ describe('#377 — the idle reserve goes in when the spider goes hungry, and out
     for (let t = 0; t < SHELTER_COOLDOWN_TICKS + 5; t++) tick(world, []);
     for (const id of ids) expect(world.ants.zone[id]).toBe(Zone.Surface);
   });
+
+  it('V68: once it no longer threatens the colony (still hungry), the next poke-out lets them out', () => {
+    const { world, ids } = run(V68);
+    for (let t = 0; t < SHELTER_COOLDOWN_TICKS + 5; t++) {
+      holdSpider(world, THREAT_OUT.x, THREAT_OUT.y); // one tile out of the radius
+      tick(world, []);
+    }
+    expect(spiderOnRampage(world)).toBe(true);
+    expect(rampageThreatens(world, world.colonies[P]!)).toBe(false);
+    for (const id of ids) expect(world.ants.zone[id]).toBe(Zone.Surface);
+  });
+});
+
+describe('#377 — a rampage that does not threaten this colony leaves its idle reserve out, as at V67', () => {
+  /** The reserve, 40 ticks, the spider held as `place` puts it each tick. */
+  function run(version: number, place: (world: WorldState) => void): string[] {
+    const world = quiet(version);
+    const ids = reserve(world);
+    const frames: string[] = [];
+    for (let t = 0; t < 40; t++) {
+      place(world);
+      tick(world, []);
+      frames.push(ids.map((id) => fingerprint(world, id)).join('|'));
+    }
+    return frames;
+  }
+
+  it('hungry and patrolling far from its doors: V68 is V67, tick for tick', () => {
+    const place = (w: WorldState): void => holdSpider(w, LAIR.x, LAIR.y);
+    expect(run(V68, place)).toEqual(run(V67, place));
+  });
+
+  it('camping (on its way to) the enemy colony, far from the player: V68 is V67', () => {
+    const place = (w: WorldState): void => {
+      holdSpider(w, LAIR.x, LAIR.y);
+      w.spider!.state = 'Rampaging';
+      w.spider!.rampageTargetColonyId = E;
+    };
+    expect(run(V68, place)).toEqual(run(V67, place));
+  });
+
+  it('just out of the radius (13 tiles), hungry: V68 is V67; at 12 the reserve goes in', () => {
+    const out = (w: WorldState): void => holdSpider(w, THREAT_OUT.x, THREAT_OUT.y);
+    expect(run(V68, out)).toEqual(run(V67, out));
+    const at = (w: WorldState): void => holdSpider(w, THREAT_EDGE.x, THREAT_EDGE.y);
+    expect(run(V68, at)).not.toEqual(run(V67, at));
+  });
+
+  it('camping the player colony from afar (on its way): it threatens — the reserve goes in', () => {
+    const world = quiet(V68);
+    const ids = reserve(world);
+    for (let t = 0; t < 20; t++) {
+      holdSpider(world, LAIR.x, LAIR.y);
+      world.spider!.state = 'Rampaging';
+      world.spider!.rampageTargetColonyId = P;
+      tick(world, []);
+    }
+    for (const id of ids) expect(world.ants.zone[id]).toBe(Zone.Underground);
+  });
+
+  it('rampageThreatens: the camp target, or within the radius of an open entrance — of this colony', () => {
+    const world = quiet(V68);
+    const player = world.colonies[P]!;
+    const enemy = world.colonies[E]!;
+    const at = (x: number, y: number, state: SpiderBehaviorState, target: number): void => {
+      holdSpider(world, x, y);
+      world.spider!.state = state;
+      world.spider!.rampageTargetColonyId = target;
+    };
+    at(LAIR.x, LAIR.y, 'Rampaging', P);
+    expect([rampageThreatens(world, player), rampageThreatens(world, enemy)]).toEqual([
+      true,
+      false,
+    ]);
+    at(LAIR.x, LAIR.y, 'Rampaging', E);
+    expect([rampageThreatens(world, player), rampageThreatens(world, enemy)]).toEqual([
+      false,
+      true,
+    ]);
+    // A stale target on a spider no longer Rampaging is not the camp.
+    at(LAIR.x, LAIR.y, 'Chasing', P);
+    expect(rampageThreatens(world, player)).toBe(false);
+    for (const state of ['Chasing', 'Patrolling', 'Hunting', 'Striking', 'Rampaging'] as const) {
+      at(THREAT_EDGE.x, THREAT_EDGE.y, state, -1);
+      expect([state, rampageThreatens(world, player), rampageThreatens(world, enemy)]).toEqual([
+        state,
+        true,
+        false,
+      ]);
+      at(THREAT_OUT.x, THREAT_OUT.y, state, -1);
+      expect([state, rampageThreatens(world, player)]).toEqual([state, false]);
+    }
+    // A closed entrance does not count.
+    at(THREAT_EDGE.x, THREAT_EDGE.y, 'Patrolling', -1);
+    player.entrances[0]!.isOpen = false;
+    expect(rampageThreatens(world, player)).toBe(false);
+    player.entrances[0]!.isOpen = true;
+    // Not on a rampage (fed), or below V68: never.
+    world.spider!.hungerTicks = 0;
+    expect(rampageThreatens(world, player)).toBe(false);
+    world.spider!.hungerTicks = HUNGRY;
+    world.simVersion = V67;
+    expect(rampageThreatens(world, player)).toBe(false);
+  });
 });
 
 describe('#377 — it never walks toward the spider', () => {
@@ -789,12 +960,28 @@ describe('#377 — it never walks toward the spider', () => {
       }
     }
     expect(ids.map((id) => [tileX(world, id), tileY(world, id)])).toEqual(start);
-    // It moves on to the enemy's door, far away; the trail at ours decays.
-    const sp = world.spider!;
-    sp.posX = 104 << FP_SHIFT;
-    sp.posY = 64 << FP_SHIFT;
-    sp.rampageTargetColonyId = E;
-    for (let t = 0; t < 200; t++) tick(world, []);
+    // It moves on to camp the enemy's door, far away: it no longer threatens the
+    // player's colony, whose reserve stays out (V67's milling).
+    for (let t = 0; t < 200; t++) {
+      const sp = world.spider!;
+      sp.state = 'Rampaging';
+      sp.posX = 104 << FP_SHIFT;
+      sp.posY = 64 << FP_SHIFT;
+      sp.rampageTargetColonyId = E;
+      sp.rampageStartTick = world.tick;
+      tick(world, []);
+    }
+    expect(rampageThreatens(world, world.colonies[P]!)).toBe(false);
+    for (const id of ids) {
+      expect(world.ants.zone[id]).toBe(Zone.Surface);
+      expect(world.ants.fleeShelterUntilTick[id]).toBe(-1);
+    }
+    // Back, hungry, off our door but within the threat radius, our door's trail long
+    // gone: they go in.
+    for (let t = 0; t < 60; t++) {
+      holdSpider(world, THREAT_SPOT.x, THREAT_SPOT.y);
+      tick(world, []);
+    }
     for (const id of ids) {
       expect(world.ants.zone[id]).toBe(Zone.Underground);
       expect(world.ants.fleeShelterUntilTick[id]!).toBeGreaterThan(0);
@@ -854,6 +1041,7 @@ describe('#377 — it never walks toward the spider', () => {
     }
     const id = spawn(world, E, 104, 56, Zone.Surface);
     setSpider(world, 'rampaging', LAIR.x, LAIR.y);
+    world.spider!.rampageTargetColonyId = E; // on its way to camp the enemy colony
     let downAt = -1;
     for (let t = 0; t < 80; t++) {
       tick(world, []);
@@ -966,8 +1154,8 @@ describe('#377 — the alarm and the rampage', () => {
     expect(world.ants.zone[forager]).toBe(Zone.Underground);
     colony.alarmActive = false; // the all-clear
     for (let t = 0; t < SHELTER_COOLDOWN_TICKS + 5; t++) {
-      world.spider!.posX = LAIR.x << FP_SHIFT;
-      world.spider!.posY = LAIR.y << FP_SHIFT;
+      world.spider!.posX = THREAT_SPOT.x << FP_SHIFT;
+      world.spider!.posY = THREAT_SPOT.y << FP_SHIFT;
       world.spider!.state = 'Patrolling';
       world.spider!.hungerTicks = HUNGRY;
       tick(world, []);
@@ -984,8 +1172,8 @@ describe('#377 — a recruited shelterer leaves the shelter for its new work', (
     const ids = reserve(world);
     world.spider!.hungerTicks = HUNGRY;
     for (let t = 0; t < 20; t++) {
-      world.spider!.posX = LAIR.x << FP_SHIFT;
-      world.spider!.posY = LAIR.y << FP_SHIFT;
+      world.spider!.posX = THREAT_SPOT.x << FP_SHIFT;
+      world.spider!.posY = THREAT_SPOT.y << FP_SHIFT;
       world.spider!.state = 'Patrolling';
       world.spider!.hungerTicks = HUNGRY;
       tick(world, []);
@@ -1005,8 +1193,8 @@ describe('#377 — a recruited shelterer leaves the shelter for its new work', (
     const ids = reserve(world);
     world.spider!.hungerTicks = HUNGRY;
     for (let t = 0; t < 20; t++) {
-      world.spider!.posX = LAIR.x << FP_SHIFT;
-      world.spider!.posY = LAIR.y << FP_SHIFT;
+      world.spider!.posX = THREAT_SPOT.x << FP_SHIFT;
+      world.spider!.posY = THREAT_SPOT.y << FP_SHIFT;
       world.spider!.state = 'Patrolling';
       world.spider!.hungerTicks = HUNGRY;
       tick(world, []);
@@ -1047,7 +1235,7 @@ describe('#377 — the dash and the hold, in detail', () => {
     const world = quiet(V68);
     const a = spawn(world, P, 30, 64, Zone.Surface);
     const b = spawn(world, P, 30, 64, Zone.Surface);
-    setSpider(world, 'hungryPatrol', LAIR.x, LAIR.y);
+    setSpider(world, 'hungryPatrol', THREAT_SPOT.x, THREAT_SPOT.y);
     tick(world, []);
     for (const id of [a, b]) {
       expect(world.ants.fleeShelterUntilTick[id]).toBe(0);
@@ -1055,14 +1243,18 @@ describe('#377 — the dash and the hold, in detail', () => {
     }
   });
 
-  it('rampageShelterDashRoutes: an Idle surface dasher with a target, alarm off, on a rampage', () => {
+  it('rampageShelterDashRoutes: an Idle surface dasher with a target, alarm off, its colony threatened', () => {
     const world = quiet(V68);
-    world.spider!.hungerTicks = HUNGRY;
+    holdSpider(world, THREAT_SPOT.x, THREAT_SPOT.y);
     const id = spawn(world, P, 27, 64, Zone.Surface);
     world.ants.fleeShelterUntilTick[id] = 0;
     world.ants.targetPosX[id] = center(DOOR.x);
     world.ants.targetPosY[id] = center(DOOR.y);
     expect(rampageShelterDashRoutes(world, id)).toBe(true);
+    // A rampage that does not threaten its colony: not a rampage dasher.
+    holdSpider(world, LAIR.x, LAIR.y);
+    expect(rampageShelterDashRoutes(world, id)).toBe(false);
+    holdSpider(world, THREAT_SPOT.x, THREAT_SPOT.y);
     // The colony alarm governs its civilians as at V67 (the V42 straight line).
     world.colonies[P]!.alarmActive = true;
     expect(rampageShelterDashRoutes(world, id)).toBe(false);
@@ -1120,7 +1312,7 @@ describe('#377 — the choice between doors', () => {
     const grid = world.undergroundGrids[P]!;
     for (let y = 0; y <= TUNNEL_Y; y++) ugSet(grid, 36, y, UndergroundTileState.Open);
     colony.digFlowFieldDirty = true;
-    world.spider!.hungerTicks = HUNGRY;
+    holdSpider(world, THREAT_SPOT.x, THREAT_SPOT.y);
     return { world, eastId };
   }
 
@@ -1157,7 +1349,8 @@ describe('#377 — the choice between doors', () => {
     });
     for (let x = 105; x <= 114; x++) expect(canEnterSurfaceTile(world, x, 57)).toBe(true);
     const id = spawn(world, E, 105, 57, Zone.Surface);
-    setSpider(world, 'hungryPatrol', LAIR.x, LAIR.y);
+    setSpider(world, 'rampaging', LAIR.x, LAIR.y);
+    world.spider!.rampageTargetColonyId = E; // on its way to camp the enemy colony
     tick(world, []);
     expect([world.ants.targetPosX[id], world.ants.targetPosY[id]]).toEqual([
       center(114),
@@ -1177,10 +1370,10 @@ describe('#377 — a door reading real danger that is not the spider (an enemy k
     world.ants.fleeShelterUntilTick[id] === -1 &&
     world.ants.targetPosX[id] === -1;
 
-  it('the spider far: the worker holds (the V34 rule: never a door that reads real danger)', () => {
+  it('the spider out of the way: the worker holds (the V34 rule: never a door that reads real danger)', () => {
     const world = quiet(V68);
     const id = spawn(world, P, NEAR_WORKER.x, NEAR_WORKER.y, Zone.Surface);
-    setSpider(world, 'hungryPatrol', LAIR.x, LAIR.y);
+    setSpider(world, 'hungryPatrol', THREAT_SPOT.x, THREAT_SPOT.y);
     killAtDoor(world);
     tick(world, []);
     expect(holds(world, id)).toBe(true);

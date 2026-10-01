@@ -42,7 +42,7 @@ export { tickAntMovement } from './ant-movement.js';
 export { NO_FREE_HOSTILE, invaderHuntStep } from './invader-retarget.js';
 export {
   tickIdleReserveAndFlee,
-  rampageShelterActive,
+  rampageThreatens,
   shelterRetreatDir,
   shelterPassesThroughFriends,
 } from './idle-reserve.js';

@@ -1,8 +1,9 @@
 // #377 (V68) — the rampage shelter across a save/load.
 //
 // V68 adds no serialized field: an idle worker's shelter is the V34 flee column
-// (`fleeShelterUntilTick`), and the rampage is read from the spider's saved state
-// (state, hungerTicks), world.tick and difficulty. So a world saved mid-rampage —
+// (`fleeShelterUntilTick`), and the rampage and its threat are read from the spider's
+// saved state (state, hungerTicks, rampageTargetColonyId, position), world.tick and
+// difficulty. So a world saved mid-rampage —
 // idle workers dashing in, others sheltering at the shaft top — must load and
 // continue hash-for-hash with the world that was never saved, through the rampage
 // and past the spider's meal (when they come back out). Lives in platform/ for the
@@ -15,7 +16,7 @@ import { tick } from '../sim/tick.js';
 import { allocateEntityId, SIM_VERSION_V68_RAMPAGE_SHELTER } from '../sim/types.js';
 import type { WorldState } from '../sim/types.js';
 import { initAnt } from '../sim/ant/ant-store.js';
-import { rampageShelterActive } from '../sim/ant/ant-system.js';
+import { rampageShelterActive, rampageThreatens } from '../sim/ant/idle-reserve.js';
 import { AntTask } from '../sim/enums.js';
 import { Zone } from '../sim/terrain.js';
 import { FP_SHIFT, FP_ONE } from '../sim/fixed.js';
@@ -31,8 +32,9 @@ import {
 const P = PLAYER_COLONY_ID;
 const center = (t: number): number => (t << FP_SHIFT) + (FP_ONE >> 1);
 
-/** Seed 7 at V68, past the grace, a hungry spider at its lair, a 0:0 ratio, and ten
- *  idle workers east of the player's door (24,64), 2 to 14 tiles out. */
+/** Seed 7 at V68, past the grace, a hungry spider at its lair on its way to camp the
+ *  player's colony (so it threatens it: the camp target, saved state), a 0:0 ratio,
+ *  and ten idle workers east of the player's door (24,64), 2 to 14 tiles out. */
 function world(): { w: WorldState; ids: number[] } {
   const w = createScenario(7, 'Normal');
   w.simVersion = SIM_VERSION_V68_RAMPAGE_SHELTER;
@@ -41,6 +43,10 @@ function world(): { w: WorldState; ids: number[] } {
   w.tick = SPIDER_GRACE_TICKS + 500;
   w.spider!.hungerTicks = SPIDER_HUNGER_THRESHOLD_TICKS[1] + 10;
   w.spider!.nextHuntTick = w.tick + 100_000;
+  w.spider!.state = 'Rampaging';
+  w.spider!.rampageTargetColonyId = P;
+  w.spider!.rampageEntranceId = -1;
+  w.spider!.rampageStartTick = w.tick;
   // A 0:0 ratio: nothing recruits the idle workers away.
   w.colonies[P]!.targetRatio = { forage: 0, fight: 0 };
   const ids: number[] = [];
@@ -71,6 +77,7 @@ describe('#377 (V68) — a world saved mid-rampage continues exactly as the unsa
     // Five ticks in: some idle workers dashing in (phase 0), some already below.
     for (let t = 0; t < 5; t++) tick(live, []);
     expect(rampageShelterActive(live)).toBe(true);
+    expect(rampageThreatens(live, live.colonies[P]!)).toBe(true);
     const phases = ids.map((id) => live.ants.fleeShelterUntilTick[id]!);
     expect(phases.some((p) => p === 0)).toBe(true);
     const loaded = deserializeWorldState(JSON.parse(JSON.stringify(serializeWorldState(live))));
@@ -80,9 +87,11 @@ describe('#377 (V68) — a world saved mid-rampage continues exactly as the unsa
     const lairY = live.spider!.lairTileY;
     for (let t = 1; t <= 3 * SHELTER_COOLDOWN_TICKS; t++) {
       if (t < 2 * SHELTER_COOLDOWN_TICKS) {
-        // Keep it hungry at its lair, far from both doors, in both worlds alike.
+        // Keep it hungry at its lair, on its way to camp the player's colony, in both
+        // worlds alike.
         for (const w of [live, loaded]) {
-          w.spider!.state = 'Patrolling';
+          w.spider!.state = 'Rampaging';
+          w.spider!.rampageTargetColonyId = P;
           w.spider!.posX = lairX << FP_SHIFT;
           w.spider!.posY = lairY << FP_SHIFT;
         }

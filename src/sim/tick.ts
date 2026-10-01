@@ -82,7 +82,7 @@ import {
   updateFightAntTargets,
   fighterWalksHomeToEat,
   tickIdleReserveAndFlee,
-  rampageShelterActive,
+  rampageThreatens,
   updateRaiders,
   tickRaidActions,
   updateBlockaders,
@@ -1289,12 +1289,12 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // else. See SIM_VERSION_V65_ALARM_INVASION.
     const alarmRecruitsFighters =
       alarmRecallActive && world.simVersion >= SIM_VERSION_V65_ALARM_INVASION;
-    // #377 (V68) — while the spider is on a rampage an Idle worker sheltering from it
-    // stays recruitable (the V34 skip below does not apply): a rampage can last
-    // thousands of ticks, and the ratio must not wait for it. With the alarm off it
-    // takes any role; under the alarm the V65 rule above already recruits it, into
+    // #377 (V68) — while the spider on a rampage threatens this colony an Idle worker
+    // sheltering stays recruitable (the V34 skip below does not apply): a rampage can
+    // last thousands of ticks, and the ratio must not wait for it. With the alarm off
+    // it takes any role; under the alarm the V65 rule above already recruits it, into
     // fighting only. Always false below V68.
-    const rampageRecruitsShelterers = rampageShelterActive(world);
+    const rampageRecruitsShelterers = rampageThreatens(world, colony);
     const undergroundGrid10a = world.undergroundGrids[colony.colonyId];
     const rawDigDemand =
       undergroundGrid10a !== undefined
@@ -1394,7 +1394,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       // in reserve; it resumes on the all-clear.
       // #373 (V65): under the alarm a shelterer is recruited like any other worker
       // (only into fighting — below); step 15b ends its shelter the same tick.
-      // #377 (V68): while the spider is on a rampage so is any Idle shelterer (from
+      // #377 (V68): while the spider on a rampage threatens this colony so is any Idle shelterer (from
       // the rampage, a V34 danger flee, or a #373 retreat), into any role: a new
       // fighter, nurse or digger leaves the shelter the same tick (15b's top
       // guard), and a new forager's poke-out falls due the same tick (below) — it

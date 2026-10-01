@@ -1546,8 +1546,14 @@ export const SIM_VERSION_V67_NO_MATCH_TIMEOUT = 67 as const;
  * (every colony alike — CLNY-08), while the spider is ON A RAMPAGE (spider.ts
  * spiderOnRampage: out hunting hungry, from the moment it grows hungry until it eats
  * or dies; the window the rampage caption covers, of which the Rampaging state is
- * only the entrance-camping part — a camper diverts to chase any ant that comes near):
- *   - Every Idle worker on the surface of a colony whose alarm is off goes in. Only
+ * only the entrance-camping part — a camper diverts to chase any ant that comes near)
+ * AND THREATENS THE COLONY (idle-reserve.ts rampageThreatens: it is camping, or on
+ * its way to camp, one of the colony's entrances — Rampaging with
+ * rampageTargetColonyId the colony — or it is within RAMPAGE_THREAT_RADIUS_TILES,
+ * the spider's hunt-search radius, of one of the colony's open entrances, whatever it
+ * is doing, a chase between camps included). A colony it is not threatening keeps its
+ * idle reserve out, exactly as at V67. While it threatens one:
+ *   - Every Idle worker on the surface of the colony, if its alarm is off, goes in. Only
  *     Idle workers: foragers (searchers, carriers, returners) keep working, under the
  *     V34 danger flee as before; fighters, nurses and diggers are untouched. It heads
  *     for the nearest of its colony's open entrances by path (the surface goal field)
@@ -1571,11 +1577,11 @@ export const SIM_VERSION_V67_NO_MATCH_TIMEOUT = 67 as const;
  *   - Once down it shelters at the shaft top, as a V34 flee shelterer does, and an
  *     Idle worker reaching the shaft top from below is held there the same way (the
  *     C1 alarm hook). The poke-out does not let an Idle shelterer out while the
- *     rampage lasts, alarm or not; after it, the first poke-out whose exit reads no
+ *     threat lasts, alarm or not; after it, the first poke-out whose exit reads no
  *     real danger does, as before — the shelter timer and the DangerTrail's decay
  *     are the hold-off. The #373 shelter retreat is unchanged, except that 10a may
  *     now recruit a retreating Idle shelterer (below).
- *   - Step 10a still recruits Idle shelterers while the rampage lasts and the alarm is
+ *   - Step 10a still recruits Idle shelterers while the threat lasts and the alarm is
  *     off (the V34 skip of a worker on the flee timer does not apply to any Idle
  *     shelterer then — from the rampage, a V34 danger flee or a #373 retreat), into
  *     any role the allocation asks for: a new fighter, nurse or digger leaves the
