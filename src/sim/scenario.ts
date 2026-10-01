@@ -10,7 +10,12 @@
 // No floats — all positions use fixed-point (FP_SHIFT=8).
 
 import type { WorldState, SpiderState } from './types.js';
-import { createWorldState, allocateEntityId } from './types.js';
+import {
+  createWorldState,
+  allocateEntityId,
+  LATEST_SIM_VERSION,
+  SIM_VERSION_V69_FOOD_FAIRNESS,
+} from './types.js';
 import { createDefaultAIStateRecord, tierIndex } from './ai-state.js';
 import {
   createSurfaceGrid,
@@ -41,6 +46,7 @@ import {
 } from './surface-features.js';
 import { Rng } from './rng.js';
 import { FP_SHIFT } from './fixed.js';
+import { ensureFoodNearEachColony } from './food-fairness.js';
 import { AntTask, PheromoneType } from './enums.js';
 import { ensureSurfaceGoalField, SURFACE_GOAL_UNREACHED } from './surface-routing.js';
 import {
@@ -303,9 +309,10 @@ function _placeSpider(world: WorldState): SpiderState {
   // [margin, size-1-margin] instead of the full [0, size-1] grid, so the spider
   // never spawns inside the margin band the per-tick clamp (tickSpiderV23 step 6b)
   // enforces during play. Without this the spider could spawn at the very edge and
-  // jump inward on its first tick. Scenario generation is unversioned (always
-  // LATEST, like the rest of createScenario), so no simVersion gate here — only the
-  // runtime movement clamp is gated, for save-replay determinism.
+  // jump inward on its first tick. The lair is placed the same at every simVersion
+  // (only the V69 food-fairness pass of createScenario is version-gated, #395), so no
+  // simVersion gate here — only the runtime movement clamp is gated, for save-replay
+  // determinism.
   const spanX = SURFACE_GRID_WIDTH - 2 * SPIDER_EDGE_MARGIN_TILES;
   const spanY = SURFACE_GRID_HEIGHT - 2 * SPIDER_EDGE_MARGIN_TILES;
 
@@ -395,20 +402,28 @@ function _placeSpider(world: WorldState): SpiderState {
  *   5. Create colony 1 (player) with queen + STARTING_WORKERS workers
  *   6. Create colony 2 (enemy) with queen + STARTING_WORKERS workers
  *   7. Phase 3 colony extensions assigned caller-side per PRD §2a
+ *  7b. #395 (V69): every colony gets food of its own near home (food-fairness.ts)
  *   8. Create pheromone grids for each colony (FoodTrail + DangerTrail, both zones)
  *   9. Write back rngState
  *
  * @param seed       - Mulberry32 seed for deterministic generation.
  * @param difficulty - S5 player-selected difficulty tier. Stored on world.difficulty.
  *                     Defaults to 'Normal' for backward-compatible call sites.
+ * @param simVersion - #395: the simVersion of the world to create, stored on
+ *                     world.simVersion. A new game takes the default, LATEST. A replay
+ *                     from seed passes the recorded world's version, because map
+ *                     generation itself is version-gated (V69 food fairness): the
+ *                     same seed generates the V68 map at V68 and below.
  */
 export function createScenario(
   seed: number,
   difficulty: 'Easy' | 'Normal' | 'Hard' = 'Normal',
+  simVersion: number = LATEST_SIM_VERSION,
 ): WorldState {
   // --- Step 1: Create base WorldState ---
   const world = createWorldState(seed);
   world.difficulty = difficulty;
+  world.simVersion = simVersion;
 
   // Reconstruct PRNG from seed-derived rngState (PRD §4 integration contract)
   const rng = new Rng(world.rngState);
@@ -462,6 +477,11 @@ export function createScenario(
   // the real canonical root (the first colony's entrance) rather than relying on
   // the fallback happening to equal it (ship-review advisory).
   world.surfaceComponentMask = null;
+
+  // --- Step 7b (#395, V69): every colony gets food of its own near home. ---
+  // After the colonies, so it reads where each one actually is (its open entrances).
+  // Moves at most one pile per colony that lacks it, drawing from the same rng.
+  if (world.simVersion >= SIM_VERSION_V69_FOOD_FAIRNESS) ensureFoodNearEachColony(world, rng);
 
   // PR 4 — assert the connectivity invariant AT WORLD-GEN (not only on save
   // load): every colony entrance (initColony places one at each root start tile,

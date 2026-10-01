@@ -675,6 +675,27 @@ export const FOOD_PILE_MIN_SEPARATION = 12;
 /** Phase 7 PRD §6a — Maximum placement attempts before giving up on a food pile. */
 export const FOOD_PILE_MAX_ATTEMPTS = 1000;
 
+/**
+ * #395 (V69) — map generation gives every colony a food pile of its own within this
+ * many tiles of one of its open entrances, by surface path (food-fairness.ts
+ * `ensureFoodNearEachColony`). 25 is the first search wave's leash
+ * (`SEARCH_LEASH_RADII[0]`): a forager searching from home on its first excursion
+ * ranges this far from the entrance before it turns back, so a pile inside it is
+ * one the colony's first foragers can find.
+ */
+export const FOOD_FAIRNESS_RADIUS_TILES = 25;
+
+/**
+ * #395 (V69) — the food (in pickups) a colony's own piles within
+ * FOOD_FAIRNESS_RADIUS_TILES must hold between them, and the least a pile moved in
+ * to make it up holds. 40 pickups is 80 food units, the queen's appetite
+ * (QUEEN_FOOD_PER_TICK) for about eight and a half minutes. Measured on V68 and V69
+ * maps (Normal seeds 0-399, a scripted standard opening): a colony whose only pile
+ * within 25 tiles held fewer than 40 pickups starved in the opening 13 times in 131,
+ * one whose lone pile held 40 or more 5 times in 713.
+ */
+export const FOOD_FAIRNESS_MIN_PICKUPS = 40;
+
 // ---------------------------------------------------------------------------
 // Issue #112 — Food pile depletion + respawn (strategic survival mechanic)
 // ---------------------------------------------------------------------------

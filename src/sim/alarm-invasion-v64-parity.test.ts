@@ -76,8 +76,7 @@ function fnv(s: string): string {
 
 describe('#373 — pinned V64: the alarm and its shelterers during an invasion are unchanged below V65', () => {
   it('recruitment under the alarm, shelterers with intruders below, the all-clear', () => {
-    const world = createScenario(7, 'Normal');
-    world.simVersion = V64;
+    const world = createScenario(7, 'Normal', V64);
     world.spider = null;
     const P = PLAYER_COLONY_ID;
     const E = ENEMY_COLONY_ID;

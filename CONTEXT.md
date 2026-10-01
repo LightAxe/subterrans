@@ -266,6 +266,13 @@ _Avoid_: using "scent" to mean pheromone.
 **Food pile** (a `Pile` record in the food store):
 A finite surface food source foragers harvest. When its pickups run out the pile is
 **removed**; new piles spawn elsewhere over time (the same pile does not regenerate).
+Since **#395 (simVersion V69)** map generation gives every colony food of its own
+near home: piles holding at least `FOOD_FAIRNESS_MIN_PICKUPS` (40) pickups between
+them within `FOOD_FAIRNESS_RADIUS_TILES` (25) tiles, by surface path, of one of its
+open entrances. A pile is a colony's own when no other colony's entrance is as near
+it. A colony short of that has the nearest unclaimed pile of at least 40 pickups
+moved into that range (same pile, same size: the map's pile count and food total
+do not change). Piles that spawn during play are placed as before.
 _Avoid_: food node, resource, deposit.
 
 **Flow field**:

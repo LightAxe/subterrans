@@ -714,6 +714,32 @@ export function spawnPile(
 }
 
 /**
+ * #395 — move the pile in `slot` to surface tile (x, y). It keeps its id, its size
+ * and its place in creation order. Returns false, changing nothing, when `slot`
+ * holds no pile, (x, y) is off the map, or another pile is on (x, y).
+ *
+ * For world generation (food-fairness.ts `ensureFoodNearEachColony`). As for
+ * `spawnPile`, the caller owns every other placement rule (walkable + in the
+ * surface component, spacing).
+ */
+export function movePile(world: WorldState, slot: number, x: number, y: number): boolean {
+  const store = world.food;
+  if (slot < 0 || slot >= store.kind.length || store.kind[slot] !== FoodKind.Pile) return false;
+  if ((x | 0) !== x || (y | 0) !== y) return false;
+  if (x < 0 || y < 0 || x >= SURFACE_GRID_WIDTH || y >= SURFACE_GRID_HEIGHT) return false;
+  const to = pileAtTile(world, x, y);
+  if (to === slot) return true;
+  if (to !== -1) return false;
+  const from = store.tileY[slot]! * SURFACE_GRID_WIDTH + store.tileX[slot]!;
+  // Tiles are unique among piles, so the old tile is left with no pile.
+  if (store.surfacePileAt[from] === slot + 1) store.surfacePileAt[from] = 0;
+  store.tileX[slot] = x;
+  store.tileY[slot] = y;
+  store.surfacePileAt[y * SURFACE_GRID_WIDTH + x] = slot + 1;
+  return true;
+}
+
+/**
  * #352 — the food a `topUpOrSpawnCorpsePile` at surface tile (x, y) would keep, at
  * most: the room left in the pile there (PILE_MAX_FP less its initial size), or,
  * with none, a whole new pile's worth when a pile may be made there (under

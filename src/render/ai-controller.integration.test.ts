@@ -378,8 +378,8 @@ interface OpeningTrace {
 }
 
 function traceOpening(simVersion: number, ticks: number): OpeningTrace {
-  const world = createScenario(404, 'Normal');
-  world.simVersion = simVersion;
+  // #395: created at the pinned version, so the map is the one it had then.
+  const world = createScenario(404, 'Normal', simVersion);
   const colony = world.colonies[ENEMY_COLONY_ID]!;
   const out: OpeningTrace = { queenAt: null, storageAt: null, parkedCarrierTicks: 0 };
   for (let t = 0; t < ticks; t++) {
@@ -520,8 +520,8 @@ interface NestLayout {
 }
 
 function traceNestLayout(simVersion: number, ticks: number): NestLayout {
-  const world = createScenario(404, 'Normal');
-  world.simVersion = simVersion;
+  // #395: created at the pinned version, so the map is the one it had then.
+  const world = createScenario(404, 'Normal', simVersion);
   const colony = world.colonies[ENEMY_COLONY_ID]!;
   const out: NestLayout = {
     queenRow: null,

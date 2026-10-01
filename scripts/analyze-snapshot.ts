@@ -172,22 +172,27 @@ const replayStart = Date.now();
 const snapshotDifficulty = (debug.snapshot as { difficulty?: unknown }).difficulty;
 const replayDifficulty: 'Easy' | 'Normal' | 'Hard' =
   snapshotDifficulty === 'Easy' || snapshotDifficulty === 'Hard' ? snapshotDifficulty : 'Normal';
-const replay = createScenario(debug.seed, replayDifficulty);
 // Restore simVersion from snapshot so version-gated paths (tiebreaks, brood modifier, etc.)
-// match the original session. createScenario always starts at LATEST_SIM_VERSION; without this
-// a pre-V22 snapshot replayed on V22 code would have V22 paths active, causing divergence.
+// match the original session; without this a pre-V22 snapshot replayed on V22 code would
+// have V22 paths active, causing divergence. #395: the version goes INTO createScenario,
+// because map generation is version-gated too (V69 food fairness) — a V68 snapshot must
+// replay from the V68 map.
 const snapshotSimVersion = (debug.snapshot as { simVersion?: unknown }).simVersion;
-if (
+const replaySimVersion =
   typeof snapshotSimVersion === 'number' &&
   Number.isInteger(snapshotSimVersion) &&
   snapshotSimVersion > 0
-) {
-  replay.simVersion = snapshotSimVersion;
-} else {
+    ? snapshotSimVersion
+    : null;
+if (replaySimVersion === null) {
   console.warn(
     `[analyze-snapshot] Could not restore simVersion from snapshot (got ${String(snapshotSimVersion)}); replay runs at LATEST_SIM_VERSION — byte-equality may fail for pre-V22 captures.`,
   );
 }
+const replay =
+  replaySimVersion !== null
+    ? createScenario(debug.seed, replayDifficulty, replaySimVersion)
+    : createScenario(debug.seed, replayDifficulty);
 
 // #296 — regroup by the tick each command was DRAINED on, not the tick it was
 // issued on. For player/AI input the two are the same; for a command the sim

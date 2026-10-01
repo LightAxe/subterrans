@@ -25,6 +25,7 @@ import {
   depositIntoPool,
   drainPile,
   forEachPile,
+  movePile,
   freeChamberStock,
   isFoodChamberDepositable,
   naturalPileCount,
@@ -48,7 +49,9 @@ import {
 } from './food-api.js';
 import {
   addChamberForTest,
+  assertFoodStoreInvariants,
   clearPilesForTest,
+  pilesForTest,
   setColonyFoodForTest,
   type TestChamber,
 } from './food-test-utils.js';
@@ -411,6 +414,45 @@ describe('food-api — piles', () => {
     }
     expect(spawnPile(world, 9999, 0, 1, P, 0)).toBe(-1);
     expect(pileCount(world)).toBe(FOOD_PILE_HARD_CAP);
+  });
+
+  it('movePile moves a pile to a free tile, keeping its id, size and place in creation order (#395)', () => {
+    const { world, tiles } = emptyPileWorld(4);
+    const a = spawnPile(world, 60, tiles[0]!.x, tiles[0]!.y, 40 * P, 0);
+    const b = spawnPile(world, 61, tiles[1]!.x, tiles[1]!.y, 27 * P, 0);
+    const c = spawnPile(world, 62, tiles[2]!.x, tiles[2]!.y, 29 * P, 0);
+    const to = tiles[3]!;
+    expect(movePile(world, b, to.x, to.y)).toBe(true);
+    expect([pileTileX(world, b), pileTileY(world, b)]).toEqual([to.x, to.y]);
+    expect(pileAtTile(world, to.x, to.y)).toBe(b);
+    expect(pileAtTile(world, tiles[1]!.x, tiles[1]!.y)).toBe(-1);
+    expect(pileFoodId(world, b)).toBe(61);
+    expect(pileAmountFp(world, b)).toBe(27 * P);
+    expect(pileInitialFp(world, b)).toBe(27 * P);
+    expect([pileSlotAt(world, 0), pileSlotAt(world, 1), pileSlotAt(world, 2)]).toEqual([a, b, c]);
+    expect(pileCount(world)).toBe(3);
+    assertFoodStoreInvariants(world);
+    // Onto its own tile: a no-op.
+    expect(movePile(world, b, to.x, to.y)).toBe(true);
+    expect(pileAtTile(world, to.x, to.y)).toBe(b);
+  });
+
+  it('movePile refuses an occupied or off-map tile and a slot with no pile, changing nothing', () => {
+    const { world, tiles } = emptyPileWorld(3);
+    const a = spawnPile(world, 63, tiles[0]!.x, tiles[0]!.y, 20 * P, 0);
+    spawnPile(world, 64, tiles[1]!.x, tiles[1]!.y, 20 * P, 0);
+    const before = JSON.stringify(pilesForTest(world));
+    expect(movePile(world, a, tiles[1]!.x, tiles[1]!.y)).toBe(false);
+    expect(movePile(world, a, -1, 0)).toBe(false);
+    expect(movePile(world, a, 0, SURFACE_GRID_HEIGHT)).toBe(false);
+    expect(movePile(world, a, SURFACE_GRID_WIDTH, 0)).toBe(false);
+    expect(movePile(world, -1, tiles[2]!.x, tiles[2]!.y)).toBe(false);
+    const free = world.food.kind.length - 1; // the store's last slot: no pile there
+    expect(movePile(world, free, tiles[2]!.x, tiles[2]!.y)).toBe(false);
+    expect(movePile(world, world.colonies[1]!.poolSlot, tiles[2]!.x, tiles[2]!.y)).toBe(false);
+    expect(JSON.stringify(pilesForTest(world))).toBe(before);
+    expect(pileAtTile(world, tiles[0]!.x, tiles[0]!.y)).toBe(a);
+    assertFoodStoreInvariants(world);
   });
 
   it('pileAtTile / pileSlotById find a pile or return -1', () => {
