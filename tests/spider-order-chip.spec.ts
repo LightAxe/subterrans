@@ -45,6 +45,31 @@ async function advanceTicks(page: Page, n = 3): Promise<void> {
   await expect.poll(() => simTick(page), { timeout: 15_000 }).toBeGreaterThan(from + n);
 }
 
+type ClockHook = {
+  freezeCaptionClock?: (frozen: boolean) => void;
+  advanceCaptionClock?: (ms: number) => void;
+};
+
+/** Stop (or restart) UIScene's clock, which also runs the tooltip's show delay and
+ *  its mouse-out grace (UIScene.freezeCaptionClock; nothing in the sim runs on it). */
+async function freezeCaptionClock(page: Page, frozen: boolean): Promise<void> {
+  await page.evaluate((f: boolean) => {
+    const t = (window as unknown as { __phase9_test?: ClockHook }).__phase9_test;
+    if (t?.freezeCaptionClock === undefined) throw new Error('no freezeCaptionClock hook');
+    t.freezeCaptionClock(f);
+  }, frozen);
+}
+
+/** With UIScene's clock stopped, run it forward `ms` of scene time in fixed steps
+ *  (UIScene.advanceCaptionClock): deterministic, unlike a wall-clock wait. */
+async function advanceCaptionClock(page: Page, ms: number): Promise<void> {
+  await page.evaluate((m: number) => {
+    const t = (window as unknown as { __phase9_test?: ClockHook }).__phase9_test;
+    if (t?.advanceCaptionClock === undefined) throw new Error('no advanceCaptionClock hook');
+    t.advanceCaptionClock(m);
+  }, ms);
+}
+
 async function chipGeometry(page: Page) {
   return await page.evaluate(() => {
     const t = (
@@ -107,8 +132,8 @@ test.describe('#400 — spider-order chip', () => {
     await expect.poll(() => ui(page, 'spiderOrderChip')).toBe(false);
     // …while the LIVE order stays on: the sim has not run. (If this reads false
     // while paused, the hook is publishing the projection, and the assertions
-    // below would only prove the command reached the queue.)
-    await page.waitForTimeout(400);
+    // below would only prove the command reached the queue. The hook publishes the
+    // live flag and the chip in the same frame, so no wait is needed here.)
     expect(await ui(page, 'spiderPriorityActive')).toBe(true);
 
     await page.keyboard.press(' '); // resume — the queued clear drains
@@ -143,30 +168,58 @@ test.describe('#400 — spider-order chip', () => {
     await expect.poll(() => ui(page, 'spiderOrderChip')).toBe(false);
     await expect.poll(tooltip).toBeNull();
 
-    // 2. Click before the tooltip's show delay ends: it must not appear afterwards
-    //    over the band the chip left.
-    await page.mouse.move(cx - 300, cy);
-    expect(await tapSpider(page)).toBe(true);
-    await expect.poll(() => ui(page, 'spiderOrderChip')).toBe(true);
-    await page.mouse.move(cx, cy);
-    await page.mouse.down();
-    await page.mouse.up();
-    await expect.poll(() => ui(page, 'spiderOrderChip')).toBe(false);
-    await page.waitForTimeout(900); // past the 400 ms show delay
-    expect(await tooltip()).toBeNull();
+    // Parts 2 and 3 run on a stopped UIScene clock, advanced by hand: the tooltip's
+    // 400 ms show delay and 1.5 s mouse-out grace are timers on that clock, so no
+    // wall-clock wait decides the outcome.
+    await freezeCaptionClock(page, true);
+    try {
+      // 2. Click before the tooltip's show delay ends: it must not appear afterwards
+      //    over the band the chip left.
+      await page.mouse.move(cx - 300, cy);
+      expect(await tapSpider(page)).toBe(true);
+      await expect.poll(() => ui(page, 'spiderOrderChip')).toBe(true);
+      await page.mouse.move(cx, cy); // the show delay starts, and holds (clock stopped)
+      await page.mouse.down();
+      await page.mouse.up();
+      await expect.poll(() => ui(page, 'spiderOrderChip')).toBe(false);
+      // Advance well past the 400 ms show delay and read the tooltip in ONE evaluate,
+      // so no frame runs in between: a show timer that outlived the chip fires here,
+      // and its tooltip is seen before a frame's update() could drop it.
+      const shownAfterDelay = await page.evaluate((ms: number) => {
+        const t = (
+          window as unknown as {
+            __phase9_test?: ClockHook & { getTooltipShown?: () => string | null };
+          }
+        ).__phase9_test;
+        if (t?.advanceCaptionClock === undefined || t.getTooltipShown === undefined) {
+          throw new Error('no advanceCaptionClock / getTooltipShown hook');
+        }
+        t.advanceCaptionClock(ms);
+        return t.getTooltipShown();
+      }, 900);
+      expect(shownAfterDelay).toBeNull();
 
-    // 3. The pointer has left the chip and its tooltip is in the 1.5 s mouse-out
-    //    grace when the order ends (here by a Command tap on the spider): the
-    //    tooltip goes with the chip, not at the end of the grace.
-    expect(await tapSpider(page)).toBe(true);
-    await expect.poll(() => ui(page, 'spiderOrderChip')).toBe(true);
-    await page.mouse.move(cx, cy);
-    await expect.poll(tooltip).toContain('until it dies');
-    await page.mouse.move(cx - 300, cy); // off the chip: the grace starts
-    expect(await tooltip()).toContain('until it dies');
-    expect(await tapSpider(page)).toBe(true); // the order ends
-    await expect.poll(() => ui(page, 'spiderOrderChip')).toBe(false);
-    await expect.poll(tooltip, { timeout: 1000 }).toBeNull();
+      // 3. The pointer has left the chip and its tooltip is in the 1.5 s mouse-out
+      //    grace when the order ends (here by a Command tap on the spider): the
+      //    tooltip goes with the chip. The grace cannot run out on the stopped
+      //    clock, so a tooltip gone here was dropped with the chip.
+      expect(await tapSpider(page)).toBe(true);
+      await expect.poll(() => ui(page, 'spiderOrderChip')).toBe(true);
+      await page.mouse.move(cx, cy);
+      await expect
+        .poll(async () => {
+          await advanceCaptionClock(page, 500); // past the show delay
+          return await tooltip();
+        })
+        .toContain('until it dies');
+      await page.mouse.move(cx - 300, cy); // off the chip: the grace starts, and holds
+      expect(await tooltip()).toContain('until it dies');
+      expect(await tapSpider(page)).toBe(true); // the order ends
+      await expect.poll(() => ui(page, 'spiderOrderChip')).toBe(false);
+      await expect.poll(tooltip).toBeNull();
+    } finally {
+      await freezeCaptionClock(page, false);
+    }
   });
 
   test('the chip is framed like the spider mark: proto-blue while queued, white once applied', async ({
