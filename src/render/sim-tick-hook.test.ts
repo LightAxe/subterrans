@@ -203,6 +203,22 @@ describe('beforeSimTick — the rampage threat is checked every tick (#397)', ()
     expect(prev.commandQueue).toEqual(world.commandQueue);
   });
 
+  it('Jev opponent beta: a passed dispatcher drives each AI colony instead of runAIController', () => {
+    const world = createScenario(7, 'Normal');
+    const prev = createScenario(7, 'Normal');
+    setTick(world, 3);
+    const driven: number[] = [];
+    beforeSimTick(world, [E], createRampageCaptionState(), P, prev, (w, cid) => {
+      expect(w).toBe(world);
+      driven.push(cid);
+    });
+    expect(driven).toEqual([E]);
+    // The rules AI did not run (it would have queued its opening commands)...
+    expect(world.commandQueue).toEqual([]);
+    // ...and the interpolation snapshot is still taken.
+    expect(prev.tick).toBe(3);
+  });
+
   it('an entrance a tick opens near the spider, which then walks out of reach that tick, owes it (#406 review)', () => {
     // The rampage shelter (step 15b) sees the entrance step 12 opened, and the
     // spider before it moves (step 17.5): its idle workers head in. The world
@@ -265,7 +281,9 @@ describe('beforeSimTick — the rampage threat is checked every tick (#397)', ()
     const here = dirname(fileURLToPath(import.meta.url));
     const src = readFileSync(join(here, 'game-scene.ts'), 'utf8');
     expect(src).toMatch(
-      /onBeforeTick:\s*\(w\)\s*=>\s*beforeSimTick\(\s*w,\s*this\.aiColonyIds,\s*this\.rampageCaption,\s*PLAYER_COLONY_ID,\s*this\.prevState,?\s*\)/,
+      // Jev opponent beta: a sixth argument, the per-colony dispatcher that routes
+      // a Jev-driven seat to its own controller, may follow.
+      /onBeforeTick:\s*\(w\)\s*=>\s*beforeSimTick\(\s*w,\s*this\.aiColonyIds,\s*this\.rampageCaption,\s*PLAYER_COLONY_ID,\s*this\.prevState\s*(?:,|\))/,
     );
     // ...and the per-frame check passes the same snapshot, for the frame's last tick.
     expect(src).toMatch(
