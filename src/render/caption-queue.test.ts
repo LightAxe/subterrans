@@ -212,7 +212,7 @@ describe('#378 — a newer version of a caption replaces the older one', () => {
 
   it('pending: the newer version swaps in and keeps that place in line', () => {
     const s = createCaptionQueueState();
-    const other = evt('The enemy is attacking your hive.');
+    const other = evt('Your queen is in danger.');
     const deny = order('Raiding: Deny.');
     const spoil = order('Raiding: Spoil.');
     admitCaption(s, other);
@@ -226,17 +226,17 @@ describe('#378 — a newer version of a caption replaces the older one', () => {
   it('a different caption waiting behind the old version still waits — no longer: the new one keeps the old schedule', () => {
     const s = createCaptionQueueState();
     const loot = order('Raiding: Loot.');
-    const invasion = evt('The enemy is attacking your hive.');
+    const danger = evt('Your queen is in danger.');
     const assault = order('Raiding: Assault.');
     admitCaption(s, loot);
-    admitCaption(s, invasion);
+    admitCaption(s, danger);
     expect(admitCaption(s, assault)).toEqual({
       begin: assault,
       replacedActive: loot,
       keepSchedule: true,
     });
-    expect(s.pending).toBe(invasion);
-    expect(completeCaption(s)).toEqual({ begin: invasion });
+    expect(s.pending).toBe(danger);
+    expect(completeCaption(s)).toEqual({ begin: danger });
   });
 
   it('with nothing waiting, the newer version gets a fresh lifetime (no keepSchedule)', () => {

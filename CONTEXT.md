@@ -490,15 +490,72 @@ or not) within `GATHER_RADIUS_TILES` of one of the viewing colony's open entranc
 not counting any within `GATHER_HOME_RADIUS_TILES` of their own open entrances; a
 fighter near two entrances counts for both. Read from world state in
 `src/render/enemy-gathering.ts`, not from the AI state, so any opponent's army
-counts. The minimap rings a gathering. The **gathering warning** caption names the
-entrance (by compass direction from the middle of the colony's open entrances) once
-the gathering has held `GATHER_DWELL_TICKS` with no **invasion** under way (fewer
-than `INVASION_NEST_MIN_FIGHTERS` enemy fighters in the colony's tunnels). It fires
-once per gathering (an invasion that starts first also uses it up) and re-arms only
-after at most `GATHER_REARM_MAX_FIGHTERS` are near any entrance and no invasion is
-under way, continuously for `GATHER_REARM_QUIET_TICKS`.
+counts. The minimap rings a gathering.
 _Avoid_: "staging" for the render concept (the AI's probe rally is the cause, not
 the definition).
+
+**March (enemy army)** (#394, render-only):
+At least `MARCH_MIN_FIGHTERS` fighters of other colonies on the surface heading for
+the viewing colony's open entrances: each has moved at least `MARCH_MIN_STEP_TILES`
+over the last `MARCH_WINDOW_TICKS` along a line within `MARCH_MIN_HEADING`
+(cosine) of the line to one of those entrances, is still advancing along it at that
+pace (since the newest sample at least `MARCH_SAMPLE_TICKS` old — one that stops or
+turns back drops out) with that latest leg still pointing at the entrance (within
+`MARCH_LEG_MIN_HEADING` — one that turns off it drops out), and is more than
+`MARCH_HOME_RADIUS_TILES` from its own open
+entrances (nearer home it is defending or chasing, not marching), with no other
+colony's open entrance ahead of it nearer than the viewer's (it is heading there). One still near its own home
+(`MARCH_CHASE_HOME_RADIUS_TILES`) with a viewing colony's fighter close in front of
+it (`MARCH_CHASE_TILES`), running the same way (judged by where that fighter runs
+now: its latest leg), is chasing that fighter — a sally
+after raiders running home — and does not make an army or hold a **wave** open,
+though (outside an invasion) it keeps a march warning already owed from going
+stale. (Defenders standing, a fighter that has stopped or turned off, or an army
+coming the other way, are not being chased; further from home, an army on the heels of the viewer's is following it
+home, a march.) The entrance it names is the one most of them aim at.
+Read from world state in `src/render/enemy-march.ts`, which keeps a render-side
+history of fighter positions to get headings — not from the AI state. Since V64 the
+AI marches its army straight from home instead of gathering it near the player's
+nest, so this is how its invasions are seen coming on the minimap (the caption for
+an AI invasion comes earlier, at its launch — see **Army warning**). The minimap
+ring follows a march; a march and a gathering at the same entrance share one ring when one ring can
+enclose both (else each gets its own).
+_Avoid_: "invasion" for the march (an invasion is the AI operation, or fighters
+inside the nest), "attack" alone.
+
+**Army warning** (#372, #394, render-only):
+The caption that warns of an enemy army, once per **wave** (from the warning, or
+an invasion that broke in unwarned, until things are quiet again — below — for
+`GATHER_REARM_QUIET_TICKS`): "An enemy army is
+marching on your east entrance. Train fighters and rally there." once a **march**
+has held `MARCH_DWELL_TICKS` (a quarter-second), or "…is gathering near…" once a
+**gathering** has held `GATHER_DWELL_TICKS`. It names the entrance by compass direction from the middle of
+the colony's open entrances (no name with one entrance, or when the direction would
+not single it out). An **invasion** — at least `INVASION_NEST_MIN_FIGHTERS` enemy
+fighters in the colony's tunnels — raises no warning of a gathering (the army at the
+door is the invasion itself) but, when the fallback has not warned of it, does not
+use the wave up: an army still marching behind a vanguard that slipped in is warned
+of. The warning re-arms for the next wave once at most `GATHER_REARM_MAX_FIGHTERS`
+are near any entrance, at most that many are marching and no invasion is under way
+(in the tunnels, or launched and not yet ended), continuously for
+`GATHER_REARM_QUIET_TICKS`.
+An invasion the AI launches is warned of at its launch (#404 review): an invasion
+launched at the colony (its `invasion_start`) while the warning is armed, and not yet
+warned of by a reading, is warned of ("…is marching on…", naming the entrance it
+targets) at once, as its army sets out. The AI's army does not move before that, so
+in play against the AI this is how nearly every invasion is warned of; the readings
+warn of an army with no launch event (a human opponent's) and keep the minimap ring
+on the army as it marches. (They alone would miss some: an army marching on a door
+within `MARCH_HOME_RADIUS_TILES` of its own nest counts as at home all the way
+there.) A save keeps no events, so an invasion a loaded save was taken in the middle
+of is noted at boot from the attacker's AI operation, and warned of then. The launch
+warning stays owed until it is shown or its invasion ends. With three or more doors
+where the direction would not single the target out, it names none and points to no
+ring (the army may still read as at home). While a launched invasion is under way
+(until its `invasion_end`) the wave does not end.
+It replaced the one-time "The enemy is attacking your hive." invasion caption.
+_Avoid_: "gathering warning" for a warning that may be about a march; "invasion
+caption".
 
 **Difficulty**:
 The tier chosen at boot — `Easy` / `Normal` / `Hard` — which tunes AI rates,

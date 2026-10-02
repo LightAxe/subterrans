@@ -92,7 +92,7 @@ const CAPTION_MAX_HALF_H = 32;
  * caption whose box could reach the tool palette's band (hud.TOOLS) wraps so
  * its box (wrap width + 2 × CAPTION_PAD_X) ends CAPTION_TOOLS_GAP px left of
  * the palette; at the default layout a centred top caption wraps at 440 px (at
- * the old fixed 500 a two-line caption — the gathering warning, raid-order
+ * the old fixed 500 a two-line caption — the army warning, raid-order
  * news — ran under the Cmd button). Captions clear of the band keep
  * CAPTION_MAX_WRAP_W. CAPTION_MIN_WRAP_W wins over clearance: a caption centred
  * within about 112 px of the palette still wraps at 200 and overlaps it (no

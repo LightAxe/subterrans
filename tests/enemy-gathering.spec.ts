@@ -27,7 +27,7 @@ import { GATHER_CAPTION_HOLD_MS } from '../src/render/enemy-gathering.js';
 
 const RALLY_TEXT = 'Fighters will converge here.';
 const WARNING =
-  'An enemy army is gathering near your east entrance. Train fighters and rally them there.';
+  'An enemy army is gathering near your east entrance. Train fighters and rally there.';
 
 // The minimap rect and its scale (px per tile; the surface is 128 tiles square).
 const MM = MINIMAP_RECT;

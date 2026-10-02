@@ -4,7 +4,6 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   captionForEvent,
   checkAndTrigger,
-  oneShotKeyForEvent,
   resetCaptions,
   triggered,
   untrigger,
@@ -30,7 +29,6 @@ describe('checkAndTrigger — first occurrence', () => {
       'rally',
       'rallyRaid',
       'spiderPriority',
-      'aiInvading',
       'spiderRampage',
       'queenDamage',
       'queenStarvation',
@@ -171,23 +169,11 @@ describe('captionForEvent — recurring alerts fire every time', () => {
   });
 });
 
-describe('captionForEvent — one-shot events fire once', () => {
-  it('invasion_start returns its caption once then null', () => {
-    expect(captionForEvent('invasion_start')).toBe('The enemy is attacking your hive.');
+describe('captionForEvent — #394: no invasion caption', () => {
+  it('invasion_start has no caption: the army warning announces every wave instead', () => {
     expect(captionForEvent('invasion_start')).toBeNull();
-  });
-
-  it('shares one-shot state with checkAndTrigger for the same CaptionKey', () => {
-    // invasion_start maps to the 'aiInvading' caption; once the event fires it,
-    // a direct checkAndTrigger('aiInvading') (the ai_state_transition
-    // belt-and-suspenders path) must be suppressed, and vice versa.
-    expect(captionForEvent('invasion_start')).not.toBeNull();
-    expect(checkAndTrigger('aiInvading')).toBeNull();
-
-    resetCaptions();
-
-    expect(checkAndTrigger('aiInvading')).not.toBeNull();
     expect(captionForEvent('invasion_start')).toBeNull();
+    expect(triggered.size).toBe(0);
   });
 });
 
@@ -260,30 +246,5 @@ describe('untrigger', () => {
     expect(triggered.has('spiderRampage')).toBe(false);
     // ...and the key still fires normally afterward.
     expect(checkAndTrigger('spiderRampage')).not.toBeNull();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// oneShotKeyForEvent — event→one-shot-key lookup (drives un-mark-on-drop)
-// ---------------------------------------------------------------------------
-
-describe('oneShotKeyForEvent', () => {
-  it('returns the one-shot CaptionKey for a one-shot event', () => {
-    expect(oneShotKeyForEvent('invasion_start')).toBe('aiInvading');
-  });
-
-  it('returns null for a recurring event (recurring captions never dedup)', () => {
-    expect(oneShotKeyForEvent('spider_rampage_start')).toBeNull();
-  });
-
-  it('returns null for a caption-less / unknown event', () => {
-    expect(oneShotKeyForEvent('combat_kill')).toBeNull();
-    expect(oneShotKeyForEvent('not_a_real_event' as SimEvent['type'])).toBeNull();
-  });
-
-  it('is pure — it does not consume the one-shot (captionForEvent still fires)', () => {
-    expect(oneShotKeyForEvent('invasion_start')).toBe('aiInvading');
-    expect(triggered.has('aiInvading')).toBe(false);
-    expect(captionForEvent('invasion_start')).not.toBeNull();
   });
 });
