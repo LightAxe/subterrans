@@ -75,21 +75,15 @@ export const AI_NURSERY_THRESHOLD = 12 as const;
  */
 export const AI_EXTRA_FOOD_STORAGE_FULL_PCT = 90 as const;
 
-/**
- * #290 D14 (PR 6b) — most FoodStorage chambers the AI will own (the extra-storage
- * rule stops once this many are COMPLETED; at most one more is ever pending). A
- * bound on runaway digging (a player may build more). From V70 (#395) it is also a
- * growth ceiling for the AI: the queen lays only while the stores cover the egg
- * reserve (3600 fp + 1200 per brood + 64 per worker at the 60 s runway), and two
- * chambers plus the entrance pool hold 12 288 fp — so she lays with up to 4 brood at
- * 60 workers, up to 1 at 100, and never past 135. Unchanged here; flagged to the
- * owner in #395.
- * Measured with V53 (no loot with full stores), --both-ai 200 seeds: uncapped, the
- * AI dug a median of ~9 and up to 29 chambers and its peak workers rose 60 %; a
- * cap of 3 raised them 31 %; a cap of 2 raised them 15 % and had the lowest share
- * of laden haulers parked with full stores.
- */
-export const AI_MAX_FOOD_STORAGE_CHAMBERS = 2 as const;
+// #395 — no fixed cap on the AI's FoodStorage chambers (owner decision, 2026-10-01;
+// it was AI_MAX_FOOD_STORAGE_CHAMBERS = 2). From V70 the queen lays only while the
+// stores cover the egg reserve, so storage is the AI's growth ceiling: two chambers
+// stopped its queen laying past about 135 workers. The AI now keeps building while
+// its stores are full, limited only by the extra-storage rule itself (one chamber
+// in flight, the stores at AI_EXTRA_FOOD_STORAGE_FULL_PCT of the capacity the last
+// one added, so each needs another ~4 600 fp foraged or raided first), by the dig
+// labour each costs, and by placement (findOpenChamberSpot). See
+// aiExtraFoodStorageWanted for the measured counts.
 
 /**
  * Issue #33 — chamber placement depth tolerance (tiles). The findOpenChamberSpot
@@ -1651,7 +1645,6 @@ function hasChamberOrPending(
  *   - at least one FoodStorage is COMPLETED and none is pending: one extra
  *     chamber in flight at a time, and the next is judged against the capacity
  *     the last one added;
- *   - fewer than AI_MAX_FOOD_STORAGE_CHAMBERS FoodStorage chambers exist;
  *   - `colonyFoodTotal` is at least AI_EXTRA_FOOD_STORAGE_FULL_PCT of
  *     `colonyFoodCapacity` (pending chambers add no capacity).
  * Every input is world state, so the command stream stays deterministic per seed.
@@ -1677,7 +1670,6 @@ export function aiExtraFoodStorageWanted(world: WorldState, colony: ColonyRecord
       return false;
     }
   }
-  if (completedStorage >= AI_MAX_FOOD_STORAGE_CHAMBERS) return false;
   return (
     colonyFoodTotal(world, colony) * 100 >=
     colonyFoodCapacity(colony) * AI_EXTRA_FOOD_STORAGE_FULL_PCT

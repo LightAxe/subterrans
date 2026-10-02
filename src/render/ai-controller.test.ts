@@ -30,7 +30,6 @@ import {
   aiSurvivalMode,
   AI_SURVIVAL_RATIO,
   AI_EXTRA_FOOD_STORAGE_FULL_PCT,
-  AI_MAX_FOOD_STORAGE_CHAMBERS,
   aiExtraFoodStorageWanted,
   aiSelectProbeTarget,
   aiNestDefence,
@@ -80,7 +79,7 @@ import {
   QUEEN_EGG_FOOD_THRESHOLD,
   STARTING_WORKERS,
 } from '../sim/constants.js';
-import { colonyFoodTotal } from '../sim/food/food-api.js';
+import { colonyFoodCapacity, colonyFoodTotal } from '../sim/food/food-api.js';
 import {
   addChamberForTest,
   setPoolFoodForTest,
@@ -577,30 +576,58 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       expect(aiExtraFoodStorageWanted(world, colony)).toBe(true);
     });
 
-    it('the cap is 2: with two completed FoodStorage chambers it places no third', () => {
-      // Pins the measured choice (#290 PR 6b round 2): an uncapped AI dug a median
-      // of ~9 and up to 29 FoodStorage chambers in --both-ai runs.
-      expect(AI_MAX_FOOD_STORAGE_CHAMBERS).toBe(2);
-      const { world, colony } = settledColony(CAP_ONE_CHAMBER);
-      const fs2 = addChamberForTest(world, colony, makeChamber(ChamberType.FoodStorage, 30, 5));
-      setChamberStockForTest(world, colony, fs2, FOOD_CHAMBER_CAPACITY);
-      expect(aiExtraFoodStorageWanted(world, colony)).toBe(false);
-      aiChamberPlacement(world, colony);
-      expect(fsCommands(world)).toHaveLength(0);
-    });
-
-    it('stops at AI_MAX_FOOD_STORAGE_CHAMBERS', () => {
+    /** settledColony plus `extra` more completed FoodStorage chambers (row 12), the
+     *  stores holding `totalFp`: the pool first, then each chamber up to its cap. */
+    function colonyWithChambers(extra: number, totalFp: number) {
       const { world, colony } = settledColony(0);
-      for (let i = 1; i < AI_MAX_FOOD_STORAGE_CHAMBERS; i++) {
+      for (let i = 0; i < extra; i++) {
         addChamberForTest(world, colony, makeChamber(ChamberType.FoodStorage, 10 + i * 5, 12));
       }
-      // Every store brim-full.
-      setPoolFoodForTest(world, colony, BASE_FOOD_STORAGE_CAPACITY);
+      let left = totalFp;
+      const pool = Math.min(left, BASE_FOOD_STORAGE_CAPACITY);
+      setPoolFoodForTest(world, colony, pool);
+      left -= pool;
       for (const ch of colony.chambers) {
-        if (ch.chamberType === ChamberType.FoodStorage) {
-          setChamberStockForTest(world, colony, ch, FOOD_CHAMBER_CAPACITY);
-        }
+        if (ch.chamberType !== ChamberType.FoodStorage) continue;
+        const fp = Math.min(left, FOOD_CHAMBER_CAPACITY);
+        setChamberStockForTest(world, colony, ch, fp);
+        left -= fp;
       }
+      expect(left).toBe(0);
+      return { world, colony };
+    }
+
+    // #395 — no fixed cap (it was 2): the near-full rule alone decides, judged
+    // against the capacity every completed chamber adds.
+    it.each([2, 4, 8, 16])(
+      'no fixed cap: with %i completed FoodStorage chambers, full stores place another',
+      (chambers) => {
+        const capacity = BASE_FOOD_STORAGE_CAPACITY + chambers * FOOD_CHAMBER_CAPACITY;
+        const threshold = Math.ceil((capacity * AI_EXTRA_FOOD_STORAGE_FULL_PCT) / 100);
+        const below = colonyWithChambers(chambers - 1, threshold - 1);
+        expect(colonyFoodCapacity(below.colony)).toBe(capacity);
+        expect(aiExtraFoodStorageWanted(below.world, below.colony)).toBe(false);
+        aiChamberPlacement(below.world, below.colony);
+        expect(fsCommands(below.world)).toHaveLength(0);
+
+        const at = colonyWithChambers(chambers - 1, threshold);
+        expect(aiExtraFoodStorageWanted(at.world, at.colony)).toBe(true);
+        aiChamberPlacement(at.world, at.colony);
+        expect(fsCommands(at.world)).toHaveLength(1);
+      },
+    );
+
+    it('no fixed cap: 16 brim-full chambers still wait for the pending one', () => {
+      const capacity = BASE_FOOD_STORAGE_CAPACITY + 16 * FOOD_CHAMBER_CAPACITY;
+      const { world, colony } = colonyWithChambers(15, capacity);
+      world.pendingChambers['2:40:5'] = {
+        colonyId: 2 as ColonyId,
+        chamberType: ChamberType.FoodStorage,
+        anchorTileX: 40,
+        anchorTileY: 5,
+        width: 4,
+        height: 3,
+      };
       expect(aiExtraFoodStorageWanted(world, colony)).toBe(false);
       aiChamberPlacement(world, colony);
       expect(fsCommands(world)).toHaveLength(0);
