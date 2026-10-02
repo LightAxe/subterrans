@@ -579,10 +579,10 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
     });
 
     /** Extra FoodStorage chamber `i`'s anchor, on a grid of 4×3 cells inside the
-     *  64×64 test grid (rows 20+, clear of the settled colony's chambers). */
+     *  64×64 test grid (rows 24+, below the Queen chamber's rows 18-20). */
     const extraAnchor = (i: number): [number, number] => [
       2 + (i % 12) * 5,
-      20 + Math.floor(i / 12) * 4,
+      24 + Math.floor(i / 12) * 4,
     ];
 
     /**
@@ -592,11 +592,13 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
      * store filled to `fillFp` (default: brim-full).
      */
     function storageColony(chambers: number, brood: number, workers: number, fillFp?: number) {
-      const base = createWorldState(42, 8 + workers);
+      const base = createWorldState(42, 9 + workers);
       const world = { ...base, tick: 0 } as unknown as WorldState;
-      const colony = addColony(world, 2 as ColonyId, 0);
+      // The queen takes id 0, so the workers below never reuse it.
+      const queenId = allocateEntityId(world);
+      const colony = addColony(world, 2 as ColonyId, queenId);
       addUndergroundGrid(world, 2 as ColonyId);
-      setQueenPos(world, 0, 10, 10);
+      setQueenPos(world, queenId, 10, 10);
       addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
       addChamberForTest(world, colony, makeChamber(ChamberType.Nursery, 20, 7));
       addChamberForTest(world, colony, makeChamber(ChamberType.FoodStorage, 10, 5));
@@ -710,6 +712,34 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       },
     );
 
+    it('the bound is 3 × the egg reserve (the measured choice, #395)', () => {
+      // AI_STORAGE_RESERVE_MULTIPLE was chosen by measurement (its doc): 2 cost
+      // 8-13 % of the AI's growth, 4 added 8 larders for 4 % more workers.
+      expect(AI_STORAGE_RESERVE_MULTIPLE).toBe(3);
+      // 5 chambers hold 2048 + 5 × 5120 = 27648 fp. With 1 larva and 69 workers the
+      // reserve is 2400 + 2 × 1200 + 69 × 64 = 9216, and 3 × 9216 = 27648: no more.
+      const at = storageColony(5, 1, 69);
+      expect(at.capacity).toBe(27648);
+      expect(eggReserveFp(at.world, at.colony)).toBe(9216);
+      expect(aiExtraFoodStorageWanted(at.world, at.colony)).toBe(false);
+      // One worker more (reserve 9280, 3 × 9280 = 27840): one more chamber.
+      const above = storageColony(5, 1, 70);
+      expect(aiExtraFoodStorageWanted(above.world, above.colony)).toBe(true);
+    });
+
+    it('the bound reads capacity, not the stores: at the 90 % trigger, short of 3 × the reserve', () => {
+      // 2 chambers: capacity 12288; the 90 % trigger is 11060 fp. 7 workers: reserve
+      // 4048, 3 × 4048 = 12144 <= 12288, so no more storage, though the stores
+      // (11060) are below 3 × the reserve.
+      const blocked = storageColony(2, 0, 7, 11060);
+      expect(aiExtraFoodStorageWanted(blocked.world, blocked.colony)).toBe(false);
+      // 8 workers: reserve 4112, 3 × 4112 = 12336 > 12288: one more.
+      const needs = storageColony(2, 0, 8, 11060);
+      expect(aiExtraFoodStorageWanted(needs.world, needs.colony)).toBe(true);
+      aiChamberPlacement(needs.world, needs.colony);
+      expect(fsCommands(needs.world)).toHaveLength(1);
+    });
+
     it('the bound: capacity exactly the multiple of the reserve builds no more', () => {
       // Search for a colony whose reserve times the multiple equals its capacity.
       let found: [number, number, number] | null = null;
@@ -729,7 +759,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       expect(aiExtraFoodStorageWanted(more.world, more.colony)).toBe(true);
     });
 
-    it('the bound reads the colony now: a colony that loses workers stops building', () => {
+    it('the bound reads the colony now: a colony whose brood dies off stops building', () => {
       const chambers = 4;
       const brood = broodToNeed(chambers);
       const { world, colony } = storageColony(chambers, brood, 10);

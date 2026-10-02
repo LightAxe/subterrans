@@ -91,7 +91,8 @@ export const AI_EXTRA_FOOD_STORAGE_FULL_PCT = 90 as const;
  * its egg reserve.
  *
  * Why 3. The queen's fastest egg interval wants 600 fp stored per mouth (10 x
- * FOOD_PER_ANT_BASELINE): about 2.3 times the reserve at 100 workers, 3.5 at 200.
+ * FOOD_PER_ANT_BASELINE): about 2.3 times the reserve at 100 workers, 3.5 at 200
+ * (with ~18 brood, her steady state at that interval; more with less brood).
  * Measured on the same seeds, by multiple (2 / 3 / 4 / no bound): workers at 28
  * minutes 147 / 164 / 170 / 169.5, chambers 11 / 19 / 27 / 46 (all but no bound
  * level off); Normal 0-99 peak AI workers 105 / 112 / 115 / 114. 3 is the smallest
@@ -1666,7 +1667,7 @@ function hasChamberOrPending(
  *   - `colonyFoodTotal` is at least AI_EXTRA_FOOD_STORAGE_FULL_PCT of
  *     `colonyFoodCapacity` (pending chambers add no capacity).
  * Every input is world state, so the command stream stays deterministic per seed.
- * Sticky-version gated (as V40 survival mode): the rule shipped with V53, so a
+ * Sticky-version gated: the rule shipped with V53, so a
  * pre-V53 world keeps the AI command stream it was recorded under. The #395 changes
  * (no fixed cap, the reserve bound) are not gated (the pre-1.0 policy): they apply
  * from V53 on.
