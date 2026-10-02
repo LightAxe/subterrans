@@ -380,6 +380,8 @@ interface UIScenePhase9 {
   };
   /** #378 — Dev/E2E-only: stop/restart UIScene's clock (caption fades and holds). */
   freezeCaptionClock?(frozen: boolean): void;
+  /** #395 — Dev/E2E-only: run UIScene's stopped clock forward `ms` (UIScene.advanceCaptionClock). */
+  advanceCaptionClock?(ms: number): void;
 }
 
 // Re-export GamePhase for Plan 07 and other consumers
@@ -498,6 +500,10 @@ declare global {
        *  the next command on a machine of any speed. The sim is not touched.
        *  Dev-build only. */
       freezeCaptionClock?(frozen: boolean): void;
+      /** #395 — with UIScene's clock stopped, run it forward `ms` of scene time in
+       *  fixed steps (timers and tweens, as on a frame); it stays stopped after.
+       *  Dev-build only. */
+      advanceCaptionClock?(ms: number): void;
       /** #290 PR 6 — issue a player rally on (tileX, tileY) through the exact
        *  enqueue the surface Command tap uses (handleSetRallyPoint): a command, not
        *  a state write, so the drain, the caption hook and the sim all run as for
@@ -860,6 +866,9 @@ export class GameScene extends Phaser.Scene {
         },
       freezeCaptionClock: (frozen: boolean): void => {
         this.getUIScene()?.freezeCaptionClock?.(frozen);
+      },
+      advanceCaptionClock: (ms: number): void => {
+        this.getUIScene()?.advanceCaptionClock?.(ms);
       },
       rallyPlayerAt: (tileX: number, tileY: number): boolean =>
         this.world !== undefined &&

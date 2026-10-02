@@ -2328,6 +2328,35 @@ export class UIScene extends Phaser.Scene {
   }
 
   /**
+   * #395 — Dev/E2E-only: run this scene's clock forward `ms` of scene time while it
+   * is stopped (freezeCaptionClock), in fixed 10 ms steps: its timers (a long
+   * caption's hold) and tweens (every fade, and the promotion on a fade-out's end)
+   * advance as on a frame, so a spec can play captions through their whole course
+   * without waiting on a wall clock. The clock stays stopped after. No-op outside
+   * Dev builds.
+   */
+  advanceCaptionClock(ms: number): void {
+    if (!import.meta.env.DEV) return;
+    const STEP_MS = 10;
+    const tweenScale = this.tweens.timeScale;
+    const timerScale = this.time.timeScale;
+    this.tweens.timeScale = 1;
+    this.time.timeScale = 1;
+    try {
+      for (let done = 0; done < ms; done += STEP_MS) {
+        // Timers added last step (a hold scheduled by a fade-in's end) join first.
+        this.time.preUpdate(this.time.now, STEP_MS);
+        this.time.update(this.time.now, STEP_MS);
+        // Tweens added during a step (a fade-out) run from the next one.
+        for (const tween of this.tweens.getTweens()) tween.update(STEP_MS);
+      }
+    } finally {
+      this.tweens.timeScale = tweenScale;
+      this.time.timeScale = timerScale;
+    }
+  }
+
+  /**
    * Reset the caption queue for a new round (ship-review R1#1/#3). UIScene is
    * launched once and survives GameScene's restartGame/retryGame, so — unlike the
    * time-based yield/queue-full timers, which self-heal — the caption queue would

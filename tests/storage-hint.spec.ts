@@ -39,6 +39,12 @@ const DWELL_TICKS = 200;
 const HOLD_MS = 4000;
 /** caption-queue.ts CAPTION_YIELD_FLOOR_MS: what a long hold keeps once it gives way. */
 const YIELD_FLOOR_MS = 2000;
+/** caption-queue.ts CAPTION_FADE_IN_MS + CAPTION_HOLD_MS + CAPTION_FADE_OUT_MS: a
+ *  caption's whole course at the default hold (the rally caption's). */
+const CAPTION_COURSE_MS = 300 + 800 + 400;
+/** Scene time past a rally caption's whole course and then a hint promoted behind
+ *  it (fade-in, its 4 s hold, fade-out), with a margin. */
+const PAST_RALLY_AND_HINT_MS = CAPTION_COURSE_MS + 300 + HOLD_MS + 400 + 1_000;
 const GATHERING_PREFIX = 'An enemy army is gathering near your';
 const RALLY_TEXT = 'Fighters will converge here.';
 const CHAMBER_TEXT = 'Chambers give workers and brood a purpose. This one is a Food Storage.';
@@ -50,6 +56,7 @@ interface TestHook {
   getCaptionHolds?: () => { text: string; holdMs: number; yielded: boolean }[];
   getTick?: () => number;
   freezeCaptionClock?: (frozen: boolean) => void;
+  advanceCaptionClock?: (ms: number) => void;
   getCaptionQueue?: () => { active: string | null; pending: string | null };
   rallyPlayerAt?: (tileX: number, tileY: number) => boolean;
   isPaused?: () => boolean;
@@ -63,6 +70,16 @@ async function freezeCaptionClock(page: Page, frozen: boolean): Promise<void> {
     if (t?.freezeCaptionClock === undefined) throw new Error('no freezeCaptionClock hook');
     t.freezeCaptionClock(f);
   }, frozen);
+}
+
+/** With the caption clock stopped, run it forward `ms` of scene time in fixed steps
+ *  (UIScene.advanceCaptionClock): deterministic, unlike a wall-clock wait. */
+async function advanceCaptionClock(page: Page, ms: number): Promise<void> {
+  await page.evaluate((m: number) => {
+    const t = (window as unknown as { __phase9_test?: TestHook }).__phase9_test;
+    if (t?.advanceCaptionClock === undefined) throw new Error('no advanceCaptionClock hook');
+    t.advanceCaptionClock(m);
+  }, ms);
 }
 
 async function captions(page: Page): Promise<string[]> {
@@ -370,6 +387,10 @@ test.describe('#395 — Food Storage hint', () => {
     await expect
       .poll(() => captionQueue(page), { timeout: 10_000 })
       .toEqual({ active: RALLY_TEXT, pending: CHAMBER_TEXT });
+    // The advance hook plays the rally caption through and promotes the one waiting
+    // (what the end-screen tests below rely on).
+    await advanceCaptionClock(page, CAPTION_COURSE_MS + 300);
+    expect(await captionQueue(page)).toEqual({ active: CHAMBER_TEXT, pending: null });
     // The captions run out and the hint never follows.
     await freezeCaptionClock(page, false);
     const t0 = await simTick(page);
@@ -392,10 +413,9 @@ test.describe('#395 — Food Storage hint', () => {
       .poll(() => captionQueue(page), { timeout: 10_000 })
       .toEqual({ active: RALLY_TEXT, pending: null });
     // The caption clock runs while paused: the rally caption ends with nothing behind it.
+    await advanceCaptionClock(page, CAPTION_COURSE_MS + 300);
+    expect(await captionQueue(page)).toEqual({ active: null, pending: null });
     await freezeCaptionClock(page, false);
-    await expect
-      .poll(() => captionQueue(page), { timeout: 10_000 })
-      .toEqual({ active: null, pending: null });
     await setPaused(page, false);
     const t0 = await simTick(page);
     await expect.poll(() => simTick(page), { timeout: 40_000 }).toBeGreaterThan(t0 + 200);
@@ -412,9 +432,9 @@ test.describe('#395 — Food Storage hint', () => {
     await expect.poll(() => activeOverlay(page), { timeout: 40_000 }).toBe('game-over');
     // With the caption clock still stopped, the game over itself emptied the queue.
     expect(await captionQueue(page)).toEqual({ active: null, pending: null });
-    // The caption clock runs on behind the end screen: nothing comes up over it.
-    await freezeCaptionClock(page, false);
-    await page.waitForTimeout(3_000);
+    // The caption clock runs on behind the end screen: past the rally's whole course
+    // and a promoted hint's, nothing comes up over it.
+    await advanceCaptionClock(page, PAST_RALLY_AND_HINT_MS);
     expect(await captionQueue(page)).toEqual({ active: null, pending: null });
     expect(await captions(page)).not.toContain(HINT);
     // A late caption source (an autosave failure resolving now) is not admitted either.
@@ -453,8 +473,7 @@ test.describe('#395 — Food Storage hint', () => {
       )
       .toBe('difficulty-select');
     expect(await captionQueue(page)).toEqual({ active: null, pending: null });
-    await freezeCaptionClock(page, false);
-    await page.waitForTimeout(3_000);
+    await advanceCaptionClock(page, PAST_RALLY_AND_HINT_MS);
     expect(await captionQueue(page)).toEqual({ active: null, pending: null });
     expect(await captions(page)).not.toContain(HINT);
   });
