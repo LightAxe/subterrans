@@ -1601,7 +1601,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       w.ants.hp[worker] = COMBAT_HP_BASE + 1;
       expect(() => deserializeWorldState(serializeWorldState(w))).toThrow(/above its max HP/);
     });
-    it('#400: ants.lastHitTick and spider.lastHitTick round-trip; a hit in the future is rejected (ant) or dropped (spider)', () => {
+    it('#400: ants.lastHitTick and spider.lastHitTick round-trip; an ant hit in the future is rejected', () => {
       const w = createScenario(42);
       for (let t = 0; t < 3; t++) tick(w, []);
       const worker = w.colonies[PLAYER_COLONY_ID]!.workers[0]!;
@@ -1615,9 +1615,33 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(() => deserializeWorldState(serializeWorldState(w))).toThrow(/lastHitTick/);
       w.ants.lastHitTick[worker] = -2;
       expect(() => deserializeWorldState(serializeWorldState(w))).toThrow(/lastHitTick/);
-      w.ants.lastHitTick[worker] = -1;
-      w.spider!.lastHitTick = w.tick;
-      expect(deserializeWorldState(serializeWorldState(w)).spider!.lastHitTick).toBe(-1);
+    });
+    it('#400: spider.lastHitTick loads only as -1 or an integer in [0, tick − 1]; anything else, missing included, is rejected', () => {
+      const w = createScenario(42);
+      for (let t = 0; t < 3; t++) tick(w, []);
+      expect(w.spider).not.toBeNull();
+      /** The world's snapshot with the spider's lastHitTick set to `v`, or removed. */
+      const snapshotWith = (v: unknown, remove = false) => {
+        const s = serializeWorldState(w);
+        const spider = (s as unknown as { spider: Record<string, unknown> }).spider;
+        if (remove) delete spider.lastHitTick;
+        else spider.lastHitTick = v;
+        return s;
+      };
+      // Loads: never hit, the oldest tick, and the latest a blow can have landed.
+      for (const ok of [-1, 0, w.tick - 1]) {
+        expect(deserializeWorldState(snapshotWith(ok)).spider!.lastHitTick).toBe(ok);
+      }
+      // Rejected, never read as "never hit" (which would let the spider heal early):
+      // this tick or later, below -1, a non-integer, a non-number.
+      const bad: unknown[] = [w.tick, w.tick + 5, -2, -100, w.tick - 1.5, 0.5, '1', null];
+      for (const v of bad) {
+        expect(() => deserializeWorldState(snapshotWith(v))).toThrow(/Invalid spider\.lastHitTick/);
+      }
+      // Missing: every loadable save (MIN === LATEST, V71) carries the field.
+      expect(() => deserializeWorldState(snapshotWith(undefined, true))).toThrow(
+        /Invalid spider\.lastHitTick: undefined/,
+      );
     });
     it('#290 accepts tick 2^31 − 1 and rejects tick 2^31 (int32 tick domain for Int32 tick columns)', () => {
       const w = createScenario(42);

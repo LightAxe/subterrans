@@ -1715,6 +1715,27 @@ function deserializeSpider(s: SerializedWorldState): SpiderState | null {
     safeState === 'Rampaging' &&
     typeof r.rampageTargetColonyId === 'number' &&
     r.rampageTargetColonyId > 0;
+  // #400 (V71) — the spider's last-hit clock, checked as ants.lastHitTick is: a blow
+  // lands during a tick (combat.ts damageSpider), so between ticks it is -1 (never
+  // hit) or an integer in [0, tick − 1]. Anything else is rejected. That is stricter
+  // than the other spider clocks' fallbacks on purpose: it is a V71 field and
+  // MIN_ACCEPTED_SIM_VERSION === LATEST (V71), so every loadable save carries it, and
+  // reading a missing or impossible value as "never hit" would let the spider heal
+  // before HEAL_SAFE_TICKS. (deserializeWorldState has validated s.tick by now.)
+  const lastHitTick = r.lastHitTick;
+  if (
+    lastHitTick !== -1 &&
+    !(
+      typeof lastHitTick === 'number' &&
+      Number.isInteger(lastHitTick) &&
+      lastHitTick >= 0 &&
+      lastHitTick <= s.tick - 1
+    )
+  ) {
+    throw new Error(
+      `Invalid spider.lastHitTick: ${String(lastHitTick)} at tick ${s.tick} (require -1 or an integer in [0, tick − 1])`,
+    );
+  }
   return {
     state: safeState,
     posX: typeof r.posX === 'number' && Number.isInteger(r.posX) ? r.posX : 0,
@@ -1793,16 +1814,7 @@ function deserializeSpider(s: SerializedWorldState): SpiderState | null {
       typeof r.feedArrivedTick === 'number' && Number.isInteger(r.feedArrivedTick)
         ? r.feedArrivedTick
         : -1,
-    // #400 (V71): a blow lands during a tick, so between ticks it is at most tick − 1.
-    // Anything else reads as never hit (-1), as other spider clocks fall back.
-    lastHitTick:
-      typeof r.lastHitTick === 'number' &&
-      Number.isInteger(r.lastHitTick) &&
-      r.lastHitTick >= 0 &&
-      typeof s.tick === 'number' &&
-      r.lastHitTick < s.tick
-        ? r.lastHitTick
-        : -1,
+    lastHitTick, // #400 (V71): validated above
     // V54 (#337). The pinned entrance only means something mid-rampage (as
     // rampageTargetColonyId); the rotation cursor and its timeout tick outlive the
     // rampage (they last until the spider's next kill). A cursor without a valid tick
