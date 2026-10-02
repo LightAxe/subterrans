@@ -522,7 +522,9 @@ _Avoid_: checkpoint.
 **Input log / replay**:
 The recorded SimCommand stream — **player and AI** — that reproduces a match
 deterministically from its seed, difficulty and `simVersion` (since #395, V69, the
-world is generated at that version: map generation is version-gated too).
+world is generated at that version, because V69's map change is version-gated).
+Pre-1.0 nothing new is gated, so it is only guaranteed to replay on the build that
+recorded it.
 _Avoid_: history, journal.
 
 **Autosave**:

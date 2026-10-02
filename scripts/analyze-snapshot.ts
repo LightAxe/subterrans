@@ -59,6 +59,7 @@ const { serializeWorldState, deserializeWorldState, MIN_ACCEPTED_SIM_VERSION, Ol
   await import('../src/platform/save.js');
 const { indexByDrainTick, summarizeDrainTickSource } =
   await import('../src/platform/input-log-replay.js');
+const { snapshotWindowMessage } = await import('../src/platform/snapshot-window.js');
 
 const ANT_TASK_NAME: Record<number, string> = {
   [AntTask.Idle]: 'Idle',
@@ -150,51 +151,24 @@ console.log('');
 
 // A snapshot outside this build's [MIN_ACCEPTED_SIM_VERSION, LATEST_SIM_VERSION]
 // window can be neither loaded nor replayed here. Pre-1.0 (AGENTS.md "simVersion and
-// saves") sim behaviour changes are not version-gated and every sim PR raises MIN to
-// LATEST, so this build does not have the rules an older snapshot ran under. It must
-// be replayed on the build that recorded it. Say so instead of crashing on load or
-// reporting a bogus SCEN-06 mismatch.
-const SAME_BUILD_RULE =
-  `  Snapshots replay only on the build that recorded them: before 1.0, sim changes ` +
-  `are not version-gated, so a different build does not run the rules it was recorded under.\n`;
-function explainPreWindowSnapshot(got: unknown): never {
-  const n = typeof got === 'number' && Number.isInteger(got) ? got : null;
-  const captured =
-    n === null
-      ? `has a missing or invalid simVersion, so this build (minimum ` +
-        `${MIN_ACCEPTED_SIM_VERSION}) cannot place it`
-      : `was captured on simVersion ${n}, below this build's minimum (${MIN_ACCEPTED_SIM_VERSION})`;
-  console.error(
-    `[analyze-snapshot] This snapshot ${captured}; its saved state cannot be loaded here.\n` +
-      SAME_BUILD_RULE +
-      `  Check out the recording build and analyze it there:\n` +
-      `    - playtrace: the envelope's gameVersion is "<version>+<git sha>"; check out that sha.\n` +
-      (n === null
-        ? `    - F9 export: its simVersion is unreadable, so there is no build to point at.`
-        : `    - F9 export (no build id): use the last commit at simVersion ${n}, the parent ` +
-          `of the commit that first moved LATEST past it (a constant retune made at the same ` +
-          `simVersion after the capture can still make the replay differ):\n` +
-          `        git checkout "$(git log --reverse --format=%h ` +
-          `-S 'LATEST_SIM_VERSION = SIM_VERSION_V${n + 1}_' -- src/sim/types.ts | head -1)^"`),
-  );
+// saves") sim behaviour changes are not version-gated, so a snapshot replays only on
+// the build that recorded it. Say which build to check out (snapshot-window.ts),
+// instead of crashing on load or reporting a bogus SCEN-06 mismatch.
+// A missing or non-integer simVersion is refused here as well: deserializeWorldState
+// would reject it anyway, after a pointless full replay and a bogus SCEN-06 warning.
+function refuseOutOfWindow(got: number | null): void {
+  const msg = snapshotWindowMessage(got, MIN_ACCEPTED_SIM_VERSION, LATEST_SIM_VERSION);
+  if (msg === null) return;
+  console.error(msg);
   process.exit(2);
 }
-function explainFutureSnapshot(got: number): never {
-  console.error(
-    `[analyze-snapshot] This snapshot was captured on simVersion ${got}, newer than this ` +
-      `build's LATEST (${LATEST_SIM_VERSION}); this build cannot load or replay it.\n` +
-      SAME_BUILD_RULE +
-      `  Check out the recording build (a playtrace's gameVersion sha) and analyze it there.`,
-  );
-  process.exit(2);
-}
-{
+const snapshotSimVersion: number = (() => {
   const v = (debug.snapshot as { simVersion?: unknown }).simVersion;
-  if (typeof v === 'number' && Number.isInteger(v)) {
-    if (v < MIN_ACCEPTED_SIM_VERSION) explainPreWindowSnapshot(v);
-    if (v > LATEST_SIM_VERSION) explainFutureSnapshot(v);
-  }
-}
+  const got = typeof v === 'number' && Number.isInteger(v) ? v : null;
+  refuseOutOfWindow(got); // exits for null and for anything outside [MIN, LATEST]
+  if (got === null) throw new Error('unreachable: refuseOutOfWindow exits on a missing simVersion');
+  return got;
+})();
 
 // --- 1. Replay-from-seed byte-equality check (SCEN-06) -----------------------
 
@@ -204,27 +178,11 @@ const replayStart = Date.now();
 const snapshotDifficulty = (debug.snapshot as { difficulty?: unknown }).difficulty;
 const replayDifficulty: 'Easy' | 'Normal' | 'Hard' =
   snapshotDifficulty === 'Easy' || snapshotDifficulty === 'Hard' ? snapshotDifficulty : 'Normal';
-// Restore simVersion from snapshot so version-gated paths (tiebreaks, brood modifier, etc.)
-// match the original session; without this a pre-V22 snapshot replayed on V22 code would
-// have V22 paths active, causing divergence. #395: the version goes INTO createScenario,
-// because map generation is version-gated too (V69 food fairness) — a V68 snapshot must
-// replay from the V68 map.
-const snapshotSimVersion = (debug.snapshot as { simVersion?: unknown }).simVersion;
-const replaySimVersion =
-  typeof snapshotSimVersion === 'number' &&
-  Number.isInteger(snapshotSimVersion) &&
-  snapshotSimVersion > 0
-    ? snapshotSimVersion
-    : null;
-if (replaySimVersion === null) {
-  console.warn(
-    `[analyze-snapshot] Could not restore simVersion from snapshot (got ${String(snapshotSimVersion)}); replay runs at LATEST_SIM_VERSION — byte-equality may fail for pre-V22 captures.`,
-  );
-}
-const replay =
-  replaySimVersion !== null
-    ? createScenario(debug.seed, replayDifficulty, replaySimVersion)
-    : createScenario(debug.seed, replayDifficulty);
+// Replay at the snapshot's own simVersion (checked to be within [MIN, LATEST] above),
+// so the version-gated paths match the original session. #395: the version goes INTO
+// createScenario, because map generation is version-gated too (V69 food fairness), so
+// a V68 snapshot must replay from the V68 map.
+const replay = createScenario(debug.seed, replayDifficulty, snapshotSimVersion);
 
 // #296 — regroup by the tick each command was DRAINED on, not the tick it was
 // issued on. For player/AI input the two are the same; for a command the sim
@@ -378,7 +336,7 @@ const world = (() => {
   try {
     return deserializeWorldState(debug.snapshot);
   } catch (e) {
-    if (e instanceof OldSimVersionError) explainPreWindowSnapshot(e.got);
+    if (e instanceof OldSimVersionError) refuseOutOfWindow(e.got);
     throw e;
   }
 })();

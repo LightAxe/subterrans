@@ -280,7 +280,8 @@ describe('#395 ensureFoodNearEachColony on scenario maps (V69)', () => {
 
   it('pins the V69 maps of the #395 playtest seeds: which pile moves where, and the rng after', () => {
     // [seed, [[pile id, x, y] moved], rngState after generation] — Normal, V69. A
-    // later change to the rule must be gated on a later simVersion and leave these.
+    // later change to the rule bumps simVersion (pre-1.0: no gate) and re-pins these
+    // to LATEST.
     const GOLDEN: ReadonlyArray<readonly [number, ReadonlyArray<readonly number[]>, number]> = [
       [
         1,
