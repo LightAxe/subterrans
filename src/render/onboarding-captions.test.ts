@@ -32,6 +32,7 @@ describe('checkAndTrigger — first occurrence', () => {
       'spiderRampage',
       'queenDamage',
       'queenStarvation',
+      'foodStorageNeeded',
       'autosaveFailed',
     ] as const;
     for (const key of keys) {
@@ -61,6 +62,12 @@ describe('checkAndTrigger — first occurrence', () => {
 
   it('returns the expected text for "queenDamage"', () => {
     expect(checkAndTrigger('queenDamage')).toBe('Your queen is in danger.');
+  });
+
+  it('returns the expected text for "foodStorageNeeded" (#395)', () => {
+    expect(checkAndTrigger('foodStorageNeeded')).toBe(
+      'Build a Food Storage chamber so your queen can lay eggs.',
+    );
   });
 
   it('returns the expected text for "autosaveFailed" (#234 PR2)', () => {

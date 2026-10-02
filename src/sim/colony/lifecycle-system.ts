@@ -23,7 +23,7 @@ import { despawnAnt } from '../ant-death.js';
 import type { ColonyRecord } from './colony-store.js';
 import { AntTask, ChamberType } from '../enums.js';
 import { hasCompletedChamber } from './colony-system.js';
-import { colonyFoodTotal } from '../food/food-api.js';
+import { colonyFoodCapacity, colonyFoodTotal } from '../food/food-api.js';
 import {
   FIGHTER_HUNGER,
   LARVA_HUNGER,
@@ -168,6 +168,29 @@ export function eggReserveFp(world: WorldState, colony: ColonyRecord): number {
     need += workerHungerProfile(world, id) === FIGHTER_HUNGER ? fighterFp : workerFp;
   }
   return need;
+}
+
+/**
+ * #395 (V70) — how far (fp) `colony`'s storage capacity falls short of the egg
+ * reserve its queen would need with no brood waiting: the queen, the new egg's larva
+ * and every living worker (eggReserveFp less the brood already laid). While this is
+ * above 0 no larder can cover the reserve, however full, so she cannot lay until the
+ * colony builds storage (colonyFoodCapacity: the entrance pool's cap plus every
+ * COMPLETED FoodStorage chamber's) or loses workers. That is the case with only the
+ * entrance pool (2048 fp against at least 3600), or with a colony grown past its
+ * chambers. Held back only by the brood she has already laid (the larder's brood
+ * ceiling) she lays again as it matures; that is not counted here. 0 when storage
+ * covers it, and always 0 before V70. Read-only, for the render-side storage hint
+ * (any colony, CLNY-08). Integer-only; O(workers).
+ */
+export function eggReserveStorageShortfallFp(world: WorldState, colony: ColonyRecord): number {
+  if (world.simVersion < SIM_VERSION_V70_EGG_RESERVE) return 0;
+  const laidBrood = colony.larvaeCount + colony.eggCount;
+  const noBroodReserve =
+    eggReserveFp(world, colony) -
+    laidBrood * runwayFoodFp(LARVA_HUNGER, QUEEN_EGG_RESERVE_RUNWAY_TICKS);
+  const shortfall = noBroodReserve - colonyFoodCapacity(colony);
+  return shortfall > 0 ? shortfall : 0;
 }
 
 export function tickQueenEggProduction(world: WorldState, colony: ColonyRecord): void {

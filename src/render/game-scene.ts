@@ -231,6 +231,7 @@ import {
 } from './enemy-march.js';
 import { checkAndTrigger, resetCaptions, type CaptionKey } from './onboarding-captions.js';
 import { advanceQueenDanger, createQueenDangerState } from './queen-danger.js';
+import { advanceStorageHint, createStorageHintState } from './storage-hint.js';
 // Stage 3b controls rework (issue #18, #3) — first-use navigation hints.
 import {
   triggerReactiveHint,
@@ -979,6 +980,8 @@ export class GameScene extends Phaser.Scene {
   // #375 — queen HP tracking for the damage pulse and the re-arming danger caption.
   private queenDanger = createQueenDangerState();
   private queenStarvationTriggered = false; // starvation onset caption/pulse guard
+  // #395 — "Build a Food Storage chamber so your queen can lay eggs." (storage-hint.ts).
+  private storageHint = createStorageHintState();
   // #290 PR 6 — raid captions: last-seen player raid counters + per-caption
   // throttle. Re-baselined in finishBoot (fresh or loaded world).
   private readonly raidCaptions = createRaidCaptionState();
@@ -1703,6 +1706,7 @@ export class GameScene extends Phaser.Scene {
     this.lastProcessedEventTick = -1;
     this.queenDanger = createQueenDangerState();
     this.queenStarvationTriggered = false;
+    this.storageHint = createStorageHintState();
     this.contestedGlowFrames.clear();
     this.undergroundGlowFrames.clear();
     resetCaptions();
@@ -1865,6 +1869,16 @@ export class GameScene extends Phaser.Scene {
       const captionText = checkAndTrigger('spiderPriority');
       if (captionText && uiScene) {
         uiScene.showCaption(captionText, this.layout.w / 2, 60, 'spiderPriority');
+      }
+    }
+    // #395 (V70) — the queen lays only while stores cover the egg reserve, which the
+    // entrance pool alone never can: tell the player when storage is what stops her
+    // (storage-hint.ts). Advanced only while UIScene is up, so the caption is never
+    // marked shown without reaching the screen.
+    if (uiScene) {
+      const storageText = advanceStorageHint(this.storageHint, this.world, PLAYER_COLONY_ID);
+      if (storageText) {
+        uiScene.showCaption(storageText, this.layout.w / 2, 60, 'foodStorageNeeded');
       }
     }
 

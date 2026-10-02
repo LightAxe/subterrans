@@ -3,6 +3,8 @@
 // Tracks which of the first-occurrence captions have fired this session.
 // 'queenDamage' is re-armed by GameScene once the queen recovers (#375,
 // queen-danger.ts), so it shows once per danger spell rather than once per session.
+// 'foodStorageNeeded' (#395) is re-armed the same way once storage covers the egg
+// reserve again (storage-hint.ts).
 // All state is render-side; nothing persists to WorldState or saves.
 // Reset on every new round (including same-seed rematch) so each session
 // starts fresh (Q6 DEFAULT_ACCEPTED).
@@ -20,6 +22,7 @@ export type CaptionKey =
   | 'spiderRampage'
   | 'queenDamage'
   | 'queenStarvation'
+  | 'foodStorageNeeded'
   | 'autosaveFailed';
 
 const CAPTION_TEXTS: Record<CaptionKey, string> = {
@@ -34,6 +37,8 @@ const CAPTION_TEXTS: Record<CaptionKey, string> = {
   spiderRampage: 'The spider has gone hungry and is hunting on the surface.',
   queenDamage: 'Your queen is in danger.',
   queenStarvation: 'Your queen is growing hungry.',
+  // #395 (V70): storage cannot hold the egg reserve (storage-hint.ts).
+  foodStorageNeeded: 'Build a Food Storage chamber so your queen can lay eggs.',
   autosaveFailed: 'Autosave failed — storage full or blocked.',
 };
 
@@ -53,7 +58,9 @@ export function resetCaptions(): void {
  * — losing a first-occurrence onboarding caption forever. UIScene calls this when
  * a dropped caption carries a key so the trigger re-fires on the next occurrence.
  * GameScene also calls it for 'queenDamage' once the queen recovers (#375,
- * queen-danger.ts), so that caption shows once per danger spell.
+ * queen-danger.ts), so that caption shows once per danger spell, and for
+ * 'foodStorageNeeded' once storage covers the egg reserve again (#395,
+ * storage-hint.ts).
  *
  * Recurring captions (e.g. spiderRampage) never populate `triggered`, so calling
  * this for one of them is a harmless no-op.
@@ -92,7 +99,7 @@ export function checkAndTrigger(key: CaptionKey, textOverride?: string): string 
 //
 // Captions that are driven by world-state polling or input commands (dig,
 // chamber, spider, foodMark, rally, rallyRaid, spiderPriority, queenDamage,
-// queenStarvation) are NOT events — they keep using checkAndTrigger directly.
+// queenStarvation, foodStorageNeeded) are NOT events — they keep using checkAndTrigger directly.
 //
 // #394 — every event caption is now recurring. The one-shot invasion caption
 // ('The enemy is attacking your hive.', on the first invasion_start only) is
