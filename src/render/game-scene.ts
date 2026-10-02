@@ -231,7 +231,11 @@ import {
 } from './enemy-march.js';
 import { checkAndTrigger, resetCaptions, type CaptionKey } from './onboarding-captions.js';
 import { advanceQueenDanger, createQueenDangerState } from './queen-danger.js';
-import { advanceStorageHint, createStorageHintState } from './storage-hint.js';
+import {
+  advanceStorageHint,
+  createStorageHintState,
+  STORAGE_HINT_HOLD_MS,
+} from './storage-hint.js';
 // Stage 3b controls rework (issue #18, #3) — first-use navigation hints.
 import {
   triggerReactiveHint,
@@ -1878,7 +1882,13 @@ export class GameScene extends Phaser.Scene {
     if (uiScene) {
       const storageText = advanceStorageHint(this.storageHint, this.world, PLAYER_COLONY_ID);
       if (storageText) {
-        uiScene.showCaption(storageText, this.layout.w / 2, 60, 'foodStorageNeeded');
+        uiScene.showCaption(
+          storageText,
+          this.layout.w / 2,
+          60,
+          'foodStorageNeeded',
+          STORAGE_HINT_HOLD_MS,
+        );
       }
     }
 

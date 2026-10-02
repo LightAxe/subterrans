@@ -13,8 +13,9 @@
 // it and a completed Food Storage chamber, no workers, spider and AI off), carves
 // and adds a completed Nursery, and adds 60 fighters, so the reserve the queen needs
 // with no brood (her own runway, the new egg's larva and 60 workers) tops the one
-// larder's capacity. Food in the larder keeps everyone fed. The page checks that
-// before saving through the real save path (manualSave). A reload boots the save
+// larder's capacity. Food in the larder keeps everyone fed. Before saving through
+// the real save path (manualSave), the page checks the storage shortfall: above 0,
+// and no more than one Food Storage chamber would close. A reload boots the save
 // through Continue.
 
 import { test, expect, type Page } from '@playwright/test';
@@ -24,9 +25,12 @@ import { SAVE_PROMPT_CONTINUE_RECT } from './helpers/geometry.js';
 const HINT = 'Build a Food Storage chamber so your queen can lay eggs.';
 /** storage-hint.ts STORAGE_HINT_DWELL_TICKS. */
 const DWELL_TICKS = 200;
+/** storage-hint.ts STORAGE_HINT_HOLD_MS. */
+const HOLD_MS = 4000;
 
 interface TestHook {
   getCaptionsShown?: () => string[];
+  getCaptionHolds?: () => { text: string; holdMs: number; yielded: boolean }[];
   getTick?: () => number;
 }
 
@@ -35,6 +39,15 @@ async function captions(page: Page): Promise<string[]> {
     () =>
       (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.getCaptionsShown?.() ?? [],
   );
+}
+
+/** The hold UIScene scheduled for the hint (null: not scheduled yet). */
+async function hintHold(page: Page): Promise<{ holdMs: number; yielded: boolean } | null> {
+  return await page.evaluate((hint: string) => {
+    const t = (window as unknown as { __phase9_test?: TestHook }).__phase9_test;
+    const h = t?.getCaptionHolds?.().find((c) => c.text === hint);
+    return h ? { holdMs: h.holdMs, yielded: h.yielded } : null;
+  }, HINT);
 }
 
 async function simTick(page: Page): Promise<number> {
@@ -160,7 +173,15 @@ test.describe('#395 — Food Storage hint', () => {
     // The save starts at tick 0, so the dwell puts the caption at tick 200 or later.
     const shownBy = await simTick(page);
     expect(shownBy).toBeGreaterThanOrEqual(DWELL_TICKS);
-    // Once: still blocked 300 ticks later, and it has not repeated.
+    // Held long enough to read (nothing queued behind it here to make it give way).
+    await expect
+      .poll(() => hintHold(page), { timeout: 10_000 })
+      .toEqual({
+        holdMs: HOLD_MS,
+        yielded: false,
+      });
+    // Once: 300 ticks later it has not repeated (nothing in the colony changes that
+    // would cover the reserve, so a re-shown one-shot would have shown by now).
     await expect.poll(() => simTick(page), { timeout: 40_000 }).toBeGreaterThan(shownBy + 300);
     expect((await captions(page)).filter((c) => c === HINT)).toHaveLength(1);
   });

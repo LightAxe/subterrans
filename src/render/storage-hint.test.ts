@@ -142,9 +142,9 @@ function workersToOutgrow(chambers: number): number {
 }
 
 describe('eggReserveStorageShortfallFp (#395, V70)', () => {
-  it('fighters count at the fighter profile', () => {
-    // Both profiles eat the same over the runway today; the shortfall must still
-    // read the fighter profile, as eggReserveFp does.
+  it('fighters are counted (at the fighter profile; it equals the worker one today)', () => {
+    // egg-reserve-fighter-profile.test.ts gives the fighter a distinct meal and pins
+    // that eggReserveFp reads it; this pins that fighters count here at all.
     const { world, colony } = scenario();
     addAnts(world, colony, 40, 'fighter');
     expect(eggReserveStorageShortfallFp(world, colony)).toBe(

@@ -5,7 +5,7 @@
 // reserve (lifecycle-system.ts eggReserveFp). The smallest reserve (3600 fp) is more
 // than the entrance pool holds (2048), so a colony with no FoodStorage chamber can
 // never lay, and a colony that outgrows its chambers stops laying too. Nothing else
-// in the game says so. This caption does, for the viewer's colony, when storage is
+// in the game says so. This caption does, for the player's colony, when storage is
 // the problem:
 //   - the queen is alive and her Queen chamber and Nursery are both completed, so
 //     storage is what stands between her and laying;
@@ -16,13 +16,17 @@
 //     she has already laid, and lays again as it matures): neither counts;
 //   - FoodStorage chambers the colony has already designated (pending) would not
 //     close the gap. A player who has ordered one is not told to build one.
-// That has to hold for STORAGE_HINT_DWELL_TICKS before the caption shows, so a
-// Nursery that finishes a moment before the colony's pending larder does not flash
-// it. It shows once (the 'foodStorageNeeded' one-shot caption key). It re-arms
-// only after storage has covered the no-brood reserve again for
-// STORAGE_HINT_REARM_TICKS, so a colony that later outgrows its chambers is told
-// again, but one hovering at the edge (a worker born, a worker lost) is not told
-// over and over.
+// That has to hold for STORAGE_HINT_DWELL_TICKS before the caption shows, which
+// gives a player who is about to designate a larder a moment to do it (a designated
+// one already silences it, above). It shows once (the 'foodStorageNeeded' one-shot
+// caption key), held for STORAGE_HINT_HOLD_MS so it can be read: it is the only
+// place the game says storage is why the queen is not laying. It re-arms only after
+// storage has covered the no-brood reserve again for STORAGE_HINT_REARM_TICKS, so a
+// colony that later outgrows its chambers is told again. That suppresses flips shorter
+// than STORAGE_HINT_REARM_TICKS only: a colony at the edge that loses a worker and
+// waits for the replacement to mature (EGG_HATCH_TICKS + LARVA_MATURE_TICKS, far
+// longer) is told again when it is short once more, at most once per such spell.
+// A colony with no Food Storage chamber can never be covered, so it is told once.
 //
 // Render-side session state only: reads world state, writes nothing, saves nothing.
 // Pure and Phaser-free; GameScene owns the state and calls advanceStorageHint each
@@ -42,6 +46,11 @@ export const STORAGE_HINT_DWELL_TICKS = 200;
 /** Ticks (30 s) storage must cover the no-brood reserve before the caption re-arms. */
 export const STORAGE_HINT_REARM_TICKS = 600;
 
+/** The caption's full-opacity hold (ms), as long as the gathering warning's
+ *  (GATHER_CAPTION_HOLD_MS): long enough to read. Like it, the caption gives way to
+ *  an event caption queued behind it (caption-queue.ts CAPTION_YIELD_FLOOR_MS). */
+export const STORAGE_HINT_HOLD_MS = 4000;
+
 export interface StorageHintState {
   /** world.tick since which storage has blocked the queen (null: not blocked). */
   blockedSinceTick: number | null;
@@ -53,7 +62,7 @@ export function createStorageHintState(): StorageHintState {
   return { blockedSinceTick: null, coveredSinceTick: null };
 }
 
-/** What storage says this frame about the viewer's colony. */
+/** What storage says this frame about a colony. */
 export type StorageHintCondition =
   /** Storage blocks the queen from laying (see the header). */
   | 'blocked'
@@ -84,7 +93,7 @@ export function storageHintCondition(world: WorldState, colonyId: ColonyId): Sto
 }
 
 /**
- * GameScene's per-frame step for the viewer's colony. Returns the caption text to
+ * GameScene's per-frame step for the player's colony. Returns the caption text to
  * show now (with the 'foodStorageNeeded' key), or null. Re-arms the caption once
  * storage has covered the reserve for STORAGE_HINT_REARM_TICKS.
  */
