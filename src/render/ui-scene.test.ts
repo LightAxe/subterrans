@@ -4,7 +4,7 @@
 // Overlay rendering and interaction (Phaser-coupled) is covered by Plan 07 Playwright.
 //
 // Helpers under test (exported from ui-scene-logic.ts):
-//   - formatOutcomeTitle(outcome): { text: string; color: number }
+//   - formatOutcomeTitle(outcome, reason): { text: string; color: number } (#389 — DRAW)
 //   - formatKillStatsSubtitle(killCount): string
 //   - formatCauseSubtitle(outcome, cause, reason): string (#389 — keyed on reason)
 //   - queenDeathCauseAt(events, deathTick): QueenDeathCause (#388)
@@ -35,25 +35,46 @@ import { ENEMY_COLONY_ID, MATCH_TIMEOUT_TICKS, PLAYER_COLONY_ID } from '../sim/c
 
 describe('formatOutcomeTitle', () => {
   it('Victory returns green text', () => {
-    const result = formatOutcomeTitle(GameOutcome.Victory);
+    const result = formatOutcomeTitle(GameOutcome.Victory, 'QueenDeath');
     expect(result.text).toBe('VICTORY');
     expect(result.color).toBe(0x00ff00);
   });
 
   it('Defeat returns red text', () => {
-    const result = formatOutcomeTitle(GameOutcome.Defeat);
+    const result = formatOutcomeTitle(GameOutcome.Defeat, 'QueenDeath');
     expect(result.text).toBe('DEFEAT');
     expect(result.color).toBe(0xff0000);
   });
 
-  it('MutualDestruction returns orange/yellow text', () => {
-    const result = formatOutcomeTitle(GameOutcome.MutualDestruction);
+  it('MutualDestruction by a double queen death returns orange/yellow MUTUAL DESTRUCTION', () => {
+    const result = formatOutcomeTitle(GameOutcome.MutualDestruction, 'QueenDeath');
     expect(result.text).toBe('MUTUAL DESTRUCTION');
     expect(result.color).toBe(0xffaa00);
   });
 
+  it('#389 — a stalemate draw (both queens alive) reads DRAW, same color', () => {
+    const result = formatOutcomeTitle(GameOutcome.MutualDestruction, 'StalemateTiebreak');
+    expect(result.text).toBe('DRAW');
+    expect(result.color).toBe(0xffaa00);
+  });
+
+  it('#389 — a pre-V67 timeout draw (both queens alive) reads DRAW', () => {
+    const result = formatOutcomeTitle(GameOutcome.MutualDestruction, 'TimeoutTiebreak');
+    expect(result.text).toBe('DRAW');
+    expect(result.color).toBe(0xffaa00);
+  });
+
+  it('#389 — a draw with an unknown reason reads DRAW, not a double queen death', () => {
+    expect(formatOutcomeTitle(GameOutcome.MutualDestruction, null).text).toBe('DRAW');
+  });
+
+  it('a timeout win or loss keeps VICTORY / DEFEAT', () => {
+    expect(formatOutcomeTitle(GameOutcome.Victory, 'TimeoutTiebreak').text).toBe('VICTORY');
+    expect(formatOutcomeTitle(GameOutcome.Defeat, 'TimeoutTiebreak').text).toBe('DEFEAT');
+  });
+
   it('None returns empty text graceful fallback', () => {
-    const result = formatOutcomeTitle(GameOutcome.None);
+    const result = formatOutcomeTitle(GameOutcome.None, null);
     expect(result.text).toBe('');
     expect(result.color).toBe(0x000000);
   });

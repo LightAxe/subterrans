@@ -605,6 +605,9 @@ export class UIScene extends Phaser.Scene {
   // line, or the "Tell us what you think:" prompt); null when none is up. Read
   // via __phase9_test.getEndScreenCauseLine().
   private endScreenCauseLineShown: string | null = null;
+  // #389 — the end screen's outcome title as drawn (GameOver overlay or the survey
+  // after a game over); null when none is up. Read via getEndScreenTitle().
+  private endScreenTitleShown: string | null = null;
   // #372 — the full-opacity hold (ms) actually scheduled for the active caption:
   // time already held + the delay just scheduled; null until its fade-in ends.
   // Also tells a long-hold caption's fade-in (null) from its fade-out (set, no
@@ -1921,7 +1924,7 @@ export class UIScene extends Phaser.Scene {
     bg.setInteractive();
     bg.setDepth(20);
 
-    const { text: titleText, color: titleColor } = formatOutcomeTitle(outcome);
+    const { text: titleText, color: titleColor } = formatOutcomeTitle(outcome, roundEndReason);
     const title = this.add.text(W / 2, H / 2 - 70, titleText, {
       fontSize: '40px',
       fontFamily: 'monospace',
@@ -1929,6 +1932,7 @@ export class UIScene extends Phaser.Scene {
     });
     title.setOrigin(0.5);
     title.setDepth(21);
+    this.endScreenTitleShown = titleText;
 
     // S6: prefer narrativeSeed from summary-builder; fall back to formatCauseSubtitle
     // when it has none (no terminal event in the buffer — #389: the fallback names
@@ -2465,6 +2469,13 @@ export class UIScene extends Phaser.Scene {
     return import.meta.env.DEV ? this.endScreenCauseLineShown : null;
   }
 
+  /** #389 — Dev/E2E-only: the end screen's outcome title as drawn (the GameOver
+   *  overlay's, or the survey's after a game over); null when none is up, and
+   *  outside Dev builds. Read through window.__phase9_test.getEndScreenTitle(). */
+  endScreenTitle(): string | null {
+    return import.meta.env.DEV ? this.endScreenTitleShown : null;
+  }
+
   /** Promote a queued caption once the active one has fully faded. */
   private onCaptionFinished(): void {
     const result = completeCaption(this.captionState);
@@ -2678,6 +2689,7 @@ export class UIScene extends Phaser.Scene {
     for (const obj of this.gameOverGroup) obj.destroy();
     this.gameOverGroup = [];
     this.endScreenCauseLineShown = null;
+    this.endScreenTitleShown = null;
     this.gameOverOnRestart = null;
     this.recomputeActiveOverlay();
   }
@@ -3686,7 +3698,8 @@ export class UIScene extends Phaser.Scene {
     confirmedSubmit: boolean;
     outcome: GameOutcome;
     cause: QueenDeathCause;
-    /** #389 — how the match ended, for the cause line (formatCauseSubtitle). */
+    /** #389 — how the match ended, for the title and cause line (formatOutcomeTitle,
+     *  formatCauseSubtitle). */
     roundEndReason: RoundEndReason | null;
   } = {
     rating: 0,
@@ -3739,6 +3752,7 @@ export class UIScene extends Phaser.Scene {
     for (const obj of this.surveyGroup) obj.destroy();
     this.surveyGroup = [];
     this.endScreenCauseLineShown = null;
+    this.endScreenTitleShown = null;
     this.surveyCallbacks = null;
     this.removeSurveyDomInputs();
     this.recomputeActiveOverlay();
@@ -3776,6 +3790,7 @@ export class UIScene extends Phaser.Scene {
     for (const obj of this.surveyGroup) obj.destroy();
     this.surveyGroup = [];
     this.endScreenCauseLineShown = null;
+    this.endScreenTitleShown = null;
 
     if (this.surveyState.showConfirmation) {
       // Tear down the DOM inputs before the confirmation screen replaces the
@@ -3798,7 +3813,8 @@ export class UIScene extends Phaser.Scene {
     bg.setDepth(40);
     this.surveyGroup.push(bg);
 
-    // Title row: for natural game-over, show VICTORY/DEFEAT + cause.
+    // Title row: for natural game-over, show the outcome title (VICTORY / DEFEAT /
+    // MUTUAL DESTRUCTION / DRAW) + cause.
     // For pause-menu-quit, show a generic "Quitting" heading.
     if (this.surveyState.quitFromPauseMenu) {
       const title = this.add.text(
@@ -3813,6 +3829,7 @@ export class UIScene extends Phaser.Scene {
     } else {
       const { text: outcomeText, color: outcomeColor } = formatOutcomeTitle(
         this.surveyState.outcome,
+        this.surveyState.roundEndReason,
       );
       const outcomeLabel = this.add.text(this.layout.w / 2, SURVEY_TITLE_Y - 5, outcomeText, {
         fontSize: '28px',
@@ -3822,6 +3839,7 @@ export class UIScene extends Phaser.Scene {
       outcomeLabel.setOrigin(0.5, 0);
       outcomeLabel.setDepth(41);
       this.surveyGroup.push(outcomeLabel);
+      this.endScreenTitleShown = outcomeText;
 
       const causeText = formatCauseSubtitle(
         this.surveyState.outcome,
@@ -4313,8 +4331,9 @@ export interface SurveyOverlayCallbacks {
   /** Why the relevant queen died — passed to formatCauseSubtitle. Omitted on
    *  pause-menu-quit or when cause is unknown (pre-V16 saves). */
   cause?: QueenDeathCause;
-  /** #389 — how the match ended (roundEndReasonAt), passed to formatCauseSubtitle
-   *  so a tiebreak's cause line says so. Omitted on pause-menu-quit. */
+  /** #389 — how the match ended (roundEndReasonAt), passed to formatOutcomeTitle
+   *  and formatCauseSubtitle so a tiebreak's title and cause line say so. Omitted
+   *  on pause-menu-quit. */
   roundEndReason?: RoundEndReason | null;
   /** Player submitted. The callback fires the upload (fire-and-forget) then
    *  the overlay transitions to the confirmation screen — do NOT call

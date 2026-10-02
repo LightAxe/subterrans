@@ -21,16 +21,26 @@ export type QueenDeathCause = Extract<SimEvent, { type: 'queen_death' }>['payloa
 
 /**
  * Returns the overlay title text and hex color for a given GameOutcome.
- * Used by UIScene to configure the GameOver overlay text.
+ * Used by UIScene to configure the GameOver overlay and survey titles.
+ * `reason` is roundEndReasonAt's: #389 — a MutualDestruction is a double queen
+ * death only when a queen death ended the match; a tiebreak draw (the stalemate,
+ * or a pre-V67 timeout on equal worker counts) leaves both queens alive, and an
+ * unknown reason is no evidence either way, so those read DRAW.
  */
-export function formatOutcomeTitle(outcome: GameOutcome): { text: string; color: number } {
+export function formatOutcomeTitle(
+  outcome: GameOutcome,
+  reason: RoundEndReason | null,
+): { text: string; color: number } {
   switch (outcome) {
     case GameOutcome.Victory:
       return { text: 'VICTORY', color: 0x00ff00 };
     case GameOutcome.Defeat:
       return { text: 'DEFEAT', color: 0xff0000 };
     case GameOutcome.MutualDestruction:
-      return { text: 'MUTUAL DESTRUCTION', color: 0xffaa00 };
+      return {
+        text: reason === 'QueenDeath' ? 'MUTUAL DESTRUCTION' : 'DRAW',
+        color: 0xffaa00,
+      };
     case GameOutcome.None:
     default:
       return { text: '', color: 0x000000 };
@@ -60,7 +70,7 @@ export function queenDeathCauseAt(events: readonly SimEvent[], deathTick: number
 }
 
 // ---------------------------------------------------------------------------
-// roundEndReasonAt — how the match ended, for the end screen's cause line (#389)
+// roundEndReasonAt — how the match ended, for the end screen's title and cause line (#389)
 // ---------------------------------------------------------------------------
 
 /**

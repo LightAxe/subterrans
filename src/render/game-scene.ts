@@ -350,8 +350,9 @@ interface UIScenePhase9 {
   hudButtonGeometry?(): HudButtonGeometry[];
   // #290 PR 6 — Dev/E2E observability for __phase9_test.getCaptionsShown().
   captionsShown?(): string[];
-  // #389 — Dev/E2E observability for __phase9_test.getEndScreenCauseLine().
+  // #389 — Dev/E2E observability for __phase9_test.getEndScreenCauseLine() / getEndScreenTitle().
   endScreenCauseLine?(): string | null;
+  endScreenTitle?(): string | null;
   // #290 PR 6 / #350 — true while nothing is showing and nothing is pending, so
   // recurring captions (raid news, the spider-rampage warning) may enter without
   // taking the slot a one-shot caption would need.
@@ -467,6 +468,9 @@ declare global {
        *  or the cause fallback; survey: the cause line or its "Tell us what you
        *  think:" prompt); null when none is up. Dev-build only. */
       getEndScreenCauseLine?(): string | null;
+      /** #389 — the end screen's outcome title as drawn (GameOver overlay, or the
+       *  survey after a game over); null when none is up. Dev-build only. */
+      getEndScreenTitle?(): string | null;
       /** #290 PR 6 — the text of every caption that began displaying this round,
        *  oldest first (UIScene.captionsShown). A caption is up for 1.5 s (a
        *  long-hold one longer), so a spec asserts on the log rather than racing the live Text. Dev-build only. */
@@ -718,7 +722,7 @@ export class GameScene extends Phaser.Scene {
   private gamePhase: GamePhase = GamePhase.Playing;
   private currentOutcome: GameOutcome = GameOutcome.None;
   private currentCause: import('./ui-scene-logic.js').QueenDeathCause = null;
-  /** #389 — how the match ended (roundEndReasonAt); the end screen's cause line keys off it. */
+  /** #389 — how the match ended (roundEndReasonAt); the end screen's title and cause line key off it. */
   private currentRoundEndReason: RoundEndReason | null = null;
   // S5 — difficulty chosen by the player before each new game; preserved for retry.
   private currentDifficulty: 'Easy' | 'Normal' | 'Hard' = 'Normal';
@@ -851,6 +855,7 @@ export class GameScene extends Phaser.Scene {
         if (this.gamePhase === GamePhase.Playing) this.enterGameOver(GameOutcome[outcome]);
       },
       getEndScreenCauseLine: (): string | null => this.getUIScene()?.endScreenCauseLine?.() ?? null,
+      getEndScreenTitle: (): string | null => this.getUIScene()?.endScreenTitle?.() ?? null,
       getActiveZoom: (): number =>
         (this.viewState.activeView === 'surface'
           ? this.viewState.surfaceCamera

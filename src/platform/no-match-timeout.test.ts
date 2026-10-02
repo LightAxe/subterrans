@@ -57,6 +57,7 @@ import { buildOutcomeAttribution, buildPlaytraceSummary } from '../render/summar
 import { buildPlaytraceEnvelope } from '../render/playtrace-upload.js';
 import {
   formatCauseSubtitle,
+  formatOutcomeTitle,
   queenDeathCauseAt,
   roundEndReasonAt,
 } from '../render/ui-scene-logic.js';
@@ -256,6 +257,7 @@ function endOfMatchView(
   world: WorldState,
   outcome: GameOutcome,
 ): {
+  title: string;
   subtitle: string;
   narrative: string | null;
   roundEndReason: string | null;
@@ -289,6 +291,7 @@ function endOfMatchView(
     summary,
   );
   return {
+    title: formatOutcomeTitle(outcome, reason).text,
     subtitle: formatCauseSubtitle(outcome, cause, reason),
     narrative: summary.outcomeAttribution.narrativeSeed,
     roundEndReason: envelope.roundEndReason,
@@ -346,7 +349,7 @@ function loseTerminalEvents(world: WorldState): void {
   world.events.push(...kept);
 }
 
-describe('#389 — the end-screen cause line names the real round-end reason', () => {
+describe('#389 — the end-screen title and cause line name the real round-end reason', () => {
   it('a stalemate: a draw for want of food, with both queens alive — and still so with its round_end lost', () => {
     const world = worldNearOldCap(7);
     setPilesForTest(world, []);
@@ -359,12 +362,14 @@ describe('#389 — the end-screen cause line names the real round-end reason', (
       expect(world.ants.alive[world.colonies[cid]!.queenEntityId], `queen ${cid}`).toBe(1);
     }
     expect(endOfMatchView(world, outcome).subtitle).toBe('Both colonies ran out of food — a draw');
+    expect(endOfMatchView(world, outcome).title).toBe('DRAW');
     // The issue's case: no narrative, so the GameOver overlay falls back to the
     // cause line — which must not claim the (living) queens died.
     loseTerminalEvents(world);
     const view = endOfMatchView(world, outcome);
     expect(view.narrative).toBeNull();
     expect(view.subtitle).toBe('Both colonies ran out of food — a draw');
+    expect(view.title).toBe('DRAW');
   }, 60_000);
 
   it('a double queen death: both queens died at the same time — with or without its events', () => {
@@ -384,11 +389,13 @@ describe('#389 — the end-screen cause line names the real round-end reason', (
     expect(roundEnds(world)).toBe(0);
     const view = endOfMatchView(world, outcome);
     expect(view.roundEndReason).toBe('QueenDeath');
+    expect(view.title).toBe('MUTUAL DESTRUCTION');
     expect(view.subtitle).toBe('Both queens died at the same time');
     // They starved — the narrative names no fight.
     expect(view.narrative).toBe('Both queens died at the same time.');
     loseTerminalEvents(world);
     expect(endOfMatchView(world, outcome).subtitle).toBe('Both queens died at the same time');
+    expect(endOfMatchView(world, outcome).title).toBe('MUTUAL DESTRUCTION');
   }, 60_000);
 
   it('a single queen death: her cause; with the event lost, no line rather than a draw', () => {
