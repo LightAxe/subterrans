@@ -64,6 +64,7 @@ import type {
   SetRallyPointCommand,
 } from '../sim/commands.js';
 import { ChamberType } from '../sim/enums.js';
+import { pileSlotById, pileTileX, pileTileY } from '../sim/food/food-api.js';
 import { AI_DIG_INTERVAL, AI_DIG_MARK_BUDGET, runAIController } from './ai-controller.js';
 import { JevCommandLedger } from './jev-commands.js';
 import { buildCandidates, computeFacts, digFrontier } from './jev-candidates.js';
@@ -365,8 +366,9 @@ export class JevEnemyController {
       // expressed by re-marking the pile that is currently priority.
       let tile = fp.tile;
       if (fp.pileId === null) {
-        const cur = world.foodPiles.find((p) => p.foodPileId === colony.priorityFoodPileId);
-        tile = cur === undefined ? null : { x: cur.tileX, y: cur.tileY };
+        const slot =
+          colony.priorityFoodPileId === null ? -1 : pileSlotById(world, colony.priorityFoodPileId);
+        tile = slot < 0 ? null : { x: pileTileX(world, slot), y: pileTileY(world, slot) };
       }
       if (tile !== null) {
         const cmd: MarkFoodPileCommand = {

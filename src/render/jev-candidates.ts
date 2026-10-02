@@ -18,10 +18,13 @@ import { Zone, UndergroundTileState, ugGet } from '../sim/terrain.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { isSurfaceTileInComponent } from '../sim/surface-features.js';
 import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
-import { colonyFoodTotal } from '../sim/colony/colony-system.js';
 import {
-  BASE_FOOD_STORAGE_CAPACITY,
-  FOOD_CHAMBER_CAPACITY,
+  colonyFoodCapacity,
+  colonyFoodTotal,
+  forEachPile,
+  PICKUP_SHIFT,
+} from '../sim/food/food-api.js';
+import {
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
   UNDERGROUND_CEILING_ROW_Y,
@@ -475,12 +478,9 @@ export function fightersOnSurface(world: WorldState, colonyId: ColonyId): number
   );
 }
 
+/** Storage capacity (fp) — the food facade's `colonyFoodCapacity`. */
 export function foodCapacity(colony: ColonyRecord): number {
-  let cap = BASE_FOOD_STORAGE_CAPACITY;
-  for (const ch of colony.chambers) {
-    if (ch.chamberType === ChamberType.FoodStorage) cap += FOOD_CHAMBER_CAPACITY;
-  }
-  return cap;
+  return colonyFoodCapacity(colony);
 }
 
 /**
@@ -527,19 +527,20 @@ export function computeFacts(
   }
 
   const piles: PileFact[] = [];
-  for (const p of world.foodPiles) {
-    const dOwn = home === null ? Infinity : manhattan(p.tileX, p.tileY, home.x, home.y);
-    const dOpp = oppHome === null ? Infinity : manhattan(p.tileX, p.tileY, oppHome.x, oppHome.y);
+  // Piles through the food facade (#290): sizes in whole pickups, as before V50.
+  forEachPile(world, (p) => {
+    const dOwn = home === null ? Infinity : manhattan(p.x, p.y, home.x, home.y);
+    const dOpp = oppHome === null ? Infinity : manhattan(p.x, p.y, oppHome.x, oppHome.y);
     piles.push({
-      id: p.foodPileId,
-      tile: { x: p.tileX, y: p.tileY },
-      remaining: p.pickupsRemaining,
-      initial: p.pickupsInitial,
+      id: p.foodId,
+      tile: { x: p.x, y: p.y },
+      remaining: p.amountFp >> PICKUP_SHIFT,
+      initial: p.initialFp >> PICKUP_SHIFT,
       distOwn: dOwn,
       distOpp: dOpp,
       contested: dOpp <= dOwn && dOwn <= CONTEST_MAX_DIST,
     });
-  }
+  });
   piles.sort((x, y) => x.distOwn - y.distOwn || x.id - y.id);
 
   let spider: RawFacts['spider'] = null;
@@ -567,7 +568,7 @@ export function computeFacts(
     ),
     oppFightersSurface: fightersOnSurface(world, seats.opponentSeat),
     oppFightersNearOurEntrance: oppFightersNear,
-    foodTotal: colonyFoodTotal(me),
+    foodTotal: colonyFoodTotal(world, me),
     foodCapacity: foodCapacity(me),
     storageChambers: me.chambers.filter((c) => c.chamberType === ChamberType.FoodStorage).length,
     ownEntrancesOpen: me.entrances.filter((e) => e.isOpen).length,

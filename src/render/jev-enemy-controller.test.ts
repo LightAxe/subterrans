@@ -9,6 +9,7 @@ import { copyWorldState, type WorldState } from '../sim/types.js';
 import type { SimCommand } from '../sim/commands.js';
 import { ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
 import { FP_SHIFT } from '../sim/fixed.js';
+import { setPoolFoodForTest } from '../sim/food/food-test-utils.js';
 import type { JevAnswerMap } from './jev-encode.js';
 import {
   assertRequestValid,
@@ -623,7 +624,7 @@ describe('JevEnemyController — live phase', () => {
     // questions are offered on this beat.
     world.spider!.posX = entrance.surfaceTileX << FP_SHIFT;
     world.spider!.posY = entrance.surfaceTileY << FP_SHIFT;
-    colony.foodStored = 1_000_000;
+    setPoolFoodForTest(world, colony, 1_000_000);
 
     const log: IssuedRecord[] = [];
     await step(world, ctl, 1, log); // beat fires

@@ -7,6 +7,7 @@ import { tick } from '../sim/tick.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
 import { UndergroundTileState, ugGet } from '../sim/terrain.js';
 import { pushCommand } from '../sim/commands.js';
+import { pilesForTest } from '../sim/food/food-test-utils.js';
 import { JevCommandLedger, PLAYER_SURFACE_COMMANDS } from './jev-commands.js';
 
 function drainAndTick(world: ReturnType<typeof createScenario>): void {
@@ -124,7 +125,7 @@ describe('JevCommandLedger — applied / rejected / no-op', () => {
     const world = createScenario(1, 'Normal');
     const ledger = new JevCommandLedger();
     const entrance = world.colonies[PLAYER_COLONY_ID]!.entrances[0]!;
-    const pile = world.foodPiles[0]!;
+    const pile = pilesForTest(world)[0]!;
     ledger.issue(world, {
       type: 'SetRallyPoint',
       colonyId: PLAYER_COLONY_ID,
