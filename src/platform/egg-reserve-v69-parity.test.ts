@@ -3,32 +3,33 @@
 // V70 replaces the queen's 3-food egg threshold with the egg reserve
 // (lifecycle-system.ts eggReserveFp). It is gated on the world's simVersion, so a V69
 // world must still lay — and so run — exactly as before. GOLDEN_RUNS were captured on
-// 86a2b09 (V69 = LATEST there) with createScenario(seed, difficulty): the standard
-// opening ordered at tick 0 for the player (Queen, Nursery and FoodStorage), the
-// enemy driven by the AI controller, the full serialized world hashed every 1200
-// ticks. By 3:00 both queens have been laying for minutes, so the egg gate is
-// exercised on both sides.
+// main at 16ab935 (V69 = LATEST there) with createScenario(seed, difficulty): the
+// standard opening ordered at tick 0 for the player (Queen, Nursery and FoodStorage),
+// the full serialized world hashed every 1200 ticks. By 3:00 the player's queen has
+// been laying for minutes, so the egg gate is exercised.
+// The enemy is passive (no AI controller): the render-side AI changed in this PR at
+// every simVersion (#395: no fixed cap on its FoodStorage chambers; the pre-1.0
+// policy needs no gate there), so an AI-driven run could not pin the sim alone.
 import { describe, it, expect } from 'vitest';
 import { createScenario } from '../sim/scenario.js';
 import { tick } from '../sim/tick.js';
 import { pushCommand } from '../sim/commands.js';
 import type { SimCommand } from '../sim/commands.js';
-import { ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
+import { PLAYER_COLONY_ID } from '../sim/constants.js';
 import { ChamberType } from '../sim/enums.js';
 import { SIM_VERSION_V69_FOOD_FAIRNESS, SIM_VERSION_V70_EGG_RESERVE } from '../sim/types.js';
 import type { WorldState } from '../sim/types.js';
-import { runAIController } from '../render/ai-controller.js';
 import { hashWorldState } from './world-hash.js';
 
 type Difficulty = 'Easy' | 'Normal' | 'Hard';
 
 /** The opening run's hash at ticks 1200, 2400 and 3600 from the V69 world, and the
- *  player's brood at 3:00, on 86a2b09. */
+ *  player's brood at 3:00, on 16ab935. */
 const GOLDEN_RUNS: ReadonlyArray<readonly [number, Difficulty, readonly string[], number]> = [
   // seed, difficulty, hashes, the player's brood at 3:00 (V69)
-  [20, 'Normal', ['4d2a0a36', '5f7f396f', '9bbbb5ec'], 14],
-  [12, 'Hard', ['b273bd06', '182530a3', '2de0c81c'], 15],
-  [5, 'Easy', ['06e19ad2', 'eebf63be', 'b4cc779c'], 13],
+  [20, 'Normal', ['c34ac92d', '1a9dd8a0', 'c4ef5fdb'], 13],
+  [12, 'Hard', ['2e3bc509', '6f65a874', '3afa0d31'], 13],
+  [5, 'Easy', ['1c7f715f', 'c02622e3', '1cc71f17'], 14],
 ];
 
 /** The standard opening, ordered for the player at tick 0. */
@@ -58,12 +59,12 @@ function orderStandardOpening(world: WorldState): void {
   });
 }
 
-/** Run the opening from `world` to tick 3600; the hash every 1200 ticks. */
+/** Run the opening from `world` to tick 3600 (the enemy passive); the hash every
+ *  1200 ticks. */
 function runOpening(world: WorldState): string[] {
   orderStandardOpening(world);
   const hashes: string[] = [];
   for (let t = 1; t <= 3600; t++) {
-    runAIController(world, ENEMY_COLONY_ID);
     tick(world, world.commandQueue.splice(0));
     if (t % 1200 === 0) hashes.push(hashWorldState(world));
   }
