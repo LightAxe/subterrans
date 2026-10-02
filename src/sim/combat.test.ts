@@ -362,7 +362,7 @@ describe('V16 combat resolver', () => {
     ) as unknown as (typeof world.ants.currentGridColonyId)[0];
 
     world.ants.hp[defender] = COMBAT_HP_BASE + COMBAT_HP_HOMEGROUND_BONUS; // full at home
-    const defenderHp0 = world.ants.hp[defender]!;
+    const defenderHp0 = world.ants.hp[defender];
     // Run exactly COMBAT_COOLDOWN_TICKS+1 = 6 ticks per round, 4 rounds = 24 ticks total
     // But windup is on tick 1, first strike at tick 1+5=6. So T=6, T=12, T=18, T=24?
     // Wait - let me recount: windup happens when cooldown=0. T=1: windup, cooldown=5.

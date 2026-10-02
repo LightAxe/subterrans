@@ -67,7 +67,6 @@ import {
   UNDERGROUND_GRID_WIDTH,
   UNDERGROUND_GRID_HEIGHT,
   PLAYER_COLONY_ID,
-  QUEEN_HP_HOME,
   QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
 } from '../sim/constants.js';
 import { FP_SHIFT } from '../sim/fixed.js';
@@ -2176,14 +2175,13 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   // its task at the check, so one stood down from Fighting since its last meal
   // may be past its current kind's starve-after until step 3 next runs: the
   // window uses the larger of the two.) From V66 (#375) the queen starves by HP
-  // drain: at most QUEEN_HP_HOME drains, one per QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
-  // so that product is her window (today equal to her starve-after, 300). #400
-  // (V71): her most HP is QUEEN_HP_HOME, her max in her nest.
+  // drain: at most her max HP in drains, one per QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
+  // so that product is her window. #400 (V71): her max is where she stands
+  // (health.ts antMaxHp) — QUEEN_HP_HOME in her nest (a window of 300, her
+  // starve-after), COMBAT_HP_QUEEN on the surface before she founds it. (A queen
+  // never goes back up; if she did, the clamp would only shorten her famine.)
   const workersEat = world.simVersion >= SIM_VERSION_V51_UNIFIED_HUNGER;
-  const queenStarveAfter =
-    world.simVersion >= SIM_VERSION_V66_QUEEN_STARVES_HP
-      ? QUEEN_HP_HOME * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS
-      : QUEEN_HUNGER.starveAfterTicks;
+  const queenStarvesByHp = world.simVersion >= SIM_VERSION_V66_QUEEN_STARVES_HP;
   // #400 (V71) — a blow lands during a tick, so between ticks no ant's last hit is
   // later than tick − 1 (dead slots included: their stamp is from before they died).
   const allocated = Math.min(world.nextEntityId, world.ants.lastHitTick.length);
@@ -2200,7 +2198,13 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   );
   for (const c of Object.values(world.colonies)) {
     const eaters: Array<[number, number, string]> = [
-      [c.queenEntityId, queenStarveAfter, 'queen'],
+      [
+        c.queenEntityId,
+        queenStarvesByHp
+          ? antMaxHp(world, c.queenEntityId) * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS
+          : QUEEN_HUNGER.starveAfterTicks,
+        'queen',
+      ],
       ...c.larvae.map((id): [number, number, string] => [
         id,
         LARVA_HUNGER.starveAfterTicks,
@@ -2212,10 +2216,10 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
         'worker',
       ]),
     ];
-    // #375 / #400 — the queen window above holds only while her HP never exceeds
-    // QUEEN_HP_HOME. #400 (V71): between ticks no adult is above its max HP where it
-    // stands (health.ts antMaxHp: step 16f clamps after movement, and nothing later in
-    // the tick moves an ant), which bounds the queen's HP by QUEEN_HP_HOME.
+    // #375 / #400 — the queen window above holds only while her HP never exceeds her
+    // max where she stands. #400 (V71): between ticks no adult is above it (health.ts
+    // antMaxHp: step 16f clamps after movement, and nothing later in the tick moves
+    // an ant).
     for (const id of [c.queenEntityId, ...c.workers]) {
       if (world.ants.alive[id] !== 1) continue;
       if (world.ants.hp[id]! > antMaxHp(world, id)) {

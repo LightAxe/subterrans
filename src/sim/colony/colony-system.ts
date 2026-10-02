@@ -124,9 +124,11 @@ export function largestNurseryTileCount(colony: ColonyRecord): number {
 //
 // This IS the concrete implementation of steps 3 and 4 evaluated inline per entity.
 // Step 3 (feed):          meal due + withdrawFood success → lastMealTick = world.tick
-//                          (the queen from V66 also regains 1 HP on regen ticks)
+//                          (V66–V70 the queen also regained 1 HP on regen ticks; from #400,
+//                          V71, she heals in step 16f instead — health.ts)
 // Step 4 (starve-on-fail): withdrawFood failure → kill once ticks since meal ≥ starve-after
-//                          (the queen from V66: drain 1 HP per 10 failed ticks, kill at 0 HP)
+//                          (the queen from V66: drain 1 HP per QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS
+//                          failed ticks, kill at 0 HP)
 //
 // Queen processed first (CLNY-04); larvae processed in order (CLNY-05); then,
 // from V51, workers and fighters in `colony.workers` order (#288).

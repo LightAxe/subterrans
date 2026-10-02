@@ -91,8 +91,7 @@ describe('#375 V66 — the queen starves by losing HP', () => {
   });
 
   it('a queen at full home HP never fed dies on the same tick as at V65 (tick 299)', () => {
-    const a = starvingWorld();
-    a.world.ants.hp[a.q] = QUEEN_HP_HOME;
+    const a = starvingWorldInNest();
     const b = starvingWorld(V65);
     const dA = deathTick(a.world, a.colony);
     const dB = deathTick(b.world, b.colony);
@@ -101,8 +100,7 @@ describe('#375 V66 — the queen starves by losing HP', () => {
   });
 
   it('she loses 1 HP each time ticks-since-meal reaches a multiple of the drain interval, and no other tick', () => {
-    const { world, colony, q } = starvingWorld();
-    world.ants.hp[q] = QUEEN_HP_HOME;
+    const { world, colony, q } = starvingWorldInNest();
     // createScenario: lastMealTick = −1, so tick t is t + 1 ticks since her meal.
     for (let t = 0; t < STARVATION_GRACE_TICKS - 1; t++) {
       consume(world, colony);
@@ -137,8 +135,7 @@ describe('#375 V66 — the queen starves by losing HP', () => {
   });
 
   it('eating stops the drain and heals nothing by itself (#400); a new famine restarts the interval', () => {
-    const { world, colony, q } = starvingWorld();
-    world.ants.hp[q] = QUEEN_HP_HOME;
+    const { world, colony, q } = starvingWorldInNest();
     for (let t = 0; t < 5 * D + 1; t++) consume(world, colony); // 5 drains
     expect(world.ants.hp[q]).toBe(QUEEN_HP_HOME - 5);
 
@@ -198,11 +195,11 @@ describe('#400 V71 — the queen heals while fed, safe and in her nest (step 16f
     let healed = 0;
     for (let t = 0; t < 10 * QUEEN_HEAL_INTERVAL_TICKS; t++) {
       const now = world.tick;
-      const before = world.ants.hp[q]!;
+      const before = world.ants.hp[q];
       setColonyFoodForTest(world, colony, QUEEN_FOOD_PER_TICK);
       consumeAndHeal(world, colony);
       const expected = now % QUEEN_HEAL_INTERVAL_TICKS === 0 && before < QUEEN_HP_HOME ? 1 : 0;
-      expect(world.ants.hp[q]! - before, `tick ${now}`).toBe(expected);
+      expect(world.ants.hp[q] - before, `tick ${now}`).toBe(expected);
       healed += expected;
     }
     expect(healed).toBe(5);
@@ -212,7 +209,7 @@ describe('#400 V71 — the queen heals while fed, safe and in her nest (step 16f
   it('she does not heal while starving (not fed)', () => {
     const { world, colony, q } = starvingWorldInNest();
     world.ants.hp[q] = QUEEN_HP_HOME - 10;
-    let prev = world.ants.hp[q]!;
+    let prev = world.ants.hp[q];
     for (let t = 0; t < 4 * QUEEN_HEAL_INTERVAL_TICKS; t++) {
       consumeAndHeal(world, colony);
       expect(world.ants.hp[q]).toBeLessThanOrEqual(prev);

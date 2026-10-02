@@ -1556,7 +1556,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const w2 = deserializeWorldState(s);
       expect(w2.tick).toBe(1_000_000);
     });
-    it('#375/#400: a queen mid-famine is valid up to QUEEN_HP_HOME × drain interval since her meal', () => {
+    it('#375/#400: a queen mid-famine is valid up to her max HP where she stands × drain interval since her meal', () => {
       const w = createScenario(42);
       // eslint-disable-next-line no-restricted-syntax -- test fixture: stage the world tick
       w.tick = 1000;
@@ -1564,9 +1564,18 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         setMealsUntilStarvationForTest(w, c.queenEntityId, QUEEN_HUNGER, 300);
         for (const id of c.workers) w.ants.lastMealTick[id] = w.tick - 1;
       }
-      const q = w.colonies[PLAYER_COLONY_ID]!.queenEntityId;
+      const colony = w.colonies[PLAYER_COLONY_ID]!;
+      const q = colony.queenEntityId;
       w.ants.hp[q] = 1; // her last drain is due on the next tick
+      // On the surface (createScenario), before she founds her nest: COMBAT_HP_QUEEN × D.
+      w.ants.lastMealTick[q] = w.tick - COMBAT_HP_QUEEN * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS;
+      expect(() => deserializeWorldState(serializeWorldState(w))).not.toThrow();
+      w.ants.lastMealTick[q] -= 1;
+      expect(() => deserializeWorldState(serializeWorldState(w))).toThrow(/lastMealTick/);
+      // In her nest: QUEEN_HP_HOME × D (= her 300-tick starve-after).
+      stageQueenInNest(w, colony);
       w.ants.lastMealTick[q] = w.tick - QUEEN_HP_HOME * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS;
+      expect(QUEEN_HP_HOME * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS).toBe(300);
       expect(() => deserializeWorldState(serializeWorldState(w))).not.toThrow();
       w.ants.lastMealTick[q] -= 1;
       expect(() => deserializeWorldState(serializeWorldState(w))).toThrow(/lastMealTick/);

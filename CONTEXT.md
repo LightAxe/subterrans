@@ -200,11 +200,15 @@ walks home to eat, then goes back to its rally point or post. Since **#363
 (`FIGHTER_STARVING_TICKS`; not the hunger profile's lethal `'starving'` state) —
 walks home from a fight too, when home can feed it. Since **#375 (simVersion
 V66)** the **queen** starves by losing health: while she cannot eat she loses 1 HP
-every 10 ticks and dies of starvation at 0 HP, so a full-HP queen lasts the same
-300 ticks and a wounded one less. A meal stops the loss, and while she is fed she
-slowly **regenerates** lost HP — combat wounds too — up to full, so a short hunger
-burst heals back but a long famine still kills.
-The HUD's queen bar is her HP. Larvae, workers and fighters still die outright at
+every few ticks (`QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS`) and dies of starvation at
+0 HP, so a queen at full health in her nest lasts the same 300 ticks and a wounded one
+less. A meal stops the loss, and while she is fed she **heals** lost HP — combat
+wounds too — up to full, so a short hunger burst heals back but a long famine still
+kills. Since **#400 (simVersion V71)** she heals only while also safe from blows and
+in her nest, like every ant (**Health**, below): a queen still on the surface, before
+she founds her nest, does not heal, and her lower max HP there gives her a shorter
+famine (276 ticks from full).
+The HUD's queen bar is her HP out of her max where she stands. Larvae, workers and fighters still die outright at
 their starvation tick. A starved ant leaves
 no food behind. The spider keeps its own hunger clock and eats only its kills.
 _Avoid_: **upkeep**, **rations** (except for eating from a carried load), **stamina**.
@@ -319,6 +323,28 @@ id). Since **#364 (simVersion V59)** an invader goes after the nearest enemy (by
 tunnel) whose tile is not saturated, instead of queuing behind a duel its colony
 already holds, and such a duel no longer stops a raider looting.
 _Avoid_: battle; **fight** (fight = the task / behavior-ratio term, not the resolver).
+
+**Health / max HP / home ground** (#400, simVersion V71; `src/sim/health.ts`):
+An ant's **max HP** depends on where it stands: higher on its **home ground** —
+underground in its own colony's nest — than **away** (on the surface, or in another
+colony's nest): 20 against 16 for a worker or fighter, and the same +4 on top of the
+queen's own base. A blow just lowers HP. Leaving home lowers the max and HP clamps
+down to it (a wounded ant keeps what it has); coming home raises the max but does not
+heal. Fighters on home ground also deal +25% damage. Every creature **heals**
+slowly while **fed** (not hungry) and **safe** (not hit for a while, `HEAL_SAFE_TICKS`):
+an ant only on its home ground, the spider anywhere (it has no home). Nothing heals
+mid-fight, and eating does not heal the spider. The queen's HUD bar is her HP out of
+her max where she stands. Up to V70 the home-ground +4 was a hidden buffer instead.
+_Avoid_: **regen** (say heal), **armour**, **shield**; **home** alone for home ground
+(at home, for meals, includes the ground near the colony's own entrances).
+
+**Spider priority** (the spider order; `MarkSpiderPriority`):
+The player's order sending the colony's surface fighters at the spider, wherever it
+goes; enough of them on its tile at once (`SPIDER_SWARM_FIGHTER_THRESHOLD`) each strike
+it. Since **#400 (simVersion V71)** it stays on until the player clears it or the spider
+dies; before, it also ended whenever the spider ate, broke off a hunt or rampage, or
+turned to chase.
+_Avoid_: spider mark, spider target.
 
 **Raid / looting / hauling** (simVersion V52; V53 no loot with full stores, #290):
 Fighters **steal food** from an enemy's FoodStorage chambers. A **raid** is

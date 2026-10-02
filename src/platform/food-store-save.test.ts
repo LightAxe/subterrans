@@ -15,6 +15,7 @@ import { FIGHTER_HUNGER, LARVA_HUNGER, WORKER_HUNGER } from '../sim/hunger.js';
 import { spawnCorpseFood } from '../sim/food-system.js';
 import type { WorldState } from '../sim/types.js';
 import { isSurfaceTileInComponent } from '../sim/surface-features.js';
+import { antMaxHp } from '../sim/health.js';
 import {
   BASE_FOOD_STORAGE_CAPACITY,
   ENEMY_COLONY_ID,
@@ -23,6 +24,7 @@ import {
   FOOD_STORAGE_CHAMBERS_PER_COLONY_BOUND,
   FOOD_STORE_CAPACITY,
   PLAYER_COLONY_ID,
+  QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
   SURFACE_GRID_HEIGHT,
   SURFACE_GRID_WIDTH,
 } from '../sim/constants.js';
@@ -408,11 +410,14 @@ describe('#290 PR 2 validateFoodStore — tamper matrix', () => {
     for (let t = 0; t < 5; t++) tick(w, []);
     const q = w.colonies[PC]!.queenEntityId;
     expect(() => deserializeWorldState(serializeWorldState(w))).not.toThrow();
+    // #400 (V71): her famine window is her max HP where she stands × the drain
+    // interval (still on the surface here, 5 ticks in: COMBAT_HP_QUEEN × D = 276).
+    const window = antMaxHp(w, q) * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS;
     rejects(w, (s) => (s.ants.lastMealTick[q] = s.tick), /lastMealTick/);
-    rejects(w, (s) => (s.ants.lastMealTick[q] = s.tick - 301), /lastMealTick/);
+    rejects(w, (s) => (s.ants.lastMealTick[q] = s.tick - window - 1), /lastMealTick/);
     // The edges load: fed last tick, or one meal from starving.
     const s = serializeWorldState(w);
-    s.ants.lastMealTick[q] = s.tick - 300;
+    s.ants.lastMealTick[q] = s.tick - window;
     expect(() => deserializeWorldState(s)).not.toThrow();
   });
 

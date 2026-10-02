@@ -5,7 +5,6 @@ import { createWorldState, allocateEntityId } from './types.js';
 import type { WorldState } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
-import type { ColonyId } from './colony/colony-store.js';
 import { AntTask } from './enums.js';
 import { Zone } from './terrain.js';
 import { FP_ONE, FP_SHIFT } from './fixed.js';
@@ -44,7 +43,7 @@ function twoColonies(): WorldState {
       task: AntTask.Idle,
       hp: COMBAT_HP_QUEEN,
     });
-    const colony = createColonyRecord(cid as ColonyId, q);
+    const colony = createColonyRecord(cid, q);
     colony.entrances = [];
     colony.rallyPoint = null;
     colony.digFlowFieldDirty = false;

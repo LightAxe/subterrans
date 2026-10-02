@@ -64,7 +64,7 @@ describe('#400 (V71) — a world saved mid-drain continues byte-identically', ()
       feed(loaded);
       if (t % 5 === 0) expect(hashWorldState(loaded), `fed ${t}`).toBe(hashWorldState(world));
     }
-    const healedHp = world.ants.hp[pq]!;
+    const healedHp = world.ants.hp[pq];
     expect(healedHp).toBe(20 - drains + 10); // one per heal tick
     expect(loaded.ants.hp[pq]).toBe(healedHp);
     const lastMeal = world.ants.lastMealTick[pq]!;

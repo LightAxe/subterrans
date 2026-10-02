@@ -200,8 +200,10 @@ export const QUEEN_STARVE_AFTER_TICKS = STARVATION_GRACE_TICKS;
  * #375 (V66) — while the queen cannot eat she loses 1 HP each time the ticks since
  * her last meal reach a multiple of this, and dies (starvation) at 0 HP. #400 (V71)
  * retuned it with her HP: 6 × QUEEN_HP_HOME (50, her full HP in her nest) =
- * QUEEN_STARVE_AFTER_TICKS (300), so a queen at full health still starves on the same
- * tick as before V66 and a wounded one sooner (a queen at 6 HP lasts 36 ticks).
+ * QUEEN_STARVE_AFTER_TICKS (300), so a queen at full health in her nest still starves
+ * on the same tick as before V66 and a wounded one sooner (a queen at 6 HP lasts 36
+ * ticks; one still on the surface, before she founds her nest, at most
+ * COMBAT_HP_QUEEN × 6 = 276).
  * queen-starvation-drain.test.ts pins the product; save.ts validates the queen's
  * hunger clock against it, so LOWERING this is a save wipe, not a bare retune (see
  * COMBAT_HP_QUEEN).
@@ -1184,11 +1186,15 @@ export const QUEEN_HEAL_INTERVAL_TICKS = 3;
 
 /**
  * #400 (V71) — the spider's healing: 1 HP on each tick that is a multiple of this,
- * anywhere, while it is fed (not hungry) and safe. Replaces the V23 feeding heal
- * (SPIDER_FEED_HEAL_INTERVAL_TICKS, 1 HP every 10 ticks while Feeding at its feed
- * tile), so eating no longer heals it.
+ * anywhere, while it is fed (not hungry) and safe — 1 HP a second, 0 → full in 80 s.
+ * Replaces the V23 feeding heal (SPIDER_FEED_HEAL_INTERVAL_TICKS, 1 HP every 10 ticks
+ * while Feeding at its feed tile), so eating no longer heals it. Tuned on the
+ * spider-kill probes (PR for #400): at 40 or 80 fighters parked in its territory with
+ * no spider order wore it down (to 6 HP, or dead) where they did not at V70; at 20
+ * they do no better than at V70, while a fighter group sent at it (spider priority)
+ * still kills it on 11 of 12 seeds.
  */
-export const SPIDER_HEAL_INTERVAL_TICKS = 40;
+export const SPIDER_HEAL_INTERVAL_TICKS = 20;
 
 // ---------------------------------------------------------------------------
 // S2 — AI State Machine (D-20 / D-27 / D-29 / D-34)
