@@ -30,6 +30,7 @@ import {
   aiSurvivalMode,
   AI_SURVIVAL_RATIO,
   AI_EXTRA_FOOD_STORAGE_FULL_PCT,
+  AI_STORAGE_RESERVE_MULTIPLE,
   aiExtraFoodStorageWanted,
   aiSelectProbeTarget,
   aiNestDefence,
@@ -66,6 +67,7 @@ import { AntTask, ChamberType } from '../sim/enums.js';
 import type { AIStateRecord, WorldState } from '../sim/types.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import { createScenario } from '../sim/scenario.js';
+import { eggReserveFp } from '../sim/colony/lifecycle-system.js';
 import { createDefaultAIStateRecord } from '../sim/ai-state.js';
 import { tick, applyCommands } from '../sim/tick.js';
 import { serializeWorldState, deserializeWorldState } from '../platform/save.js';
@@ -576,14 +578,51 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       expect(aiExtraFoodStorageWanted(world, colony)).toBe(true);
     });
 
-    /** settledColony plus `extra` more completed FoodStorage chambers (row 12), the
-     *  stores holding `totalFp`: the pool first, then each chamber up to its cap. */
-    function colonyWithChambers(extra: number, totalFp: number) {
-      const { world, colony } = settledColony(0);
-      for (let i = 0; i < extra; i++) {
-        addChamberForTest(world, colony, makeChamber(ChamberType.FoodStorage, 10 + i * 5, 12));
+    /** Extra FoodStorage chamber `i`'s anchor, on a grid of 4×3 cells inside the
+     *  64×64 test grid (rows 20+, clear of the settled colony's chambers). */
+    const extraAnchor = (i: number): [number, number] => [
+      2 + (i % 12) * 5,
+      20 + Math.floor(i / 12) * 4,
+    ];
+
+    /**
+     * #395 — a settled colony (as settledColony, in a world with room for `workers`
+     * ants) with `chambers` completed FoodStorage chambers, `brood` larvae (counted:
+     * the egg reserve reads larvaeCount) and `workers` living Idle workers, every
+     * store filled to `fillFp` (default: brim-full).
+     */
+    function storageColony(chambers: number, brood: number, workers: number, fillFp?: number) {
+      const base = createWorldState(42, 8 + workers);
+      const world = { ...base, tick: 0 } as unknown as WorldState;
+      const colony = addColony(world, 2 as ColonyId, 0);
+      addUndergroundGrid(world, 2 as ColonyId);
+      setQueenPos(world, 0, 10, 10);
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Nursery, 20, 7));
+      addChamberForTest(world, colony, makeChamber(ChamberType.FoodStorage, 10, 5));
+      for (let i = 1; i < chambers; i++) {
+        const [x, y] = extraAnchor(i - 1);
+        addChamberForTest(world, colony, makeChamber(ChamberType.FoodStorage, x, y, 4, 3));
       }
-      let left = totalFp;
+      ugSet(world.undergroundGrids[2 as ColonyId]!, 40, 5, UndergroundTileState.Open);
+      colony.larvaeCount = brood;
+      for (let i = 0; i < workers; i++) {
+        const id = allocateEntityId(world);
+        initAnt(world.ants, id, {
+          colonyId: 2 as ColonyId,
+          posX: 5 << FP_SHIFT,
+          posY: 5 << FP_SHIFT,
+          task: AntTask.Idle,
+          subTask: 0,
+          speed: 0,
+          zone: Zone.Underground,
+          lastMealTick: 0,
+        });
+        colony.workers.push(id);
+        colony.workerCount += 1;
+      }
+      const capacity = colonyFoodCapacity(colony);
+      let left = fillFp ?? capacity;
       const pool = Math.min(left, BASE_FOOD_STORAGE_CAPACITY);
       setPoolFoodForTest(world, colony, pool);
       left -= pool;
@@ -594,23 +633,38 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
         left -= fp;
       }
       expect(left).toBe(0);
-      return { world, colony };
+      return { world, colony, capacity };
     }
 
-    // #395 — no fixed cap (it was 2): the near-full rule alone decides, judged
-    // against the capacity every completed chamber adds.
+    /** Oracle: the egg reserve (60 s runway, #395): the queen 2400 fp, each larva and
+     *  the new egg 1200, each worker 64. */
+    const oracleReserve = (brood: number, workers: number): number =>
+      2400 + (brood + 1) * 1200 + workers * 64;
+    const capacityOf = (chambers: number): number =>
+      BASE_FOOD_STORAGE_CAPACITY + chambers * FOOD_CHAMBER_CAPACITY;
+    /** Fewest larvae whose reserve, times the multiple, tops `chambers` chambers. */
+    const broodToNeed = (chambers: number): number => {
+      let b = 0;
+      while (AI_STORAGE_RESERVE_MULTIPLE * oracleReserve(b, 0) <= capacityOf(chambers)) b += 1;
+      return b;
+    };
+
+    // #395 — no fixed cap (it was 2): the near-full rule decides, judged against the
+    // capacity every completed chamber adds, for a colony big enough to need it.
     it.each([2, 4, 8, 16])(
       'no fixed cap: with %i completed FoodStorage chambers, full stores place another',
       (chambers) => {
-        const capacity = BASE_FOOD_STORAGE_CAPACITY + chambers * FOOD_CHAMBER_CAPACITY;
+        const capacity = capacityOf(chambers);
         const threshold = Math.ceil((capacity * AI_EXTRA_FOOD_STORAGE_FULL_PCT) / 100);
-        const below = colonyWithChambers(chambers - 1, threshold - 1);
-        expect(colonyFoodCapacity(below.colony)).toBe(capacity);
+        const brood = broodToNeed(chambers);
+        const below = storageColony(chambers, brood, 0, threshold - 1);
+        expect(below.capacity).toBe(capacity);
+        expect(eggReserveFp(below.world, below.colony)).toBe(oracleReserve(brood, 0));
         expect(aiExtraFoodStorageWanted(below.world, below.colony)).toBe(false);
         aiChamberPlacement(below.world, below.colony);
         expect(fsCommands(below.world)).toHaveLength(0);
 
-        const at = colonyWithChambers(chambers - 1, threshold);
+        const at = storageColony(chambers, brood, 0, threshold);
         expect(aiExtraFoodStorageWanted(at.world, at.colony)).toBe(true);
         aiChamberPlacement(at.world, at.colony);
         expect(fsCommands(at.world)).toHaveLength(1);
@@ -618,8 +672,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
     );
 
     it('no fixed cap: 16 brim-full chambers still wait for the pending one', () => {
-      const capacity = BASE_FOOD_STORAGE_CAPACITY + 16 * FOOD_CHAMBER_CAPACITY;
-      const { world, colony } = colonyWithChambers(15, capacity);
+      const { world, colony } = storageColony(16, broodToNeed(16), 0);
       world.pendingChambers['2:40:5'] = {
         colonyId: 2 as ColonyId,
         chamberType: ChamberType.FoodStorage,
@@ -631,6 +684,59 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       expect(aiExtraFoodStorageWanted(world, colony)).toBe(false);
       aiChamberPlacement(world, colony);
       expect(fsCommands(world)).toHaveLength(0);
+    });
+
+    // #395 — the hoarding bound: no more storage once capacity holds
+    // AI_STORAGE_RESERVE_MULTIPLE times the egg reserve, however full.
+    it.each([2, 3, 5, 8])(
+      'the bound grows with the colony: %i chambers, brim-full, at the edge of the reserve',
+      (chambers) => {
+        const capacity = capacityOf(chambers);
+        // The most workers (with the brood that just fails to need it) the bound blocks.
+        const brood = Math.max(0, broodToNeed(chambers) - 1);
+        let w = 0;
+        while (AI_STORAGE_RESERVE_MULTIPLE * oracleReserve(brood, w + 1) <= capacity) w += 1;
+        const blocked = storageColony(chambers, brood, w);
+        expect(
+          AI_STORAGE_RESERVE_MULTIPLE * eggReserveFp(blocked.world, blocked.colony),
+        ).toBeLessThanOrEqual(capacity);
+        expect(aiExtraFoodStorageWanted(blocked.world, blocked.colony)).toBe(false);
+        // One worker more: the reserve times the multiple tops capacity, and it builds.
+        const needs = storageColony(chambers, brood, w + 1);
+        expect(
+          AI_STORAGE_RESERVE_MULTIPLE * eggReserveFp(needs.world, needs.colony),
+        ).toBeGreaterThan(capacity);
+        expect(aiExtraFoodStorageWanted(needs.world, needs.colony)).toBe(true);
+      },
+    );
+
+    it('the bound: capacity exactly the multiple of the reserve builds no more', () => {
+      // Search for a colony whose reserve times the multiple equals its capacity.
+      let found: [number, number, number] | null = null;
+      for (let n = 2; n <= 12 && found === null; n++) {
+        for (let b = 0; b <= 12 && found === null; b++) {
+          const rest = capacityOf(n) - AI_STORAGE_RESERVE_MULTIPLE * oracleReserve(b, 0);
+          const step = AI_STORAGE_RESERVE_MULTIPLE * 64;
+          if (rest >= 0 && rest % step === 0 && rest / step <= 300) found = [n, b, rest / step];
+        }
+      }
+      expect(found).not.toBeNull();
+      const [n, b, w] = found!;
+      const eq = storageColony(n, b, w);
+      expect(AI_STORAGE_RESERVE_MULTIPLE * eggReserveFp(eq.world, eq.colony)).toBe(eq.capacity);
+      expect(aiExtraFoodStorageWanted(eq.world, eq.colony)).toBe(false);
+      const more = storageColony(n, b, w + 1);
+      expect(aiExtraFoodStorageWanted(more.world, more.colony)).toBe(true);
+    });
+
+    it('the bound reads the colony now: a colony that loses workers stops building', () => {
+      const chambers = 4;
+      const brood = broodToNeed(chambers);
+      const { world, colony } = storageColony(chambers, brood, 10);
+      expect(aiExtraFoodStorageWanted(world, colony)).toBe(true);
+      // The brood hatches out and dies off: the reserve falls under capacity / multiple.
+      colony.larvaeCount = 0;
+      expect(aiExtraFoodStorageWanted(world, colony)).toBe(false);
     });
 
     it('Nursery keeps priority: full stores and no Nursery place the Nursery, not storage', () => {

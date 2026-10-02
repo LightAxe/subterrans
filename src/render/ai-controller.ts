@@ -46,6 +46,7 @@ import {
   pileTileY,
   colonyPoolTileX,
 } from '../sim/food/food-api.js';
+import { eggReserveFp } from '../sim/colony/lifecycle-system.js';
 import { aiFighterCount, opponentColonyId } from '../sim/ai-state.js';
 import { isEntranceTileOfAnyColony } from '../sim/raid-order.js';
 
@@ -75,15 +76,29 @@ export const AI_NURSERY_THRESHOLD = 12 as const;
  */
 export const AI_EXTRA_FOOD_STORAGE_FULL_PCT = 90 as const;
 
-// #395 — no fixed cap on the AI's FoodStorage chambers (owner decision, 2026-10-01;
-// it was AI_MAX_FOOD_STORAGE_CHAMBERS = 2). From V70 the queen lays only while the
-// stores cover the egg reserve, so storage is the AI's growth ceiling: two chambers
-// stopped its queen laying past about 135 workers. The AI now keeps building while
-// its stores are full, limited only by the extra-storage rule itself (one chamber
-// in flight, the stores at AI_EXTRA_FOOD_STORAGE_FULL_PCT of the capacity the last
-// one added, so each needs another ~4 600 fp foraged or raided first), by the dig
-// labour each costs, and by placement (findOpenChamberSpot). See
-// aiExtraFoodStorageWanted for the measured counts.
+/**
+ * #395 — the AI adds FoodStorage only while its storage capacity is below this many
+ * times its egg reserve (lifecycle-system.ts eggReserveFp: the stores its queen needs
+ * to lay now, from its living workers and brood). There is no fixed cap on its
+ * FoodStorage chambers (owner decision, 2026-10-01; it was
+ * AI_MAX_FOOD_STORAGE_CHAMBERS = 2): this bound grows with the colony.
+ *
+ * Why a bound at all. From V70 the queen lays only while the stores cover the egg
+ * reserve, so storage set the AI's growth: two chambers stopped her laying past
+ * about 135 workers. With no bound the AI built a chamber whenever its stores were
+ * 90 % full and never stopped: against a passive player (Normal seeds 0-49) it had a
+ * median of 46 at 28 minutes and up to 79, still about 2 a minute, holding 7.3 times
+ * its egg reserve.
+ *
+ * Why 3. The queen's fastest egg interval wants 600 fp stored per mouth (10 x
+ * FOOD_PER_ANT_BASELINE): about 2.3 times the reserve at 100 workers, 3.5 at 200.
+ * Measured on the same seeds, by multiple (2 / 3 / 4 / no bound): workers at 28
+ * minutes 147 / 164 / 170 / 169.5, chambers 11 / 19 / 27 / 46 (all but no bound
+ * level off); Normal 0-99 peak AI workers 105 / 112 / 115 / 114. 3 is the smallest
+ * that keeps nearly all the growth. When it stops the AI building, the stores still
+ * hold 2.7 times the reserve at the 90 % trigger, so it never stops the queen laying.
+ */
+export const AI_STORAGE_RESERVE_MULTIPLE = 3 as const;
 
 /**
  * Issue #33 — chamber placement depth tolerance (tiles). The findOpenChamberSpot
@@ -1645,11 +1660,16 @@ function hasChamberOrPending(
  *   - at least one FoodStorage is COMPLETED and none is pending: one extra
  *     chamber in flight at a time, and the next is judged against the capacity
  *     the last one added;
+ *   - (#395) capacity is below AI_STORAGE_RESERVE_MULTIPLE times the egg reserve
+ *     (eggReserveFp). No fixed cap on the chambers: this bound grows with the
+ *     colony's workers and brood;
  *   - `colonyFoodTotal` is at least AI_EXTRA_FOOD_STORAGE_FULL_PCT of
  *     `colonyFoodCapacity` (pending chambers add no capacity).
  * Every input is world state, so the command stream stays deterministic per seed.
  * Sticky-version gated (as V40 survival mode): the rule shipped with V53, so a
- * pre-V53 world keeps the AI command stream it was recorded under.
+ * pre-V53 world keeps the AI command stream it was recorded under. The #395 changes
+ * (no fixed cap, the reserve bound) are not gated (the pre-1.0 policy): they apply
+ * from V53 on.
  * The AI state (Peacetime .. Invading) is deliberately not an input: a colony
  * whose raiders bring food home to a full larder wants the room most.
  */
@@ -1670,10 +1690,9 @@ export function aiExtraFoodStorageWanted(world: WorldState, colony: ColonyRecord
       return false;
     }
   }
-  return (
-    colonyFoodTotal(world, colony) * 100 >=
-    colonyFoodCapacity(colony) * AI_EXTRA_FOOD_STORAGE_FULL_PCT
-  );
+  const capacity = colonyFoodCapacity(colony);
+  if (capacity >= AI_STORAGE_RESERVE_MULTIPLE * eggReserveFp(world, colony)) return false;
+  return colonyFoodTotal(world, colony) * 100 >= capacity * AI_EXTRA_FOOD_STORAGE_FULL_PCT;
 }
 
 /**
