@@ -151,13 +151,39 @@ export function rampageThreatensViewer(world: WorldState, viewerColonyId: Colony
 }
 
 /**
+ * #397 — the threat to colony `viewerColonyId` as the sim's rampage shelter saw it
+ * (step 15b) during the tick that took `prev` to `world`. Step 15b runs after step 12,
+ * which may open an entrance that tick, and before the spider moves (step 17.5): a
+ * shaft finished near the spider, which then walks out of reach, sends the colony's
+ * idle workers in although the world before and after the tick shows no threat.
+ * Only tickSpider changes the spider, entrances only ever open (step 12), and
+ * world.tick advances at the end of the tick, so step 15b saw `prev`'s spider and
+ * tick with `world`'s entrances. The caller passes `prev` as `world`'s own snapshot
+ * (GameScene's interpolation snapshot, taken just before each tick); this reads it
+ * only when it is exactly one tick behind (a new round or a loaded save copies the
+ * world at its own tick, so not before its first tick). Reads only.
+ */
+export function rampageThreatenedViewerLastTick(
+  prev: WorldState,
+  world: WorldState,
+  viewerColonyId: ColonyId,
+): boolean {
+  if (prev.tick + 1 !== world.tick) return false;
+  const colony = world.colonies[viewerColonyId];
+  if (colony === undefined) return false;
+  return spiderOnRampage(prev) && rampageThreatRule(prev, colony);
+}
+
+/**
  * #397 — called before every sim tick (sim-tick-hook.ts beforeSimTick: a frame
  * can run several ticks, and a threat may last only one of them) and each frame
  * before offerOwedRampageCaption (for the frame's last tick). While the rampage
- * threatens the viewing colony (rampageThreatensViewer) and nothing is owed, it
- * owes the warning — unless it has already been shown this hungry spell. The
- * spell ends when the spider is no longer on a rampage (spiderOnRampage false: a
- * meal resets its hunger; a spider that is gone hunts nothing), which re-arms
+ * threatens the viewing colony and nothing is owed, it owes the warning — unless
+ * it has already been shown this hungry spell. It asks about the world now
+ * (rampageThreatensViewer) and, with `prev` the world one tick earlier, about the
+ * tick between them as the rampage shelter saw it (rampageThreatenedViewerLastTick).
+ * The spell ends when the spider is no longer on a rampage (spiderOnRampage false:
+ * a meal resets its hunger; a spider that is gone hunts nothing), which re-arms
  * it. Nothing else does: not its state (a hungry spider in the leftover
  * Retreating state has not fed).
  */
@@ -165,13 +191,19 @@ export function noteRampageThreat(
   state: RampageCaptionState,
   world: WorldState,
   viewerColonyId: ColonyId,
+  prev: WorldState | null,
 ): void {
   if (!spiderOnRampage(world)) {
     state.announced = false;
     return;
   }
   if (state.announced || state.owedSinceTick !== -Infinity) return;
-  if (!rampageThreatensViewer(world, viewerColonyId)) return;
+  if (
+    !rampageThreatensViewer(world, viewerColonyId) &&
+    !(prev !== null && rampageThreatenedViewerLastTick(prev, world, viewerColonyId))
+  ) {
+    return;
+  }
   oweRampageCaption(state, world.tick, world.spider!.hungerTicks);
 }
 

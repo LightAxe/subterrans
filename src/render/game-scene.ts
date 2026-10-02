@@ -2020,10 +2020,12 @@ export class GameScene extends Phaser.Scene {
     // underground), until it shows or goes stale. The threat is checked before
     // every sim tick (beforeSimTick) and here, for the frame's last tick, so a
     // threat lasting one tick inside a multi-tick frame (not its last) still
-    // counts. Offered after the army warning: it outranks raid news. (Owed news
+    // counts; each time on the world now and, with prevState the world before the
+    // last tick, as that tick's rampage shelter saw it (an entrance opened that
+    // tick). Offered after the army warning: it outranks raid news. (Owed news
     // behind the long army warning shortens that warning to a readable floor,
     // below.)
-    noteRampageThreat(this.rampageCaption, this.world, PLAYER_COLONY_ID);
+    noteRampageThreat(this.rampageCaption, this.world, PLAYER_COLONY_ID, this.prevState);
     if (uiScene) {
       const cx = this.layout.w / 2;
       if (offerOwedRampageCaption(this.rampageCaption, this.world, uiScene, cx, 60)) {

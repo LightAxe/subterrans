@@ -351,7 +351,7 @@ function frame(
   ui: RecurringCaptionSink,
   viewer = P,
 ): boolean {
-  noteRampageThreat(s, world, viewer);
+  noteRampageThreat(s, world, viewer, null);
   return offerOwedRampageCaption(s, world, ui, 0, 0);
 }
 
@@ -366,18 +366,18 @@ describe('noteRampageThreat — the rampage warning, once per hungry spell (#397
     const w = spiderWorld();
     const s = createRampageCaptionState();
     // Hungry and hunting, but at its lair, far from the player's door: not yet.
-    noteRampageThreat(s, w, P);
+    noteRampageThreat(s, w, P, null);
     expect(s.owedSinceTick).toBe(-Infinity);
     put(w, THREAT_OUT, 'Hunting');
-    noteRampageThreat(s, w, P);
+    noteRampageThreat(s, w, P, null);
     expect(s.owedSinceTick).toBe(-Infinity);
     pass(w, 7);
     put(w, THREAT_EDGE, 'Hunting', -1, HUNGRY + 7);
-    noteRampageThreat(s, w, P);
+    noteRampageThreat(s, w, P, null);
     expect([s.owedSinceTick, s.owedHungerTicks]).toEqual([T1 + 7, HUNGRY + 7]);
     // Owed already: a later frame does not move the window.
     pass(w, 5);
-    noteRampageThreat(s, w, P);
+    noteRampageThreat(s, w, P, null);
     expect(s.owedSinceTick).toBe(T1 + 7);
   });
 
@@ -385,7 +385,7 @@ describe('noteRampageThreat — the rampage warning, once per hungry spell (#397
     const w = spiderWorld();
     put(w, LAIR, 'Rampaging', P); // just started: still at its lair
     const s = createRampageCaptionState();
-    noteRampageThreat(s, w, P);
+    noteRampageThreat(s, w, P, null);
     expect(s.owedSinceTick).toBe(T1);
   });
 
@@ -517,7 +517,7 @@ describe('noteRampageThreat — the rampage warning, once per hungry spell (#397
     put(lateFed, P_DOOR, 'Patrolling', -1, SPIDER_HUNGER_THRESHOLD_TICKS[1] - 1);
     for (const w of [grace, lateFed]) {
       const s = createRampageCaptionState();
-      noteRampageThreat(s, w, P);
+      noteRampageThreat(s, w, P, null);
       expect(s.owedSinceTick).toBe(-Infinity);
     }
   });
@@ -551,7 +551,7 @@ describe('noteRampageThreat — the rampage warning, once per hungry spell (#397
     // This frame: the old one is stale (dropped), and the threat still there owes
     // it again from now.
     expect(frame(s, w, ui)).toBe(false);
-    noteRampageThreat(s, w, P);
+    noteRampageThreat(s, w, P, null);
     expect(s.owedSinceTick).toBe(w.tick);
     ui.finish();
     pass(w, 1);
