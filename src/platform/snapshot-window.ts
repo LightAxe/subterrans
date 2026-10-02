@@ -15,24 +15,46 @@
 //     LATEST_SIM_VERSION off n.
 //   - If n is newer, fetch first. Use origin/main's tip if its LATEST is n, else that
 //     same parent on origin/main. If origin/main never reached n, list the branch
-//     commits that touched SIM_VERSION_V<n>_.
+//     commits that touched SIM_VERSION_V<n>.
 // A constant retune made later at the same simVersion can still make that replay
 // differ.
 //
-// The search finds the commits that add or remove the line
-// `LATEST_SIM_VERSION = SIM_VERSION_V<n>_`. The first one sets LATEST to n and the
-// second moves it off n, whatever the next version is, so a skipped version number
-// cannot mislead it.
+// The search counts matches of `latestLinePattern(n)`, using `git log -S` with
+// `--pickaxe-regex`. It lists the commits that add or remove the LATEST line for n:
+// the first sets LATEST to n, and the second moves it off n, whatever the next version
+// is, so a skipped version number cannot mislead it. The LATEST line has had two
+// forms:
+//   - `export const LATEST_SIM_VERSION = 3 as const;` (V3, a bare number);
+//   - `export const LATEST_SIM_VERSION = SIM_VERSION_V<n>_<SUFFIX>;` (V4 on).
+// A registry name may also have no suffix (`SIM_VERSION_V3`). The patterns cover all
+// of these and stop at a non-digit, so V3 never matches V30 or V31.
 
 const SAME_BUILD_RULE =
   `  Snapshots replay only on the build that recorded them: before 1.0, sim changes ` +
   `are not version-gated, so a different build does not run the rules it was recorded under.\n`;
 
+/**
+ * POSIX extended regex for the line that sets LATEST_SIM_VERSION to exactly `n`. It
+ * covers the bare-number form, the suffixed form and an unsuffixed form. It is also
+ * valid as a JS RegExp, and the tests use it that way.
+ */
+export function latestLinePattern(n: number): string {
+  return `LATEST_SIM_VERSION = (SIM_VERSION_V)?${n}[^0-9]`;
+}
+
+/**
+ * POSIX extended regex for any use of the registry constant for exactly `n`,
+ * suffixed or not (`SIM_VERSION_V3`, `SIM_VERSION_V71_FOO`).
+ */
+export function registryNamePattern(n: number): string {
+  return `SIM_VERSION_V${n}[^0-9]`;
+}
+
 /** Shell assigning `c` the commit that first moved LATEST_SIM_VERSION off `n` (empty if none). */
 function commitMovingLatestOff(n: number, ref: string): string {
   return (
-    `c=$(git log ${ref}--reverse --format=%h ` +
-    `-S 'LATEST_SIM_VERSION = SIM_VERSION_V${n}_' -- src/sim/types.ts | sed -n 2p)`
+    `c=$(git log ${ref}--reverse --format=%h --pickaxe-regex ` +
+    `-S '${latestLinePattern(n)}' -- src/sim/types.ts | sed -n 2p)`
   );
 }
 
@@ -87,7 +109,7 @@ export function snapshotWindowMessage(
     // rather than check out a build that would refuse the snapshot again. `git grep`
     // tests the tip without a pipe, so a shell with `pipefail` can't misread a SIGPIPE
     // as "no match".
-    const v = `SIM_VERSION_V${simVersion}_`;
+    const name = `SIM_VERSION_V${simVersion}`;
     return (
       `${header}was captured on simVersion ${simVersion}, newer than this build's LATEST ` +
       `(${latest}); this build cannot load or replay it.\n` +
@@ -100,12 +122,13 @@ export function snapshotWindowMessage(
       `branch commits that touched it. One block, bash or zsh:\n` +
       `        git fetch origin\n` +
       `        ${commitMovingLatestOff(simVersion, 'origin/main ')}\n` +
-      `        if git grep -q 'LATEST_SIM_VERSION = ${v}' origin/main -- src/sim/types.ts; ` +
+      `        if git grep -qE '${latestLinePattern(simVersion)}' origin/main -- src/sim/types.ts; ` +
       `then git checkout origin/main\n` +
       `        elif [ -n "$c" ]; then git checkout "$c^"\n` +
       `        else echo 'origin/main never reached V${simVersion}; branch commits that ` +
-      `touched ${v} (none listed? ask for the playtrace):'; ` +
-      `git log --all --oneline -S '${v}' -- src/sim/types.ts; fi`
+      `touched ${name} (none listed? ask for the playtrace):'; ` +
+      `git log --all --oneline --pickaxe-regex -S '${registryNamePattern(simVersion)}' ` +
+      `-- src/sim/types.ts; fi`
     );
   }
 
