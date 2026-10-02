@@ -1501,13 +1501,14 @@ export const SIM_VERSION_V65_ALARM_INVASION = 65 as const;
  * whatever her HP, so the HUD's queen bar had to show hunger, and a queen at 6/30 HP
  * read 100%. From V66 (every colony alike — CLNY-08), while she cannot eat she
  * loses 1 HP (`ants.hp`, not the home-ground combat buffer) each time the ticks
- * since her last meal reach a multiple of QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS (10),
- * and dies at 0 HP — a starvation death (despawnAnt 'starvation', so queen_death
- * still reports cause Starvation). A full-HP queen (COMBAT_HP_QUEEN 30) dies on the
+ * since her last meal reach a multiple of QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS (then
+ * 10; 6 from V71), and dies at 0 HP — a starvation death (despawnAnt 'starvation', so
+ * queen_death still reports cause Starvation). A full-HP queen (COMBAT_HP_QUEEN, then
+ * 30; 46 from V71, 50 in her nest) dies on the
  * same tick as at V65; a wounded one sooner, and a hungry one hit in combat dies
  * sooner too. A meal stops the drain and restarts the interval (ticks since meal
  * restart from 1). While fed she heals: on each tick she eats whose number is a
- * multiple of QUEEN_FED_HP_REGEN_INTERVAL_TICKS she regains 1 HP, up to
+ * multiple of QUEEN_FED_HP_REGEN_INTERVAL_TICKS (5; removed in V71, #400) she regains 1 HP, up to
  * COMBAT_HP_QUEEN — any lost HP, combat wounds included (the home-ground buffer is
  * untouched). So a short hunger burst heals back and a long famine still kills.
  * It is the first HP regeneration any ant has had. Larvae, workers and fighters

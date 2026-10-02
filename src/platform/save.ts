@@ -2178,8 +2178,8 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   // drain: at most her max HP in drains, one per QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
   // so that product is her window. #400 (V71): her max is where she stands
   // (health.ts antMaxHp) — QUEEN_HP_HOME in her nest (a window of 300, her
-  // starve-after), COMBAT_HP_QUEEN on the surface before she founds it. (A queen
-  // never goes back up; if she did, the clamp would only shorten her famine.)
+  // starve-after), COMBAT_HP_QUEEN on the surface before she founds it. (The surface
+  // window relies on a queen never going back up once she is in her nest.)
   const workersEat = world.simVersion >= SIM_VERSION_V51_UNIFIED_HUNGER;
   const queenStarvesByHp = world.simVersion >= SIM_VERSION_V66_QUEEN_STARVES_HP;
   // #400 (V71) — a blow lands during a tick, so between ticks no ant's last hit is

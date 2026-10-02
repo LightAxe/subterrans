@@ -1144,9 +1144,9 @@ export const COMBAT_DAMAGE_QUEEN = 6 as const;
  * COMBAT_HP_HOMEGROUND_BONUS (QUEEN_HP_HOME). Higher than workers so it takes a
  * coordinated group of fighters to kill her. #400 (V71) raised it from 30 to make up
  * for her no longer healing mid-fight (she heals only while fed and safe, health.ts),
- * tuned on the Assault time-to-kill. Her starvation window is QUEEN_HP_HOME ×
- * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS, and save.ts validates a queen's HP and hunger
- * clock against them — LOWERING it (or the drain interval) would make saves fail to
+ * tuned on the Assault time-to-kill. Her starvation window is her max HP where she
+ * stands × QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS (QUEEN_HP_HOME × D in her nest), and
+ * save.ts validates a queen's HP and hunger clock against them — LOWERING it (or the drain interval) would make saves fail to
  * load: a queen above the new value, or one mid-famine past the shrunken window (a
  * save wipe; treat as a simVersion change, not a bare retune).
  */
@@ -1189,9 +1189,9 @@ export const QUEEN_HEAL_INTERVAL_TICKS = 3;
  * anywhere, while it is fed (not hungry) and safe — 1 HP a second, 0 → full in 80 s.
  * Replaces the V23 feeding heal (SPIDER_FEED_HEAL_INTERVAL_TICKS, 1 HP every 10 ticks
  * while Feeding at its feed tile), so eating no longer heals it. Tuned on the
- * spider-kill probes (PR for #400): at 40 or 80 fighters parked in its territory with
- * no spider order wore it down (to 6 HP, or dead) where they did not at V70; at 20
- * they do no better than at V70, while a fighter group sent at it (spider priority)
+ * spider-kill probes (PR for #400): at an interval of 40 or 80, fighters parked in its
+ * territory with no spider order wore it down (to 6 HP, or dead) where they did not at
+ * V70; at 20 they do no better than at V70, while a fighter group sent at it (spider priority)
  * still kills it on 11 of 12 seeds.
  */
 export const SPIDER_HEAL_INTERVAL_TICKS = 20;
