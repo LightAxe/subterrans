@@ -147,7 +147,8 @@ export function buildOutcomeAttribution(
   events: SimEvent[],
   gameOutcome?: GameOutcomeLabel,
 ): OutcomeAttribution {
-  // S6: check for S5 tiebreak events first (round_end fires before queen_death in tick order).
+  // S6: check for S5 tiebreak events first (a match ends on a round_end or a queen_death,
+  // never both on one tick: checkTiebreaks runs only once checkQueenDeath returns None).
   for (const ev of events) {
     if (ev.type === 'round_end') {
       const { reason } = ev.payload;
@@ -165,16 +166,13 @@ export function buildOutcomeAttribution(
         }
         return { primaryCause: 'TimeoutTiebreak', narrativeSeed: narrative };
       } else {
-        // StalemateTiebreak: S5 always returns MutualDestruction; distinguish
-        // by gameOutcome if provided, otherwise use a neutral fallback.
-        let narrative: string;
-        if (gameOutcome === 'Victory') {
-          narrative = 'Both colonies ran out of food; the enemy starved first.';
-        } else if (gameOutcome === 'Defeat') {
-          narrative = 'Both colonies ran out of food; your queen starved first.';
-        } else {
-          narrative = 'Both colonies ran out of food and the round ended in a draw.';
-        }
+        // StalemateTiebreak: S5 always returns MutualDestruction — a draw with both
+        // queens alive. #389 — no queen starved, so a Victory or Defeat (which the
+        // sim never gives a stalemate) has no true narrative: null, not a guess.
+        const narrative =
+          gameOutcome === 'Victory' || gameOutcome === 'Defeat'
+            ? null
+            : 'Both colonies ran out of food and the round ended in a draw.';
         return { primaryCause: 'StalemateTiebreak', narrativeSeed: narrative };
       }
     }
@@ -190,24 +188,26 @@ export function buildOutcomeAttribution(
         if (gameOutcome === 'Victory') {
           narrative = 'The enemy colony has fallen.';
         } else if (gameOutcome === 'MutualDestruction') {
-          narrative = 'Both queens fell in the final battle.';
+          narrative = 'Both queens died at the same time.';
         } else {
           narrative = 'Your colony has fallen.';
         }
         return { primaryCause: null, narrativeSeed: narrative };
       }
       // queen_death can describe either queen; use gameOutcome to pick perspective.
+      // #389 — MutualDestruction is every same-tick double queen death, however each
+      // queen died (inferCause), so its line names no fight: they may have starved.
       const victoryNarratives: Record<string, string> = {
         InvasionKill: 'Your fighters broke through to the enemy queen.',
         SpiderRampage: 'The spider reached the enemy nursery and killed their queen.',
         Starvation: 'The enemy queen starved after their colony ran out of food.',
-        MutualDestruction: 'Both queens died in the same final fight.',
+        MutualDestruction: 'Both queens died at the same time.',
       };
       const defeatNarratives: Record<string, string> = {
         InvasionKill: 'Enemy fighters broke through a tunnel entrance and reached your queen.',
         SpiderRampage: 'The spider reached your nursery and killed the queen.',
         Starvation: 'Your queen starved after the colony ran out of food.',
-        MutualDestruction: 'Both queens died in the same final fight.',
+        MutualDestruction: 'Both queens died at the same time.',
       };
       const narratives = gameOutcome === 'Victory' ? victoryNarratives : defeatNarratives;
       return {

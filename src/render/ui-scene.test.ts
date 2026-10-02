@@ -4,10 +4,11 @@
 // Overlay rendering and interaction (Phaser-coupled) is covered by Plan 07 Playwright.
 //
 // Helpers under test (exported from ui-scene-logic.ts):
-//   - formatOutcomeTitle(outcome): { text: string; color: number }
+//   - formatOutcomeTitle(outcome, reason): { text: string; color: number } (#389 — DRAW)
 //   - formatKillStatsSubtitle(killCount): string
-//   - formatCauseSubtitle(outcome, cause): string
+//   - formatCauseSubtitle(outcome, cause, reason): string (#389 — keyed on reason)
 //   - queenDeathCauseAt(events, deathTick): QueenDeathCause (#388)
+//   - roundEndReasonAt(world, deathTick, outcome): RoundEndReason | null (#389)
 
 import { describe, it, expect } from 'vitest';
 import {
@@ -15,9 +16,18 @@ import {
   formatKillStatsSubtitle,
   formatCauseSubtitle,
   queenDeathCauseAt,
+  roundEndReasonAt,
 } from './ui-scene-logic.js';
 import { GameOutcome } from '../sim/game-over.js';
 import type { SimEvent } from '../sim/telemetry.js';
+import { createScenario } from '../sim/scenario.js';
+import {
+  LATEST_SIM_VERSION,
+  SIM_VERSION_V66_QUEEN_STARVES_HP,
+  SIM_VERSION_V67_NO_MATCH_TIMEOUT,
+  type WorldState,
+} from '../sim/types.js';
+import { ENEMY_COLONY_ID, MATCH_TIMEOUT_TICKS, PLAYER_COLONY_ID } from '../sim/constants.js';
 
 // ---------------------------------------------------------------------------
 // formatOutcomeTitle
@@ -25,25 +35,46 @@ import type { SimEvent } from '../sim/telemetry.js';
 
 describe('formatOutcomeTitle', () => {
   it('Victory returns green text', () => {
-    const result = formatOutcomeTitle(GameOutcome.Victory);
+    const result = formatOutcomeTitle(GameOutcome.Victory, 'QueenDeath');
     expect(result.text).toBe('VICTORY');
     expect(result.color).toBe(0x00ff00);
   });
 
   it('Defeat returns red text', () => {
-    const result = formatOutcomeTitle(GameOutcome.Defeat);
+    const result = formatOutcomeTitle(GameOutcome.Defeat, 'QueenDeath');
     expect(result.text).toBe('DEFEAT');
     expect(result.color).toBe(0xff0000);
   });
 
-  it('MutualDestruction returns orange/yellow text', () => {
-    const result = formatOutcomeTitle(GameOutcome.MutualDestruction);
+  it('MutualDestruction by a double queen death returns orange/yellow MUTUAL DESTRUCTION', () => {
+    const result = formatOutcomeTitle(GameOutcome.MutualDestruction, 'QueenDeath');
     expect(result.text).toBe('MUTUAL DESTRUCTION');
     expect(result.color).toBe(0xffaa00);
   });
 
+  it('#389 — a stalemate draw (both queens alive) reads DRAW, same color', () => {
+    const result = formatOutcomeTitle(GameOutcome.MutualDestruction, 'StalemateTiebreak');
+    expect(result.text).toBe('DRAW');
+    expect(result.color).toBe(0xffaa00);
+  });
+
+  it('#389 — a pre-V67 timeout draw (both queens alive) reads DRAW', () => {
+    const result = formatOutcomeTitle(GameOutcome.MutualDestruction, 'TimeoutTiebreak');
+    expect(result.text).toBe('DRAW');
+    expect(result.color).toBe(0xffaa00);
+  });
+
+  it('#389 — a draw with an unknown reason reads DRAW, not a double queen death', () => {
+    expect(formatOutcomeTitle(GameOutcome.MutualDestruction, null).text).toBe('DRAW');
+  });
+
+  it('a timeout win or loss keeps VICTORY / DEFEAT', () => {
+    expect(formatOutcomeTitle(GameOutcome.Victory, 'TimeoutTiebreak').text).toBe('VICTORY');
+    expect(formatOutcomeTitle(GameOutcome.Defeat, 'TimeoutTiebreak').text).toBe('DEFEAT');
+  });
+
   it('None returns empty text graceful fallback', () => {
-    const result = formatOutcomeTitle(GameOutcome.None);
+    const result = formatOutcomeTitle(GameOutcome.None, null);
     expect(result.text).toBe('');
     expect(result.color).toBe(0x000000);
   });
@@ -77,62 +108,111 @@ describe('formatKillStatsSubtitle', () => {
 
 describe('formatCauseSubtitle — Victory', () => {
   it('InvasionKill: your fighters killed their queen', () => {
-    expect(formatCauseSubtitle(GameOutcome.Victory, 'InvasionKill')).toBe(
+    expect(formatCauseSubtitle(GameOutcome.Victory, 'InvasionKill', 'QueenDeath')).toBe(
       'Your fighters killed their queen',
     );
   });
 
   it('Starvation: their queen starved', () => {
-    expect(formatCauseSubtitle(GameOutcome.Victory, 'Starvation')).toBe('Their queen starved');
+    expect(formatCauseSubtitle(GameOutcome.Victory, 'Starvation', 'QueenDeath')).toBe(
+      'Their queen starved',
+    );
   });
 
   it('SpiderRampage: their queen killed by spider', () => {
-    expect(formatCauseSubtitle(GameOutcome.Victory, 'SpiderRampage')).toBe(
+    expect(formatCauseSubtitle(GameOutcome.Victory, 'SpiderRampage', 'QueenDeath')).toBe(
       'Their queen was killed by a spider',
     );
   });
 
   it('null cause returns empty string', () => {
-    expect(formatCauseSubtitle(GameOutcome.Victory, null)).toBe('');
+    expect(formatCauseSubtitle(GameOutcome.Victory, null, 'QueenDeath')).toBe('');
   });
 });
 
 describe('formatCauseSubtitle — Defeat', () => {
   it('InvasionKill: your queen killed by enemy', () => {
-    expect(formatCauseSubtitle(GameOutcome.Defeat, 'InvasionKill')).toBe(
+    expect(formatCauseSubtitle(GameOutcome.Defeat, 'InvasionKill', 'QueenDeath')).toBe(
       'Your queen was killed by the enemy',
     );
   });
 
   it('Starvation: your queen starved', () => {
-    expect(formatCauseSubtitle(GameOutcome.Defeat, 'Starvation')).toBe('Your queen starved');
+    expect(formatCauseSubtitle(GameOutcome.Defeat, 'Starvation', 'QueenDeath')).toBe(
+      'Your queen starved',
+    );
   });
 
   it('SpiderRampage: your queen killed by spider', () => {
-    expect(formatCauseSubtitle(GameOutcome.Defeat, 'SpiderRampage')).toBe(
+    expect(formatCauseSubtitle(GameOutcome.Defeat, 'SpiderRampage', 'QueenDeath')).toBe(
       'Your queen was killed by a spider',
     );
   });
 
   it('null cause returns empty string', () => {
-    expect(formatCauseSubtitle(GameOutcome.Defeat, null)).toBe('');
+    expect(formatCauseSubtitle(GameOutcome.Defeat, null, 'QueenDeath')).toBe('');
   });
 });
 
 describe('formatCauseSubtitle — MutualDestruction', () => {
-  it('always returns both-queens message regardless of cause', () => {
-    expect(formatCauseSubtitle(GameOutcome.MutualDestruction, 'MutualDestruction')).toBe(
+  it('a double queen death: both-queens message, whatever its recorded cause', () => {
+    expect(
+      formatCauseSubtitle(GameOutcome.MutualDestruction, 'MutualDestruction', 'QueenDeath'),
+    ).toBe('Both queens died at the same time');
+    expect(formatCauseSubtitle(GameOutcome.MutualDestruction, null, 'QueenDeath')).toBe(
       'Both queens died at the same time',
     );
-    expect(formatCauseSubtitle(GameOutcome.MutualDestruction, null)).toBe(
-      'Both queens died at the same time',
+  });
+
+  it('#389 — a stalemate draw (both queens alive): says the food ran out, not that they died', () => {
+    expect(formatCauseSubtitle(GameOutcome.MutualDestruction, null, 'StalemateTiebreak')).toBe(
+      'Both colonies ran out of food — a draw',
     );
+  });
+
+  it('#389 — a timeout draw (pre-V67 world): says time ran out, not that they died', () => {
+    expect(formatCauseSubtitle(GameOutcome.MutualDestruction, null, 'TimeoutTiebreak')).toBe(
+      'Time ran out — the colonies were evenly matched',
+    );
+  });
+
+  it('#389 — an unknown reason: no line rather than a guess', () => {
+    expect(formatCauseSubtitle(GameOutcome.MutualDestruction, null, null)).toBe('');
+  });
+});
+
+describe('formatCauseSubtitle — TimeoutTiebreak won on worker count (pre-V67 worlds)', () => {
+  it('Victory: time ran out with more workers', () => {
+    expect(formatCauseSubtitle(GameOutcome.Victory, null, 'TimeoutTiebreak')).toBe(
+      'Time ran out — your colony had more workers',
+    );
+  });
+
+  it('Defeat: time ran out with fewer workers', () => {
+    expect(formatCauseSubtitle(GameOutcome.Defeat, null, 'TimeoutTiebreak')).toBe(
+      'Time ran out — the enemy had more workers',
+    );
+  });
+});
+
+describe('formatCauseSubtitle — StalemateTiebreak with an outcome the sim never gives it', () => {
+  it('Victory / Defeat: no line (a stalemate is always a draw)', () => {
+    expect(formatCauseSubtitle(GameOutcome.Victory, null, 'StalemateTiebreak')).toBe('');
+    expect(formatCauseSubtitle(GameOutcome.Defeat, null, 'StalemateTiebreak')).toBe('');
   });
 });
 
 describe('formatCauseSubtitle — None', () => {
   it('returns empty string', () => {
-    expect(formatCauseSubtitle(GameOutcome.None, null)).toBe('');
+    expect(formatCauseSubtitle(GameOutcome.None, null, null)).toBe('');
+    expect(formatCauseSubtitle(GameOutcome.None, null, 'TimeoutTiebreak')).toBe('');
+  });
+});
+
+describe('formatCauseSubtitle — unknown reason (the forceGameOver seam, no terminal event)', () => {
+  it('Victory / Defeat with no cause: no line', () => {
+    expect(formatCauseSubtitle(GameOutcome.Victory, null, null)).toBe('');
+    expect(formatCauseSubtitle(GameOutcome.Defeat, null, null)).toBe('');
   });
 });
 
@@ -163,5 +243,179 @@ describe('queenDeathCauseAt', () => {
 
   it('returns null with no queen_death', () => {
     expect(queenDeathCauseAt([hunt(10)], 10)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// roundEndReasonAt (#389 — how the match ended, for the cause line)
+// ---------------------------------------------------------------------------
+
+describe('roundEndReasonAt', () => {
+  const DEATH_TICK = 500;
+  const roundEnd = (tick: number, reason: 'TimeoutTiebreak' | 'StalemateTiebreak'): SimEvent => ({
+    tick,
+    type: 'round_end',
+    payload: { reason, playerWorkerCount: 3, aiWorkerCount: 3 },
+  });
+  const queenDeath = (tick: number): SimEvent => ({
+    tick,
+    type: 'queen_death',
+    payload: {
+      cause: 'MutualDestruction',
+      location: { x: 0, y: 0, grid: 'underground' },
+      aiStateAtTime: null,
+    },
+  });
+
+  /** A fresh world (both queens alive, no events) at `simVersion`. */
+  function freshWorld(simVersion: number = LATEST_SIM_VERSION): WorldState {
+    const world = createScenario(7, 'Normal');
+    world.simVersion = simVersion;
+    world.events.length = 0;
+    return world;
+  }
+  function killQueen(world: WorldState, colonyId: number): void {
+    world.ants.alive[world.colonies[colonyId]!.queenEntityId] = 0;
+  }
+
+  it('a round_end on the death tick names its tiebreak', () => {
+    const world = freshWorld();
+    world.events.push(roundEnd(DEATH_TICK, 'StalemateTiebreak'));
+    expect(roundEndReasonAt(world, DEATH_TICK, GameOutcome.MutualDestruction)).toBe(
+      'StalemateTiebreak',
+    );
+    const old = freshWorld(SIM_VERSION_V66_QUEEN_STARVES_HP);
+    old.events.push(roundEnd(DEATH_TICK, 'TimeoutTiebreak'));
+    expect(roundEndReasonAt(old, DEATH_TICK, GameOutcome.Victory)).toBe('TimeoutTiebreak');
+  });
+
+  it('a round_end on the death tick wins over a queen_death on it (as the playtrace)', () => {
+    const world = freshWorld();
+    world.events.push(queenDeath(DEATH_TICK), roundEnd(DEATH_TICK, 'StalemateTiebreak'));
+    expect(roundEndReasonAt(world, DEATH_TICK, GameOutcome.MutualDestruction)).toBe(
+      'StalemateTiebreak',
+    );
+  });
+
+  it('a queen_death on the death tick is a queen death', () => {
+    const world = freshWorld();
+    killQueen(world, PLAYER_COLONY_ID);
+    killQueen(world, ENEMY_COLONY_ID);
+    world.events.push(queenDeath(DEATH_TICK), queenDeath(DEATH_TICK));
+    expect(roundEndReasonAt(world, DEATH_TICK, GameOutcome.MutualDestruction)).toBe('QueenDeath');
+  });
+
+  it('ignores terminal events from another tick', () => {
+    const world = freshWorld();
+    world.events.push(queenDeath(DEATH_TICK - 1), roundEnd(DEATH_TICK + 1, 'TimeoutTiebreak'));
+    // Both queens alive: the world says a stalemate, not the stale events.
+    expect(roundEndReasonAt(world, DEATH_TICK, GameOutcome.MutualDestruction)).toBe(
+      'StalemateTiebreak',
+    );
+  });
+
+  it('#389 — no terminal event, both queens alive, a draw: the stalemate', () => {
+    const world = freshWorld();
+    expect(roundEndReasonAt(world, DEATH_TICK, GameOutcome.MutualDestruction)).toBe(
+      'StalemateTiebreak',
+    );
+  });
+
+  it('no terminal event and a dead queen: a queen death', () => {
+    const one = freshWorld();
+    killQueen(one, PLAYER_COLONY_ID);
+    expect(roundEndReasonAt(one, DEATH_TICK, GameOutcome.Defeat)).toBe('QueenDeath');
+    const enemy = freshWorld();
+    killQueen(enemy, ENEMY_COLONY_ID);
+    expect(roundEndReasonAt(enemy, DEATH_TICK, GameOutcome.Victory)).toBe('QueenDeath');
+    const both = freshWorld();
+    killQueen(both, PLAYER_COLONY_ID);
+    killQueen(both, ENEMY_COLONY_ID);
+    expect(roundEndReasonAt(both, DEATH_TICK, GameOutcome.MutualDestruction)).toBe('QueenDeath');
+  });
+
+  it('no terminal event, both queens alive, a pre-V67 world at the match cap: the timeout', () => {
+    const world = freshWorld(SIM_VERSION_V66_QUEEN_STARVES_HP);
+    for (const outcome of [
+      GameOutcome.Victory,
+      GameOutcome.Defeat,
+      GameOutcome.MutualDestruction,
+    ]) {
+      expect(roundEndReasonAt(world, MATCH_TIMEOUT_TICKS, outcome)).toBe('TimeoutTiebreak');
+    }
+    // Before the cap a pre-V67 draw is still the stalemate.
+    expect(roundEndReasonAt(world, MATCH_TIMEOUT_TICKS - 1, GameOutcome.MutualDestruction)).toBe(
+      'StalemateTiebreak',
+    );
+    // A queen dead on the cap tick: her death ended it (checkQueenDeath runs first).
+    killQueen(world, PLAYER_COLONY_ID);
+    expect(roundEndReasonAt(world, MATCH_TIMEOUT_TICKS, GameOutcome.Defeat)).toBe('QueenDeath');
+  });
+
+  it('from V67 there is no timeout: a draw past the old cap is the stalemate', () => {
+    const world = freshWorld(SIM_VERSION_V67_NO_MATCH_TIMEOUT);
+    expect(roundEndReasonAt(world, MATCH_TIMEOUT_TICKS + 10, GameOutcome.MutualDestruction)).toBe(
+      'StalemateTiebreak',
+    );
+  });
+
+  it('no terminal event, both queens alive, and a win or loss no tiebreak gives: unknown', () => {
+    // The forceGameOver dev seam's Defeat.
+    const world = freshWorld();
+    expect(roundEndReasonAt(world, DEATH_TICK, GameOutcome.Defeat)).toBeNull();
+    expect(roundEndReasonAt(world, DEATH_TICK, GameOutcome.Victory)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The end screen's cause line, as GameScene builds it (#389)
+// ---------------------------------------------------------------------------
+
+describe('end-screen cause line when the narrative is missing (#389)', () => {
+  /** formatCauseSubtitle fed as GameScene.enterGameOver feeds it. */
+  function causeLine(world: WorldState, deathTick: number, outcome: GameOutcome): string {
+    return formatCauseSubtitle(
+      outcome,
+      queenDeathCauseAt(world.events, deathTick),
+      roundEndReasonAt(world, deathTick, outcome),
+    );
+  }
+
+  it('a stalemate whose round_end was lost: a draw for want of food, not a double queen death', () => {
+    const world = createScenario(7, 'Normal');
+    world.events.length = 0; // the round_end is gone — the issue's case
+    const line = causeLine(world, 900, GameOutcome.MutualDestruction);
+    expect(line).toBe('Both colonies ran out of food — a draw');
+    expect(line).not.toMatch(/queens died/);
+  });
+
+  it('a double queen death whose events were lost: still a double queen death', () => {
+    const world = createScenario(7, 'Normal');
+    world.events.length = 0;
+    for (const cid of [PLAYER_COLONY_ID, ENEMY_COLONY_ID]) {
+      world.ants.alive[world.colonies[cid]!.queenEntityId] = 0;
+    }
+    expect(causeLine(world, 900, GameOutcome.MutualDestruction)).toBe(
+      'Both queens died at the same time',
+    );
+  });
+
+  it('a single queen death whose event was lost: no cause line (the cause is unknown)', () => {
+    const world = createScenario(7, 'Normal');
+    world.events.length = 0;
+    world.ants.alive[world.colonies[PLAYER_COLONY_ID]!.queenEntityId] = 0;
+    expect(causeLine(world, 900, GameOutcome.Defeat)).toBe('');
+  });
+
+  it('a pre-V67 timeout whose round_end was lost: says time ran out', () => {
+    const world = createScenario(7, 'Normal');
+    world.simVersion = SIM_VERSION_V66_QUEEN_STARVES_HP;
+    world.events.length = 0;
+    expect(causeLine(world, MATCH_TIMEOUT_TICKS, GameOutcome.MutualDestruction)).toBe(
+      'Time ran out — the colonies were evenly matched',
+    );
+    expect(causeLine(world, MATCH_TIMEOUT_TICKS, GameOutcome.Defeat)).toBe(
+      'Time ran out — the enemy had more workers',
+    );
   });
 });

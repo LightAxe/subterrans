@@ -1,5 +1,5 @@
 // ui-scene-logic.ts — Pure helpers extracted from UIScene (and, for
-// queenDeathCauseAt, GameScene) for testability.
+// queenDeathCauseAt and roundEndReasonAt, GameScene) for testability.
 //
 // These functions have no Phaser dependency and can be unit-tested under Node (Vitest).
 // UIScene / GameScene import and use these; Plan 07 covers Phaser-coupled integration
@@ -7,6 +7,10 @@
 
 import { GameOutcome } from '../sim/game-over.js';
 import type { SimEvent } from '../sim/telemetry.js';
+import { SIM_VERSION_V67_NO_MATCH_TIMEOUT, type WorldState } from '../sim/types.js';
+import { MATCH_TIMEOUT_TICKS } from '../sim/constants.js';
+import { isAlive } from '../sim/ant/ant-store.js';
+import type { RoundEndReason } from './playtrace-upload.js';
 
 // queen_death cause values, from the sim/telemetry.ts event type.
 export type QueenDeathCause = Extract<SimEvent, { type: 'queen_death' }>['payload']['cause'];
@@ -17,16 +21,26 @@ export type QueenDeathCause = Extract<SimEvent, { type: 'queen_death' }>['payloa
 
 /**
  * Returns the overlay title text and hex color for a given GameOutcome.
- * Used by UIScene to configure the GameOver overlay text.
+ * Used by UIScene to configure the GameOver overlay and survey titles.
+ * `reason` is roundEndReasonAt's: #389 — a MutualDestruction is a double queen
+ * death only when a queen death ended the match; a tiebreak draw (the stalemate,
+ * or a pre-V67 timeout on equal worker counts) leaves both queens alive, and an
+ * unknown reason is no evidence either way, so those read DRAW.
  */
-export function formatOutcomeTitle(outcome: GameOutcome): { text: string; color: number } {
+export function formatOutcomeTitle(
+  outcome: GameOutcome,
+  reason: RoundEndReason | null,
+): { text: string; color: number } {
   switch (outcome) {
     case GameOutcome.Victory:
       return { text: 'VICTORY', color: 0x00ff00 };
     case GameOutcome.Defeat:
       return { text: 'DEFEAT', color: 0xff0000 };
     case GameOutcome.MutualDestruction:
-      return { text: 'MUTUAL DESTRUCTION', color: 0xffaa00 };
+      return {
+        text: reason === 'QueenDeath' ? 'MUTUAL DESTRUCTION' : 'DRAW',
+        color: 0xffaa00,
+      };
     case GameOutcome.None:
     default:
       return { text: '', color: 0x000000 };
@@ -56,6 +70,46 @@ export function queenDeathCauseAt(events: readonly SimEvent[], deathTick: number
 }
 
 // ---------------------------------------------------------------------------
+// roundEndReasonAt — how the match ended, for the end screen's title and cause line (#389)
+// ---------------------------------------------------------------------------
+
+/**
+ * #389 — how the match that ended on `deathTick` ended: a queen death or a
+ * tiebreak (the playtrace's RoundEndReason). The terminal event emitted on that
+ * tick says so — a round_end names its tiebreak, a queen_death a queen death. A
+ * round_end wins, as in the playtrace's deriveRoundEndReason (with two colonies
+ * the two never share a tick: checkTiebreaks runs only while both queens live).
+ *
+ * Without one (an event buffer that lost it, as one could before #388), the world
+ * still tells: a dead queen means a queen death. With every queen alive only a
+ * tiebreak ends a match — the timeout when checkTiebreaks' timeout test held on
+ * that tick (worlds before V67 only, #376), otherwise the stalemate, which the
+ * sim always ends as a draw. null when even that cannot say: every queen alive
+ * and an outcome no tiebreak gives (the forceGameOver dev seam's Defeat).
+ */
+export function roundEndReasonAt(
+  world: Pick<WorldState, 'events' | 'colonies' | 'ants' | 'simVersion'>,
+  deathTick: number,
+  outcome: GameOutcome,
+): RoundEndReason | null {
+  for (const ev of world.events) {
+    if (ev.tick === deathTick && ev.type === 'round_end') return ev.payload.reason;
+  }
+  for (const ev of world.events) {
+    if (ev.tick === deathTick && ev.type === 'queen_death') return 'QueenDeath';
+  }
+  for (const key in world.colonies) {
+    if (!Object.hasOwn(world.colonies, key)) continue;
+    const colony = world.colonies[Number(key)];
+    if (colony !== undefined && !isAlive(world.ants, colony.queenEntityId)) return 'QueenDeath';
+  }
+  if (world.simVersion < SIM_VERSION_V67_NO_MATCH_TIMEOUT && deathTick >= MATCH_TIMEOUT_TICKS) {
+    return 'TimeoutTiebreak';
+  }
+  return outcome === GameOutcome.MutualDestruction ? 'StalemateTiebreak' : null;
+}
+
+// ---------------------------------------------------------------------------
 // formatKillStatsSubtitle — singular/plural kill count text
 // ---------------------------------------------------------------------------
 
@@ -69,14 +123,43 @@ export function formatKillStatsSubtitle(killCount: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// formatCauseSubtitle — why the relevant queen died
+// formatCauseSubtitle — why the game ended
 // ---------------------------------------------------------------------------
 
 /**
- * Returns a one-line explanation of why the game ended (the losing/winning queen's
- * death cause). Returns '' when no cause is available (pre-V16 saves or unknown).
+ * Returns a one-line explanation of why the game ended: the tiebreak that ended
+ * it, or the death cause of the queen whose death did. `reason` is
+ * roundEndReasonAt's: #389 — a draw is not always a double queen death (a
+ * stalemate ends one with both queens alive), so the draw line comes from the
+ * reason, never from the outcome alone. Returns '' when it cannot say what
+ * happened (an unknown or unattributed cause, or — for a draw — an unknown reason).
  */
-export function formatCauseSubtitle(outcome: GameOutcome, cause: QueenDeathCause): string {
+export function formatCauseSubtitle(
+  outcome: GameOutcome,
+  cause: QueenDeathCause,
+  reason: RoundEndReason | null,
+): string {
+  if (reason === 'StalemateTiebreak') {
+    // No food left on the map and both colonies starving; the sim ends every
+    // stalemate as a draw (checkTiebreaks), so any other outcome has no true line.
+    return outcome === GameOutcome.MutualDestruction
+      ? 'Both colonies ran out of food — a draw'
+      : '';
+  }
+  if (reason === 'TimeoutTiebreak') {
+    // Worlds before V67 only (#376): both queens alive at the match time cap,
+    // decided by living worker count.
+    switch (outcome) {
+      case GameOutcome.Victory:
+        return 'Time ran out — your colony had more workers';
+      case GameOutcome.Defeat:
+        return 'Time ran out — the enemy had more workers';
+      case GameOutcome.MutualDestruction:
+        return 'Time ran out — the colonies were evenly matched';
+      default:
+        return '';
+    }
+  }
   switch (outcome) {
     case GameOutcome.Victory:
       switch (cause) {
@@ -101,7 +184,8 @@ export function formatCauseSubtitle(outcome: GameOutcome, cause: QueenDeathCause
           return '';
       }
     case GameOutcome.MutualDestruction:
-      return 'Both queens died at the same time';
+      // Only a queen death means both queens died (#389).
+      return reason === 'QueenDeath' ? 'Both queens died at the same time' : '';
     default:
       return '';
   }

@@ -188,7 +188,8 @@ import { canAcceptWorldHotkey, type HotkeyGamePhase } from '../input/hotkey-poli
 import { contextMenuState, hideContextMenu } from './context-menu-state.js';
 import { antActivityPanelState } from './ant-activity-panel-state.js';
 import { buildPlaytraceSummary, type GameOutcomeLabel } from './summary-builder.js';
-import { queenDeathCauseAt } from './ui-scene-logic.js';
+import { queenDeathCauseAt, roundEndReasonAt } from './ui-scene-logic.js';
+import type { RoundEndReason } from './playtrace-upload.js';
 import { colonyFoodTotal } from '../sim/food/food-api.js';
 import {
   raidCaptionText,
@@ -263,6 +264,7 @@ interface UIScenePhase9 {
   showGameOverOverlay(
     outcome: GameOutcome,
     cause: import('./ui-scene-logic.js').QueenDeathCause,
+    roundEndReason: RoundEndReason | null,
     onRestart: () => void,
     narrativeSeed?: string | null,
   ): void;
@@ -299,6 +301,7 @@ interface UIScenePhase9 {
     quitFromPauseMenu: boolean;
     outcome?: import('../sim/game-over.js').GameOutcome;
     cause?: import('./ui-scene-logic.js').QueenDeathCause;
+    roundEndReason?: RoundEndReason | null;
     onSubmit(survey: PlaytraceSurvey & { includeSnapshot: boolean }): void;
     onNewGame(): void;
     onRetry(): void;
@@ -347,6 +350,9 @@ interface UIScenePhase9 {
   hudButtonGeometry?(): HudButtonGeometry[];
   // #290 PR 6 — Dev/E2E observability for __phase9_test.getCaptionsShown().
   captionsShown?(): string[];
+  // #389 — Dev/E2E observability for __phase9_test.getEndScreenCauseLine() / getEndScreenTitle().
+  endScreenCauseLine?(): string | null;
+  endScreenTitle?(): string | null;
   // #290 PR 6 / #350 — true while nothing is showing and nothing is pending, so
   // recurring captions (raid news, the spider-rampage warning) may enter without
   // taking the slot a one-shot caption would need.
@@ -453,8 +459,18 @@ declare global {
       /** #304 — drive the render-side game-over transition (the exact path a
        *  terminal tick outcome takes: phase → GameOver, loop paused, GameOver
        *  overlay up) WITHOUT touching the sim, so a spec can reach the Restart
-       *  button deterministically. No-op unless Playing. Dev-build only. */
-      forceGameOver(): void;
+       *  button deterministically. No-op unless Playing. Dev-build only.
+       *  #389 — `outcome` (default Defeat) is the terminal outcome to end on. The
+       *  world has no terminal event, so the end screen reads it as a match whose
+       *  event was lost: a MutualDestruction with both queens alive is a stalemate. */
+      forceGameOver(outcome?: 'Victory' | 'Defeat' | 'MutualDestruction'): void;
+      /** #389 — the end screen's second line as drawn (GameOver: the narrative
+       *  or the cause fallback; survey: the cause line or its "Tell us what you
+       *  think:" prompt); null when none is up. Dev-build only. */
+      getEndScreenCauseLine?(): string | null;
+      /** #389 — the end screen's outcome title as drawn (GameOver overlay, or the
+       *  survey after a game over); null when none is up. Dev-build only. */
+      getEndScreenTitle?(): string | null;
       /** #290 PR 6 — the text of every caption that began displaying this round,
        *  oldest first (UIScene.captionsShown). A caption is up for 1.5 s (a
        *  long-hold one longer), so a spec asserts on the log rather than racing the live Text. Dev-build only. */
@@ -706,6 +722,8 @@ export class GameScene extends Phaser.Scene {
   private gamePhase: GamePhase = GamePhase.Playing;
   private currentOutcome: GameOutcome = GameOutcome.None;
   private currentCause: import('./ui-scene-logic.js').QueenDeathCause = null;
+  /** #389 — how the match ended (roundEndReasonAt); the end screen's title and cause line key off it. */
+  private currentRoundEndReason: RoundEndReason | null = null;
   // S5 — difficulty chosen by the player before each new game; preserved for retry.
   private currentDifficulty: 'Easy' | 'Normal' | 'Hard' = 'Normal';
   private aiColonyIds: ReturnType<typeof deriveAIColonyIds> = [];
@@ -833,9 +851,11 @@ export class GameScene extends Phaser.Scene {
       getDrawOrder: (): string[] => [...this.drawOrder],
       getRoundDifficulty: (): string | undefined =>
         this.world === undefined ? undefined : this.world.difficulty,
-      forceGameOver: (): void => {
-        if (this.gamePhase === GamePhase.Playing) this.enterGameOver(GameOutcome.Defeat);
+      forceGameOver: (outcome: 'Victory' | 'Defeat' | 'MutualDestruction' = 'Defeat'): void => {
+        if (this.gamePhase === GamePhase.Playing) this.enterGameOver(GameOutcome[outcome]);
       },
+      getEndScreenCauseLine: (): string | null => this.getUIScene()?.endScreenCauseLine?.() ?? null,
+      getEndScreenTitle: (): string | null => this.getUIScene()?.endScreenTitle?.() ?? null,
       getActiveZoom: (): number =>
         (this.viewState.activeView === 'surface'
           ? this.viewState.surfaceCamera
@@ -1768,6 +1788,7 @@ export class GameScene extends Phaser.Scene {
     this.lastActiveView = null;
     this.currentOutcome = GameOutcome.None;
     this.currentCause = null;
+    this.currentRoundEndReason = null;
     this.setSpeedMultiplier(1);
     // Re-enable autosave for the next session. The flag is set only by
     // bootFromSave's deserialize-throw catch (see issue #66 in the field
@@ -2172,6 +2193,11 @@ export class GameScene extends Phaser.Scene {
     const deathTick = (this.world?.tick ?? 1) - 1;
     const cause = queenDeathCauseAt(this.world?.events ?? [], deathTick);
     this.currentCause = cause;
+    // #389 — and how the match ended (a tiebreak or a queen death), from the same
+    // tick's terminal event or, without one, from the world.
+    const roundEndReason =
+      this.world === undefined ? null : roundEndReasonAt(this.world, deathTick, outcome);
+    this.currentRoundEndReason = roundEndReason;
 
     // S6: build narrative for the loss screen.
     const outcomeLabel: GameOutcomeLabel | undefined =
@@ -2194,7 +2220,13 @@ export class GameScene extends Phaser.Scene {
     if (this.playtraceEndpoint !== '') {
       this.openSurveyOverlay(false /* quitFromPauseMenu */);
     } else {
-      uiScene.showGameOverOverlay(outcome, cause, () => this.restartGame(), narrativeSeed);
+      uiScene.showGameOverOverlay(
+        outcome,
+        cause,
+        roundEndReason,
+        () => this.restartGame(),
+        narrativeSeed,
+      );
     }
   }
 
@@ -2482,6 +2514,7 @@ export class GameScene extends Phaser.Scene {
       quitFromPauseMenu,
       outcome: quitFromPauseMenu ? undefined : outcome,
       cause: quitFromPauseMenu ? undefined : this.currentCause,
+      roundEndReason: quitFromPauseMenu ? undefined : this.currentRoundEndReason,
       onSubmit: (survey) => {
         // Capture the live world / seed / inputLog right now, before the
         // restart path overwrites them. The snapshot is built lazily
@@ -2553,6 +2586,7 @@ export class GameScene extends Phaser.Scene {
     }
     this.currentOutcome = GameOutcome.None;
     this.currentCause = null;
+    this.currentRoundEndReason = null;
     this.resetSessionState();
     this.currentSeed = seed;
     // S5: retry preserves the previous game's difficulty (same seed + same difficulty).
@@ -2779,6 +2813,7 @@ export class GameScene extends Phaser.Scene {
     }
     this.currentOutcome = GameOutcome.None;
     this.currentCause = null;
+    this.currentRoundEndReason = null;
     const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
     uiScene.hideGameOverOverlay();
     // #395 (Codex P2) — no caption over the new-game screen either: a restart from
