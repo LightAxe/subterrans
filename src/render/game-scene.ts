@@ -310,7 +310,7 @@ interface UIScenePhase9 {
   hideDifficultySelectOverlay(): void;
   // S6 — first-occurrence caption overlay (light onboarding). Optional captionKey
   // (Stage 3b #3) lets a dropped one-shot caption un-mark its trigger so it re-fires.
-  /** Returns false iff the caption queue dropped the caption (overflow). */
+  /** Returns false iff the caption was not admitted (overflow, or captions closed). */
   showCaption(
     text: string,
     screenX: number,
@@ -320,7 +320,7 @@ interface UIScenePhase9 {
   ): boolean;
   // #378 — a caption that replaces an older one with the same supersedeKey (on
   // screen or pending) instead of queueing behind it: the raid-order caption.
-  /** Returns false iff the caption queue dropped the caption (overflow). */
+  /** Returns false iff the caption was not admitted (overflow, or captions closed). */
   showSupersedingCaption(
     text: string,
     screenX: number,
@@ -351,6 +351,9 @@ interface UIScenePhase9 {
   // recurring captions (raid news, the spider-rampage warning) may enter without
   // taking the slot a one-shot caption would need.
   captionQueueIdle?(): boolean;
+  /** #395 (Codex P2) — the round is over: drop the caption on screen and the one
+   *  waiting, and admit none until the next round (UIScene.closeCaptions). */
+  closeCaptions?(): void;
   /** #395 — withdraw the pending caption keyed `key` (UIScene.withdrawPendingCaption). */
   withdrawPendingCaption?(key: CaptionKey): void;
   /** #395 — the one-shot key of the caption waiting in the pending slot, or null. */
@@ -507,6 +510,10 @@ declare global {
        *  so the drain, the caption hook and the sim all run as for a real placement.
        *  True means enqueued, not accepted by the sim; false: dropped (queue cap). */
       placePlayerChamberAt?(chamberType: number, tileX: number, tileY: number): boolean;
+      /** #395 (Codex P2) — offer a keyless caption through UIScene's real showCaption
+       *  (top centre), as a late caption source would (an autosave failure resolving
+       *  after game over). Returns what showCaption returns: false if not admitted. */
+      offerCaption?(text: string): boolean;
       /** #290 PR 6 — the player colony's raid counters (food in fp: stolen by it,
        *  stolen from it; completed raid hauls) and its food total, read-only, so a
        *  spec can prove a raid moved food. Null before the first boot. */
@@ -863,6 +870,8 @@ export class GameScene extends Phaser.Scene {
           PLAYER_COLONY_ID,
           isPausedByAny(this.pauseReasons),
         ),
+      offerCaption: (text: string): boolean =>
+        this.getUIScene()?.showCaption(text, this.layout.w / 2, 60) ?? false,
       placePlayerChamberAt: (chamberType: number, tileX: number, tileY: number): boolean =>
         this.world !== undefined &&
         enqueueCommand(
@@ -2069,6 +2078,9 @@ export class GameScene extends Phaser.Scene {
   private enterGameOver(outcome: GameOutcome): void {
     this.currentOutcome = outcome;
     this.gamePhase = GamePhase.GameOver;
+    // #395 (Codex P2) — the end screen owns the display: no caption stays over it,
+    // and none waiting behind one (a storage hint, an army warning) is promoted.
+    this.getUIScene()?.closeCaptions?.();
     // W2: first-class pause via Plan 06 Task 1 API — no setMsPerTick(Infinity)
     this.gameLoop.pause();
     // Issue #129 — clear any in-flight pan/drag/gesture so it doesn't leak
@@ -2391,6 +2403,8 @@ export class GameScene extends Phaser.Scene {
     if (quitFromPauseMenu) {
       uiScene.hidePauseMenuOverlay();
       this.gamePhase = GamePhase.GameOver;
+      // #395 — the round is over, as at game over (the survey draws above captions).
+      uiScene.closeCaptions?.();
     }
     uiScene.showSurveyOverlay({
       quitFromPauseMenu,
@@ -2695,6 +2709,9 @@ export class GameScene extends Phaser.Scene {
     this.currentCause = null;
     const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
     uiScene.hideGameOverOverlay();
+    // #395 (Codex P2) — no caption over the new-game screen either: a restart from
+    // the pause menu's Save/Load reaches it without a game over (bootFresh reopens).
+    uiScene.closeCaptions?.();
     // S5 / #304: show the new-game screen before creating the new world.
     // bootFresh is invoked inside the callback so wasSuspended is captured.
     this.gamePhase = GamePhase.SavePrompt; // prevent update() from ticking the old world during overlay

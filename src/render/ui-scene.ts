@@ -569,6 +569,9 @@ export class UIScene extends Phaser.Scene {
   // then so the two don't visually collide (Codex R4-1). Cleared naturally as
   // time passes.
   private hintYieldUntilMs = 0;
+  // #395 (Codex P2) — true from the round's end until the next round: no caption
+  // is admitted (closeCaptions; resetCaptionsForRound reopens).
+  private captionsClosed = false;
   // Queue-full flash: set to time.now + duration when enqueueCommand drops a
   // command at the cap; the hint strip shows the warning until then, overriding
   // the static legend. `pausedQueueFullWasPaused` records the pause state at the
@@ -1988,8 +1991,9 @@ export class UIScene extends Phaser.Scene {
   // the session. Passing the key lets enqueueCaption un-mark it on drop so it
   // re-fires. Omit for recurring captions (they don't dedup on `triggered`).
   //
-  // Returns false iff the queue dropped the caption on overflow (it never shows):
-  // a recurring caption's caller uses that to not start its throttle (#290 PR 6).
+  // Returns false iff the caption was not admitted (it never shows): the queue
+  // dropped it on overflow, or captions are closed (closeCaptions). A recurring
+  // caption's caller uses that to not start its throttle (#290 PR 6).
   public showCaption(
     text: string,
     screenX: number,
@@ -2012,7 +2016,8 @@ export class UIScene extends Phaser.Scene {
    * the player just gave, RAID_ORDER_CAPTION_SUPERSEDE_KEY): it replaces an older
    * caption with the same `supersedeKey` that is on screen or waiting, instead of
    * queueing behind it (caption-queue.ts). An event caption otherwise, with no
-   * one-shot key. Returns false iff the queue dropped it (overflow).
+   * one-shot key. Returns false iff it was not admitted (overflow, or captions
+   * closed).
    */
   public showSupersedingCaption(
     text: string,
@@ -2038,8 +2043,12 @@ export class UIScene extends Phaser.Scene {
    *  idle, else it is queued/coalesced/dropped per caption-queue.ts. A dropped
    *  one-shot event caption (carrying a captionKey) is un-marked so it re-fires
    *  next occurrence — it never displayed, mirroring mark-on-display for hints.
-   *  Returns false iff the request was dropped. */
+   *  Returns false iff the request was not admitted (dropped, or captions closed). */
   private enqueueCaption(req: CaptionRequest): boolean {
+    // #395 (Codex P2) — the round is over (end screen or new-game screen). A
+    // one-shot key refused here is not un-marked; resetCaptions() in GameScene's
+    // resetSessionState re-arms every key for the next round anyway.
+    if (this.captionsClosed) return false;
     const result = admitCaption(this.captionState, req);
     // #378 — a newer version cut the caption on screen short: its Text goes now,
     // and the newer one starts at the opacity the old one had, so the words change
@@ -2328,6 +2337,32 @@ export class UIScene extends Phaser.Scene {
    * alongside resetCaptions()/resetFirstUseSession().
    */
   public resetCaptionsForRound(): void {
+    this.clearCaptionQueue();
+    this.captionsClosed = false;
+    this.captionsShownLog = [];
+    this.captionHoldsLog = [];
+    this.captionsReplacedLog = [];
+  }
+
+  /**
+   * #395 (Codex P2) — the round is over (game over, or a restart's new-game
+   * screen). Captions draw at depth 30, above the GameOver overlay (20–22) and the
+   * new-game screen, and the caption clock runs on after the loop pauses, so the
+   * caption on screen would stay over that screen and one waiting behind it (a
+   * storage hint, an army warning, rampage news) would be promoted over it. Drop
+   * both, without promoting anything, and admit no caption until the next round
+   * (resetCaptionsForRound). GameScene's per-frame caption sources stop with the
+   * round, and a late async one (an autosave failure resolving) is refused, so no
+   * caption is meant for these screens. Idempotent. The dev logs are kept.
+   */
+  public closeCaptions(): void {
+    this.clearCaptionQueue();
+    this.captionsClosed = true;
+  }
+
+  /** Tear down the caption on screen (tweens killed, so nothing is promoted), its
+   *  hold timer and the pending slot; the hint strip comes back. */
+  private clearCaptionQueue(): void {
     if (this.activeCaptionText !== null) {
       this.tweens.killTweensOf(this.activeCaptionText);
       this.activeCaptionText.destroy();
@@ -2337,12 +2372,9 @@ export class UIScene extends Phaser.Scene {
     this.activeHoldTimer = null;
     this.activeCaptionReq = null;
     this.activeCaptionYielded = false;
+    this.activeHoldScheduledMs = null;
     this.captionState = createCaptionQueueState();
     this.hintYieldUntilMs = 0;
-    this.captionsShownLog = [];
-    this.captionHoldsLog = [];
-    this.captionsReplacedLog = [];
-    this.activeHoldScheduledMs = null;
   }
 
   /** #395 — withdraw the pending caption keyed `key` (it never displayed): its

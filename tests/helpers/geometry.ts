@@ -63,9 +63,11 @@ const DLG: SaveLoadDialogContext = {
   confirming: { delete: false, newGame: false },
 };
 const dialogItems = saveLoadDialogItems(DLG, DEFAULT_LAYOUT);
-/** Save/Load dialog: Save Now is index 1, Delete is index 2. */
+/** Save/Load dialog: Save Now is index 1, Delete is index 2, New Game is index 3
+ *  (with a save in storage, a second click on it confirms). */
 export const DIALOG_SAVE_NOW_RECT: Rect = dialogItems[1]!.rect;
 export const DIALOG_DELETE_RECT: Rect = dialogItems[2]!.rect;
+export const DIALOG_NEW_GAME_RECT: Rect = dialogItems[3]!.rect;
 
 /** HUD view-toggle button (surface ↔ underground). */
 export const VIEW_TOGGLE_RECT: Rect = buildHudLayout(DEFAULT_LAYOUT).VIEW_TOGGLE;

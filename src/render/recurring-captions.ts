@@ -41,7 +41,8 @@ export interface RecurringCaptionSink {
   /** True while nothing is showing and nothing is pending. Optional so the
    *  gate can fail closed: a sink without it never takes recurring captions. */
   captionQueueIdle?(): boolean;
-  /** Returns false iff the queue dropped the caption. `holdMs` (#372): a longer
+  /** Returns false iff the caption was not admitted (dropped, or captions closed
+   *  at the round's end). `holdMs` (#372): a longer
    *  full-opacity hold for a caption that must be read. */
   showCaption(
     text: string,

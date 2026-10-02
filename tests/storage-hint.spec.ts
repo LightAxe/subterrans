@@ -10,7 +10,9 @@
 // wiring: the per-frame step runs for the player's colony and its caption reaches
 // UIScene's queue, and a hint left waiting behind another caption is withdrawn once
 // the player designates a larder (Codex P2), playing or paused, before the
-// designation's own 'chamber' caption needs the slot.
+// designation's own 'chamber' caption needs the slot. And it never shows over the
+// end screen when the queen dies while it waits (Codex P2), nor over the new-game
+// screen after a restart from the pause menu's Save/Load.
 //
 // Setup, without touching a running sim: the page builds the raid world
 // (raid-test-utils.ts: the player has a completed Queen chamber with the queen in
@@ -24,7 +26,11 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { clickCanvasRect, settleToPlaying, waitForUiHook } from './helpers/boot.js';
-import { SAVE_PROMPT_CONTINUE_RECT } from './helpers/geometry.js';
+import {
+  DIALOG_NEW_GAME_RECT,
+  SAVE_LOAD_ROW_RECT,
+  SAVE_PROMPT_CONTINUE_RECT,
+} from './helpers/geometry.js';
 
 const HINT = 'Build a Food Storage chamber so your queen can lay eggs.';
 /** storage-hint.ts STORAGE_HINT_DWELL_TICKS. */
@@ -48,6 +54,7 @@ interface TestHook {
   rallyPlayerAt?: (tileX: number, tileY: number) => boolean;
   isPaused?: () => boolean;
   placePlayerChamberAt?: (chamberType: number, tileX: number, tileY: number) => boolean;
+  offerCaption?: (text: string) => boolean;
 }
 
 async function freezeCaptionClock(page: Page, frozen: boolean): Promise<void> {
@@ -102,9 +109,14 @@ async function setPaused(page: Page, on: boolean): Promise<void> {
 }
 
 /** Hold a rally caption on screen (caption clock stopped) before the hint is due,
- *  and wait for the hint to queue behind it. */
+ *  and wait for the hint to queue behind it. The clock is stopped only once the
+ *  queue is idle: in the 'starve' save the queen's starvation and danger captions
+ *  run back to back from about tick 41 to about tick 101. */
 async function queueHintBehindRally(page: Page): Promise<void> {
   await expect.poll(() => simTick(page), { timeout: 40_000 }).toBeGreaterThanOrEqual(100);
+  await expect
+    .poll(() => captionQueue(page), { timeout: 10_000 })
+    .toEqual({ active: null, pending: null });
   await freezeCaptionClock(page, true);
   expect(await simTick(page)).toBeLessThan(DWELL_TICKS);
   const rallied = await page.evaluate(() =>
@@ -131,15 +143,26 @@ async function designateLarder(page: Page): Promise<void> {
   expect(placed).toBe(true);
 }
 
+async function activeOverlay(page: Page): Promise<string> {
+  return await page.evaluate(
+    () =>
+      (window as { __phase9_ui?: { activeOverlay?: string } }).__phase9_ui?.activeOverlay ??
+      '<undefined>',
+  );
+}
+
 async function simTick(page: Page): Promise<number> {
   return await page.evaluate(
     () => (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.getTick?.() ?? -1,
   );
 }
 
-type Variant = 'plain' | 'designate' | 'army';
+type Variant = 'plain' | 'designate' | 'army' | 'starve';
 
 /** Seed the save.
+ *  - 'starve': no food at all, so the queen starves on the real tick path at tick
+ *    300 (QUEEN_STARVE_AFTER_TICKS; no fighter dies first, and storage blocks her on
+ *    every tick before), after the hint is due.
  *  - 'designate': the player has designated a Food Storage chamber: a real
  *    PlaceChamber applied by one sim tick before the save (checked there).
  *  - 'army': eight enemy fighters stand in the far north-east corner, rallied 13
@@ -179,6 +202,7 @@ async function seedStorageSave(page: Page, variant: Variant): Promise<void> {
     };
     const foodUtils = (await import(/* @vite-ignore */ foodUtilsPath)) as {
       setChamberStockForTest: (w: unknown, c: unknown, ch: unknown, fp: number) => void;
+      setPoolFoodForTest: (w: unknown, c: unknown, fp: number) => void;
     };
     const lifecycle = (await import(/* @vite-ignore */ lifecyclePath)) as {
       eggReserveStorageShortfallFp: (w: unknown, c: unknown) => number;
@@ -218,7 +242,13 @@ async function seedStorageSave(page: Page, variant: Variant): Promise<void> {
       height: 3,
     });
     for (let i = 0; i < 60; i++) utils.addFighter(r.world, id, 26 + (i % 8), 6, id);
-    foodUtils.setChamberStockForTest(r.world, r.player, r.playerLarder, 5000);
+    foodUtils.setChamberStockForTest(
+      r.world,
+      r.player,
+      r.playerLarder,
+      variant === 'starve' ? 0 : 5000,
+    );
+    if (variant === 'starve') foodUtils.setPoolFoodForTest(r.world, r.player, 0);
     const shortfall = lifecycle.eggReserveStorageShortfallFp(r.world, r.player);
     // Storage blocks the queen, and one more Food Storage chamber would cover it.
     if (shortfall <= 0 || shortfall > k.FOOD_CHAMBER_CAPACITY) {
@@ -372,5 +402,60 @@ test.describe('#395 — Food Storage hint', () => {
     const shown = await captions(page);
     expect(shown).toContain(CHAMBER_TEXT);
     expect(shown).not.toContain(HINT);
+  });
+
+  test('a waiting hint never shows over the end screen when the queen dies', async ({ page }) => {
+    test.setTimeout(90_000);
+    await bootStorageSave(page, 'starve');
+    await queueHintBehindRally(page);
+    // The queen starves at tick 300 through the sim's own Defeat path (no seam).
+    await expect.poll(() => activeOverlay(page), { timeout: 40_000 }).toBe('game-over');
+    // With the caption clock still stopped, the game over itself emptied the queue.
+    expect(await captionQueue(page)).toEqual({ active: null, pending: null });
+    // The caption clock runs on behind the end screen: nothing comes up over it.
+    await freezeCaptionClock(page, false);
+    await page.waitForTimeout(3_000);
+    expect(await captionQueue(page)).toEqual({ active: null, pending: null });
+    expect(await captions(page)).not.toContain(HINT);
+    // A late caption source (an autosave failure resolving now) is not admitted either.
+    const offered = await page.evaluate(() => {
+      const t = (window as unknown as { __phase9_test?: TestHook }).__phase9_test;
+      if (t?.offerCaption === undefined) throw new Error('no offerCaption hook');
+      return t.offerCaption('late caption');
+    });
+    expect(offered).toBe(false);
+    expect(await captionQueue(page)).toEqual({ active: null, pending: null });
+    expect(await activeOverlay(page)).toBe('game-over');
+  });
+
+  test('a waiting hint never shows over the new-game screen after a restart from Save/Load', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await bootStorageSave(page, 'plain');
+    await queueHintBehindRally(page);
+    // Pause menu → Save/Load → New Game: a restart with no game over.
+    await page.keyboard.press('Escape');
+    await expect.poll(() => activeOverlay(page), { timeout: 5_000 }).toBe('pause-menu');
+    await clickCanvasRect(page, SAVE_LOAD_ROW_RECT);
+    await expect.poll(() => activeOverlay(page), { timeout: 5_000 }).toBe('save-load');
+    // The booted save is in storage, so the first click asks to confirm.
+    await clickCanvasRect(page, DIALOG_NEW_GAME_RECT);
+    expect(await activeOverlay(page)).toBe('save-load');
+    await clickCanvasRect(page, DIALOG_NEW_GAME_RECT);
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () => (window as { __phase9_ui?: { bootScreen?: string } }).__phase9_ui?.bootScreen,
+          ),
+        { timeout: 5_000 },
+      )
+      .toBe('difficulty-select');
+    expect(await captionQueue(page)).toEqual({ active: null, pending: null });
+    await freezeCaptionClock(page, false);
+    await page.waitForTimeout(3_000);
+    expect(await captionQueue(page)).toEqual({ active: null, pending: null });
+    expect(await captions(page)).not.toContain(HINT);
   });
 });
