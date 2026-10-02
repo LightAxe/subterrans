@@ -2337,6 +2337,8 @@ export class UIScene extends Phaser.Scene {
    */
   advanceCaptionClock(ms: number): void {
     if (!import.meta.env.DEV) return;
+    // Infinity would hang the page; NaN would advance nothing and let a spec pass vacuously.
+    if (!Number.isFinite(ms) || ms < 0) throw new RangeError(`advanceCaptionClock: bad ms ${ms}`);
     const STEP_MS = 10;
     const tweenScale = this.tweens.timeScale;
     const timerScale = this.time.timeScale;
