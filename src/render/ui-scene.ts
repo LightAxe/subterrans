@@ -666,6 +666,9 @@ export class UIScene extends Phaser.Scene {
   private tooltipShowTimer: Phaser.Time.TimerEvent | null = null;
   private tooltipHideTimer: Phaser.Time.TimerEvent | null = null;
   private tooltipText: Phaser.GameObjects.Text | null = null;
+  /** #400 — the kind of widget the tooltip on screen (tooltipText) belongs to; only
+   *  meaningful while tooltipText is non-null. */
+  private tooltipTextKind: TooltipTarget['kind'] | null = null;
   // Stage 3b (#5) — last view/colony the tooltip state machine saw, so update()
   // can detect a keyboard- or button-driven view/colony switch (which fires no
   // pointermove) and cancel a now-stale tooltip. null = not yet sampled.
@@ -1822,8 +1825,15 @@ export class UIScene extends Phaser.Scene {
     this.spiderOrderText.setVisible(spiderChip);
     // The chip is the one tooltip target that can vanish under a still pointer (a
     // click on it, the spider dying), and the tooltip re-checks only on pointermove:
-    // drop a pending or shown chip tooltip once the chip is gone.
-    if (!spiderChip && this.hoverTarget?.kind === 'spider-order') this.cancelTooltip();
+    // once the chip is gone, drop its tooltip — pending (hoverTarget) or on screen,
+    // including one in its mouse-out grace (tooltipTextKind).
+    if (
+      !spiderChip &&
+      (this.hoverTarget?.kind === 'spider-order' ||
+        (this.tooltipText !== null && this.tooltipTextKind === 'spider-order'))
+    ) {
+      this.cancelTooltip();
+    }
     setSpiderOrder(spiderLive, spiderChip);
 
     this.undergroundLabelText.setText(
@@ -2706,6 +2716,7 @@ export class UIScene extends Phaser.Scene {
     );
     t.setPosition(tx, ty);
     this.tooltipText = t;
+    this.tooltipTextKind = target.kind;
   }
 
   private startTooltipHideGrace(): void {

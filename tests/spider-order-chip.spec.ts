@@ -154,6 +154,55 @@ test.describe('#400 — spider-order chip', () => {
     await expect.poll(() => ui(page, 'spiderOrderChip')).toBe(false);
     await page.waitForTimeout(900); // past the 400 ms show delay
     expect(await tooltip()).toBeNull();
+
+    // 3. The pointer has left the chip and its tooltip is in the 1.5 s mouse-out
+    //    grace when the order ends (here by a Command tap on the spider): the
+    //    tooltip goes with the chip, not at the end of the grace.
+    expect(await tapSpider(page)).toBe(true);
+    await expect.poll(() => ui(page, 'spiderOrderChip')).toBe(true);
+    await page.mouse.move(cx, cy);
+    await expect.poll(tooltip).toContain('until it dies');
+    await page.mouse.move(cx - 300, cy); // off the chip: the grace starts
+    expect(await tooltip()).toContain('until it dies');
+    expect(await tapSpider(page)).toBe(true); // the order ends
+    await expect.poll(() => ui(page, 'spiderOrderChip')).toBe(false);
+    await expect.poll(tooltip, { timeout: 1000 }).toBeNull();
+  });
+
+  test('the chip is framed like the spider mark: proto-blue while queued, white once applied', async ({
+    page,
+  }) => {
+    // One pixel of the chip's top border (2 px tall; the label's glyphs start 5 px
+    // down), as rendered.
+    const borderPixel = async (): Promise<number[]> =>
+      await page.evaluate(
+        async ([x, y]) => {
+          const t = (
+            window as unknown as {
+              __phase9_test?: {
+                sampleArea?: (x: number, y: number, w: number, h: number) => Promise<number[]>;
+              };
+            }
+          ).__phase9_test;
+          if (t?.sampleArea === undefined) throw new Error('sampleArea is not installed');
+          return (await t.sampleArea(x, y, 1, 1)).slice(0, 3);
+        },
+        [SPIDER_ORDER_RECT.x + SPIDER_ORDER_RECT.w / 2, SPIDER_ORDER_RECT.y] as const,
+      );
+    const near = (got: number[], want: number[]): boolean =>
+      got.length === 3 && got.every((v, i) => Math.abs(v - want[i]!) <= 8);
+    const QUEUED = [0x3a, 0x7b, 0xd5];
+    const WHITE = [0xff, 0xff, 0xff];
+
+    await page.keyboard.press(' '); // pause: a tap only queues the order
+    expect(await tapSpider(page)).toBe(true);
+    await expect.poll(() => ui(page, 'spiderOrderChip')).toBe(true);
+    expect(await ui(page, 'spiderPriorityActive')).toBe(false);
+    await expect.poll(async () => near(await borderPixel(), QUEUED)).toBe(true);
+
+    await page.keyboard.press(' '); // resume: the order is applied
+    await expect.poll(() => ui(page, 'spiderPriorityActive')).toBe(true);
+    await expect.poll(async () => near(await borderPixel(), WHITE)).toBe(true);
   });
 
   test('a Command tap on the spider still toggles the order off too', async ({ page }) => {
