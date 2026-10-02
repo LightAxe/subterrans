@@ -10,7 +10,13 @@ import {
   STORAGE_HINT_REARM_TICKS,
   type StorageHintState,
 } from './storage-hint.js';
-import { resetCaptions, untrigger } from './onboarding-captions.js';
+import { checkAndTrigger, resetCaptions, untrigger } from './onboarding-captions.js';
+import {
+  admitCaption,
+  completeCaption,
+  createCaptionQueueState,
+  dropPendingCaption,
+} from './caption-queue.js';
 import { createScenario } from '../sim/scenario.js';
 import type { WorldState } from '../sim/types.js';
 import { allocateEntityId, SIM_VERSION_V69_FOOD_FAIRNESS } from '../sim/types.js';
@@ -361,8 +367,8 @@ describe('advanceStorageHint', () => {
     for (let t = from; t <= to; t++) {
       // eslint-disable-next-line no-restricted-syntax -- test fixture: stage the world tick
       world.tick = t;
-      const text = advanceStorageHint(state, world, PLAYER_COLONY_ID);
-      if (text !== null) shown.push(`${t}:${text}`);
+      const { caption } = advanceStorageHint(state, world, PLAYER_COLONY_ID);
+      if (caption !== null) shown.push(`${t}:${caption}`);
     }
     return shown;
   }
@@ -497,5 +503,97 @@ describe('advanceStorageHint', () => {
     const s = createStorageHintState();
     expect(run(s, world, 0, 3 * STORAGE_HINT_DWELL_TICKS)).toEqual([]);
     expect(storageHintCondition(world, ENEMY_COLONY_ID)).toBe('blocked');
+  });
+});
+
+describe('withdrawing an out-of-date hint (#395, Codex P2)', () => {
+  beforeEach(() => resetCaptions());
+
+  it('withdraw is set whenever storage no longer blocks the queen', () => {
+    const { world, colony } = scenario();
+    readyToLay(world, colony);
+    const s = createStorageHintState();
+    expect(advanceStorageHint(s, world, PLAYER_COLONY_ID).withdraw).toBe(false); // blocked
+    pendStorage(world, PLAYER_COLONY_ID, 30);
+    expect(advanceStorageHint(s, world, PLAYER_COLONY_ID).withdraw).toBe(true); // neither
+    delete world.pendingChambers[`${PLAYER_COLONY_ID}:30:9`];
+    addChamber(world, colony, ChamberType.FoodStorage);
+    expect(advanceStorageHint(s, world, PLAYER_COLONY_ID).withdraw).toBe(true); // covered
+  });
+
+  it('dropPendingCaption drops only a pending caption with that key', () => {
+    const q = createCaptionQueueState();
+    const other = {
+      text: 'other',
+      x: 0,
+      y: 0,
+      source: 'event' as const,
+      captionKey: 'rally' as const,
+    };
+    const hint = {
+      text: TEXT,
+      x: 0,
+      y: 0,
+      source: 'event' as const,
+      captionKey: 'foodStorageNeeded' as const,
+    };
+    admitCaption(q, hint); // on screen
+    expect(dropPendingCaption(q, 'foodStorageNeeded')).toBeNull(); // the active one stays
+    expect(q.active).toBe(hint);
+    const q2 = createCaptionQueueState();
+    admitCaption(q2, other);
+    admitCaption(q2, { ...other, text: 'other 2', captionKey: 'dig' });
+    expect(dropPendingCaption(q2, 'foodStorageNeeded')).toBeNull(); // another key waits
+    expect(q2.pending?.text).toBe('other 2');
+    const q3 = createCaptionQueueState();
+    admitCaption(q3, other);
+    admitCaption(q3, hint);
+    expect(dropPendingCaption(q3, 'foodStorageNeeded')).toBe(hint);
+    expect(q3.pending).toBeNull();
+    expect(q3.active).toBe(other);
+  });
+
+  it('a hint waiting behind another caption is never shown once storage is designated', () => {
+    // GameScene + UIScene, minus Phaser: the caption queue, the storage hint, and
+    // UIScene.withdrawPendingCaption (dropPendingCaption, then un-mark the key).
+    const { world, colony } = scenario();
+    readyToLay(world, colony);
+    const q = createCaptionQueueState();
+    admitCaption(q, { text: 'rally', x: 0, y: 0, source: 'event', captionKey: 'rally' });
+    const s = createStorageHintState();
+    const frame = (t: number) => {
+      // eslint-disable-next-line no-restricted-syntax -- test fixture: stage the world tick
+      world.tick = t;
+      const f = advanceStorageHint(s, world, PLAYER_COLONY_ID);
+      if (f.caption !== null) {
+        admitCaption(q, {
+          text: f.caption,
+          x: 0,
+          y: 0,
+          source: 'event',
+          captionKey: 'foodStorageNeeded',
+        });
+      }
+      if (f.withdraw && dropPendingCaption(q, 'foodStorageNeeded') !== null) {
+        untrigger('foodStorageNeeded');
+      }
+    };
+    for (let t = 0; t <= STORAGE_HINT_DWELL_TICKS; t++) frame(t);
+    expect(q.pending?.text).toBe(TEXT); // queued behind the rally caption
+    pendStorage(world, PLAYER_COLONY_ID, 30); // the player designates a larder
+    frame(STORAGE_HINT_DWELL_TICKS + 1);
+    expect(q.pending).toBeNull();
+    // The rally caption finishes: nothing follows it.
+    expect(completeCaption(q).begin).toBeUndefined();
+    // Un-marked: if storage blocks the queen again (the designation is cancelled),
+    // the hint comes back after a fresh dwell.
+    expect(checkAndTrigger('foodStorageNeeded')).toBe(TEXT);
+    untrigger('foodStorageNeeded');
+    delete world.pendingChambers[`${PLAYER_COLONY_ID}:30:9`];
+    const back = STORAGE_HINT_DWELL_TICKS + 2;
+    for (let t = back; t < back + STORAGE_HINT_DWELL_TICKS; t++) frame(t);
+    expect(q.active).toBeNull();
+    frame(back + STORAGE_HINT_DWELL_TICKS);
+    expect(q.active?.text).toBe(TEXT);
   });
 });

@@ -27,6 +27,9 @@
 // waits for the replacement to mature (EGG_HATCH_TICKS + LARVA_MATURE_TICKS, far
 // longer) is told again when it is short once more, at most once per such spell.
 // A colony with no Food Storage chamber can never be covered, so it is told once.
+// A hint queued behind another caption that is out of date by its turn (storage
+// covered, or enough Food Storage designated, meanwhile) is withdrawn and never
+// shows (StorageHintFrame.withdraw); its key is un-marked, so it can come back.
 //
 // Render-side session state only: reads world state, writes nothing, saves nothing.
 // Pure and Phaser-free; GameScene owns the state and calls advanceStorageHint each
@@ -92,18 +95,38 @@ export function storageHintCondition(world: WorldState, colonyId: ColonyId): Sto
   return shortfall > pendingStorage ? 'blocked' : 'neither';
 }
 
+/** What GameScene does with the storage hint this frame. */
+export interface StorageHintFrame {
+  /** The caption text to show now (with the 'foodStorageNeeded' key), or null. */
+  readonly caption: string | null;
+  /** Storage no longer blocks the queen (covered, or enough Food Storage
+   *  designated): a hint still waiting behind another caption is out of date and
+   *  is withdrawn before it shows (UIScene.withdrawPendingCaption). */
+  readonly withdraw: boolean;
+}
+
 /**
- * GameScene's per-frame step for the player's colony. Returns the caption text to
- * show now (with the 'foodStorageNeeded' key), or null. Re-arms the caption once
+ * GameScene's per-frame step for the player's colony. Re-arms the caption once
  * storage has covered the reserve for STORAGE_HINT_REARM_TICKS.
  */
 export function advanceStorageHint(
   state: StorageHintState,
   world: WorldState,
   colonyId: ColonyId,
-): string | null {
+): StorageHintFrame {
   const condition = storageHintCondition(world, colonyId);
-  const tick = world.tick;
+  return {
+    caption: stepStorageHint(state, condition, world.tick),
+    withdraw: condition !== 'blocked',
+  };
+}
+
+/** The state machine behind advanceStorageHint: the caption to show now, or null. */
+function stepStorageHint(
+  state: StorageHintState,
+  condition: StorageHintCondition,
+  tick: number,
+): string | null {
   if (condition === 'covered') {
     state.blockedSinceTick = null;
     if (state.coveredSinceTick === null || state.coveredSinceTick > tick) {

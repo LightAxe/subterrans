@@ -350,6 +350,8 @@ interface UIScenePhase9 {
   // recurring captions (raid news, the spider-rampage warning) may enter without
   // taking the slot a one-shot caption would need.
   captionQueueIdle?(): boolean;
+  /** #395 — withdraw the pending caption keyed `key` (UIScene.withdrawPendingCaption). */
+  withdrawPendingCaption?(key: CaptionKey): void;
   /** #372 — a long-hold caption (the army warning, the #395 storage hint)
    *  shortens its hold so a caption waiting behind it is not held back
    *  (UIScene.yieldLongCaption). */
@@ -496,6 +498,12 @@ declare global {
        *  a real click. Lets a spec rally on an enemy entrance without driving the
        *  camera to it. Returns false if the command was dropped (paused cap). */
       rallyPlayerAt?(tileX: number, tileY: number): boolean;
+      /** #395 — designate a player chamber of `chamberType` at anchor (tileX, tileY)
+       *  through the input layer's enqueueCommand (the path the chamber menu's
+       *  command takes): a command, not a state write, so the drain, the caption hook
+       *  and the sim all run as for a real placement. Returns false if the command
+       *  was dropped (queue cap). */
+      placePlayerChamberAt?(chamberType: number, tileX: number, tileY: number): boolean;
       /** #290 PR 6 — the player colony's raid counters (food in fp: stolen by it,
        *  stolen from it; completed raid hauls) and its food total, read-only, so a
        *  spec can prove a raid moved food. Null before the first boot. */
@@ -850,6 +858,20 @@ export class GameScene extends Phaser.Scene {
           tileX,
           tileY,
           PLAYER_COLONY_ID,
+          isPausedByAny(this.pauseReasons),
+        ),
+      placePlayerChamberAt: (chamberType: number, tileX: number, tileY: number): boolean =>
+        this.world !== undefined &&
+        enqueueCommand(
+          this.world,
+          {
+            type: 'PlaceChamber',
+            colonyId: PLAYER_COLONY_ID,
+            chamberType: chamberType as ChamberType,
+            anchorTileX: tileX,
+            anchorTileY: tileY,
+            issuedAtTick: this.world.tick,
+          },
           isPausedByAny(this.pauseReasons),
         ),
       getPlayerRaidStats: () => {
@@ -1912,16 +1934,19 @@ export class GameScene extends Phaser.Scene {
     // tie the army's warning goes first and the hint queues behind it (as a one-shot
     // it takes the pending slot, and the warning gives way to its readable floor).
     if (uiScene) {
-      const storageText = advanceStorageHint(this.storageHint, this.world, PLAYER_COLONY_ID);
-      if (storageText) {
+      const storage = advanceStorageHint(this.storageHint, this.world, PLAYER_COLONY_ID);
+      if (storage.caption) {
         uiScene.showCaption(
-          storageText,
+          storage.caption,
           this.layout.w / 2,
           60,
           'foodStorageNeeded',
           STORAGE_HINT_HOLD_MS,
         );
       }
+      // A hint still waiting behind another caption whose reason has gone (Food
+      // Storage designated or built since it was queued) never shows.
+      if (storage.withdraw) uiScene.withdrawPendingCaption?.('foodStorageNeeded');
     }
 
     // #350 — the spider-rampage warning, owed from its spider_rampage_start until

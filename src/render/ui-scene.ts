@@ -311,6 +311,7 @@ import {
   completeCaption,
   clearPendingFirstUse,
   createCaptionQueueState,
+  dropPendingCaption,
   recurringCaptionMayEnter,
   captionFadeInMs,
   captionHoldMs,
@@ -2342,6 +2343,15 @@ export class UIScene extends Phaser.Scene {
     this.captionHoldsLog = [];
     this.captionsReplacedLog = [];
     this.activeHoldScheduledMs = null;
+  }
+
+  /** #395 — withdraw the pending caption keyed `key` (it never displayed): its
+   *  reason went away while it waited behind another caption. Un-marks the key so
+   *  it can fire again if the reason comes back. No-op if no caption with that key
+   *  is pending; never touches the caption on screen. */
+  withdrawPendingCaption(key: CaptionKey): void {
+    const dropped = dropPendingCaption(this.captionState, key);
+    if (dropped !== null) untrigger(key);
   }
 
   /** #290 PR 6 / #350 — true while nothing is showing and nothing is pending, so

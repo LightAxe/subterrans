@@ -249,3 +249,19 @@ export function completeCaption(state: CaptionQueueState): { begin?: CaptionRequ
 export function clearPendingFirstUse(state: CaptionQueueState): void {
   if (state.pending?.source === 'first-use') state.pending = null;
 }
+
+/** #395 — drop the pending caption carrying one-shot key `key`, whose reason went
+ *  away while it waited (the storage hint once Food Storage is designated or
+ *  built). Returns the dropped request (it never displayed; UIScene un-marks its
+ *  key so it can fire again if its reason comes back), or null. The active
+ *  caption, mid-fade, is left to finish, and a pending caption without that key
+ *  is untouched. */
+export function dropPendingCaption(
+  state: CaptionQueueState,
+  key: CaptionKey,
+): CaptionRequest | null {
+  const pending = state.pending;
+  if (pending === null || pending.captionKey !== key) return null;
+  state.pending = null;
+  return pending;
+}
