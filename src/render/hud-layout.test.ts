@@ -34,10 +34,11 @@ describe('buildHudLayout', () => {
     // this test exists to guard is that the LayoutContext conversion moved no
     // LEGACY geometry, so those three are split off rather than folded into the
     // legacy table — a future edit that shifts any zone above still fails here.
-    // Their positions are unchanged.
-    const { ALARM_TOGGLE, VIEW_TOGGLE, UNDERGROUND_COLONY_TOGGLE, ...legacy } =
+    // Their positions are unchanged. #400 added SPIDER_ORDER, another new zone.
+    const { ALARM_TOGGLE, VIEW_TOGGLE, UNDERGROUND_COLONY_TOGGLE, SPIDER_ORDER, ...legacy } =
       buildHudLayout(DEFAULT_LAYOUT);
     expect(legacy).toEqual(EXPECTED);
+    expect(SPIDER_ORDER).toEqual({ x: 632, y: 320, w: 128, h: 22 });
     expect(VIEW_TOGGLE).toEqual({ x: 632, y: 396, w: 128, h: 24 });
     expect(UNDERGROUND_COLONY_TOGGLE).toEqual({ x: 632, y: 372, w: 128, h: 22 });
     expect(ALARM_TOGGLE).toEqual({ x: 632, y: 346, w: 128, h: 22 });
@@ -81,6 +82,23 @@ describe('buildHudLayout', () => {
       hud.UNDERGROUND_COLONY_TOGGLE.y,
     );
     expect(hud.ALARM_TOGGLE.x).toBe(hud.UNDERGROUND_COLONY_TOGGLE.x);
+  });
+
+  it('#400: the spider-order chip joins the right column, one step above the alarm toggle', () => {
+    for (const size of [DEFAULT_LAYOUT, createLayoutContext(1000, 700)]) {
+      const hud = buildHudLayout(size);
+      // Same column and width as the toggles (the label is sized to it).
+      expect(hud.SPIDER_ORDER.x).toBe(hud.ALARM_TOGGLE.x);
+      expect(hud.SPIDER_ORDER.w).toBe(hud.ALARM_TOGGLE.w);
+      // Clear of the alarm toggle below it, by the same gap the alarm keeps above
+      // the colony toggle…
+      expect(hud.SPIDER_ORDER.y + hud.SPIDER_ORDER.h).toBeLessThanOrEqual(hud.ALARM_TOGGLE.y);
+      expect(hud.ALARM_TOGGLE.y - (hud.SPIDER_ORDER.y + hud.SPIDER_ORDER.h)).toBe(
+        hud.UNDERGROUND_COLONY_TOGGLE.y - (hud.ALARM_TOGGLE.y + hud.ALARM_TOGGLE.h),
+      );
+      // …and of the tool palette above.
+      expect(hud.SPIDER_ORDER.y).toBeGreaterThanOrEqual(hud.TOOLS.y + hud.TOOLS.h);
+    }
   });
 
   it('reflows right/bottom-anchored zones with the layout size', () => {

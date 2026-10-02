@@ -42,6 +42,10 @@ import { buildHudLayout } from '../render/hud-layout.js';
 import { DEFAULT_LAYOUT } from '../render/layout.js';
 import { PLAYER_COLONY_ID } from '../sim/constants.js';
 import { hintStripState, resetHintStripState } from '../render/hint-strip-state.js';
+import {
+  spiderOrderChipState,
+  resetSpiderOrderChipState,
+} from '../render/spider-order-chip-state.js';
 
 // #238: isPointerOverHUD / registerDragPan now take the built HUD layout; at the
 // default 800×592 layout hud.* == the former HUD table.
@@ -182,6 +186,20 @@ describe('isPointerOverHUD', () => {
     const [x, y] = center(hud.UNDERGROUND_COLONY_TOGGLE);
     expect(isPointerOverHUD(x, y, hud, makeViewState('surface'))).toBe(false);
     expect(isPointerOverHUD(x, y, hud, makeViewState('underground'))).toBe(true);
+  });
+
+  it('#400: masks the spider-order chip only while it is drawn, on both views', () => {
+    const [x, y] = center(hud.SPIDER_ORDER);
+    try {
+      resetSpiderOrderChipState();
+      // No chip: its band is world, as it always was.
+      expect(isPointerOverHUD(x, y, hud, makeViewState('surface'))).toBe(false);
+      spiderOrderChipState.visible = true;
+      expect(isPointerOverHUD(x, y, hud, makeViewState('surface'))).toBe(true);
+      expect(isPointerOverHUD(x, y, hud, makeViewState('underground'))).toBe(true);
+    } finally {
+      resetSpiderOrderChipState();
+    }
   });
 });
 

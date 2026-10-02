@@ -85,6 +85,12 @@ declare global {
       // C1 — whether the player colony's alarm is sounding, so an e2e test can
       // assert the toggle by value rather than by button pixels.
       alarmActive?: boolean;
+      // #400 — whether the player's spider order is in force in the LIVE sim
+      // (world.spiderPriorityColonyId), and whether the HUD's spider-order chip is
+      // drawn (it reads the queue-folded order, so it can lead the live flag while
+      // paused). Lets a spec assert both by value.
+      spiderPriorityActive?: boolean;
+      spiderOrderChip?: boolean;
       // #304 — the difficulty row currently selected on the new-game screen, so
       // Playwright can assert that a row click moves the selection WITHOUT
       // starting the round, and that the screen reopens on the persisted tier.
@@ -130,6 +136,10 @@ function publishPhase9(patch: Partial<NonNullable<Window['__phase9_ui']>>): void
   if (selected !== undefined) next.selectedDifficulty = selected;
   const alarm = patch.alarmActive ?? prev?.alarmActive;
   if (alarm !== undefined) next.alarmActive = alarm;
+  const spiderOn = patch.spiderPriorityActive ?? prev?.spiderPriorityActive;
+  if (spiderOn !== undefined) next.spiderPriorityActive = spiderOn;
+  const chip = patch.spiderOrderChip ?? prev?.spiderOrderChip;
+  if (chip !== undefined) next.spiderOrderChip = chip;
   window.__phase9_ui = next;
 }
 
@@ -152,6 +162,12 @@ function setActiveUndergroundLabel(
  *  Preserves the other published fields. */
 function setAlarmActive(next: boolean): void {
   publishPhase9({ alarmActive: next });
+}
+
+/** #400 — publishes the live spider order and whether its HUD chip is drawn, every
+ *  UIScene.update() frame. Preserves the other published fields. */
+function setSpiderOrder(live: boolean, chip: boolean): void {
+  publishPhase9({ spiderPriorityActive: live, spiderOrderChip: chip });
 }
 
 /** Publishes which boot overlay is up so Playwright can distinguish the fresh-boot
@@ -330,6 +346,13 @@ import {
   type HintFirstUseId,
 } from './first-use-hints.js';
 import { hintStripState } from './hint-strip-state.js';
+import { spiderOrderChipState } from './spider-order-chip-state.js';
+import {
+  SPIDER_ORDER_LABEL,
+  drawSpiderOrderChip,
+  spiderOrderChipVisible,
+  spiderOrderClearCommand,
+} from './spider-order-chip.js';
 import {
   tooltipTargetAt,
   tooltipTextFor,
@@ -672,6 +695,9 @@ export class UIScene extends Phaser.Scene {
   /** C1 — colony alarm toggle label; its text follows colony.alarmActive (the red
    *  "on" background is the gfx fill of hud.ALARM_TOGGLE, drawn in update()). */
   private alarmToggleText!: Phaser.GameObjects.Text;
+  /** #400 — the spider-order chip's label ("Call off spider"), shown only while the
+   *  player's spider order is in force; its framed background is drawn in update(). */
+  private spiderOrderText!: Phaser.GameObjects.Text;
   // Phase 09.1 Chunk 2 — underground colony label. Visible only when
   // viewState.activeView === 'underground'. Reads 'Your Colony' vs
   // 'Enemy Colony' from viewState.activeUndergroundColonyId each frame.
@@ -879,6 +905,12 @@ export class UIScene extends Phaser.Scene {
     // is usually visible on the surface, but the decision is colony-wide), so
     // unlike the colony toggle it has no visibility gate.
     this.alarmToggleText = this.addHudToggleLabel(this.hud.ALARM_TOGGLE, 'Alarm');
+
+    // #400 — the spider-order chip, above the alarm toggle: up only while the
+    // player's spider order is in force (update()), on both views — the order is
+    // colony-wide, like the alarm.
+    this.spiderOrderText = this.addHudToggleLabel(this.hud.SPIDER_ORDER, SPIDER_ORDER_LABEL);
+    this.spiderOrderText.setVisible(false);
 
     // Phase 09.1 Chunk 2 + issue #14 — underground colony toggle button.
     // Sits above VIEW_TOGGLE (hud.UNDERGROUND_COLONY_TOGGLE) so the two
@@ -1284,7 +1316,10 @@ export class UIScene extends Phaser.Scene {
           // every world hotkey on antActivityPanelVisible. Exempting the alarm
           // from that policy is a deliberate follow-up, not something to special
           // -case here.
-          this.isInsideRect(pointer.x, pointer.y, this.hud.ALARM_TOGGLE);
+          this.isInsideRect(pointer.x, pointer.y, this.hud.ALARM_TOGGLE) ||
+          // #400 — the spider-order chip, while it is drawn (same reason).
+          (spiderOrderChipState.visible &&
+            this.isInsideRect(pointer.x, pointer.y, this.hud.SPIDER_ORDER));
         if (!overHud) {
           // Click on the world — dismiss and consume. `return` prevents
           // any further UIScene handling; the deferred hide prevents the
@@ -1310,6 +1345,15 @@ export class UIScene extends Phaser.Scene {
       // queue-full hint either way (paused or not).
       if (this.isInsideRect(pointer.x, pointer.y, this.hud.ALARM_TOGGLE)) {
         this.toggleColonyAlarm();
+        return;
+      }
+      // #400 — the spider-order chip calls the order off. Only while it is drawn:
+      // otherwise its band is world, and the click falls through to it.
+      if (
+        spiderOrderChipState.visible &&
+        this.isInsideRect(pointer.x, pointer.y, this.hud.SPIDER_ORDER)
+      ) {
+        this.callOffSpiderOrder();
         return;
       }
       // Issue #14 — underground colony toggle button. Mirrors the X
@@ -1461,6 +1505,7 @@ export class UIScene extends Phaser.Scene {
       [
         { id: 'view-toggle', text: this.viewToggleText, rect: this.hud.VIEW_TOGGLE },
         { id: 'alarm-toggle', text: this.alarmToggleText, rect: this.hud.ALARM_TOGGLE },
+        { id: 'spider-order', text: this.spiderOrderText, rect: this.hud.SPIDER_ORDER },
         {
           id: 'colony-toggle',
           text: this.undergroundLabelText,
@@ -1554,7 +1599,11 @@ export class UIScene extends Phaser.Scene {
     // Pull the live world each frame via the lazy getter. Returns undefined
     // pre-boot (SavePrompt phase) and on any future world swap between frames.
     const world = this.getWorld();
-    if (!world) return;
+    if (!world) {
+      // #400 — no world, no chip: don't leave its band masking world input.
+      spiderOrderChipState.visible = false;
+      return;
+    }
 
     // #278 — (re)bake the static minimap layer when the world changes (first boot,
     // restart, load — each assigns a NEW WorldState) or after a WebGL restore
@@ -1758,6 +1807,24 @@ export class UIScene extends Phaser.Scene {
     this.alarmToggleText.setText(alarmOn ? `All clear ${alarmGlyph}` : `Alarm ${alarmGlyph}`);
     this.alarmToggleText.setVisible(true);
     setAlarmActive(alarmLive);
+
+    // #400 — the spider-order chip. Up while the order is in force counting a
+    // queued MarkSpiderPriority (spiderOrderChipVisible), like the alarm's projected
+    // read: a click while paused hides it at once, and a second click has nothing
+    // to send. The hook's `spiderPriorityActive` is the LIVE flag, so a spec pins
+    // that tick() applied the clear, not merely that it was queued.
+    const spiderChip = spiderOrderChipVisible(world, PLAYER_COLONY_ID);
+    spiderOrderChipState.visible = spiderChip;
+    // A queued order not yet applied (paused) is framed in the queued colour, as the
+    // world mark round the spider is.
+    const spiderLive = world.spiderPriorityColonyId === PLAYER_COLONY_ID;
+    if (spiderChip) drawSpiderOrderChip(this.gfx, this.hud.SPIDER_ORDER, !spiderLive);
+    this.spiderOrderText.setVisible(spiderChip);
+    // The chip is the one tooltip target that can vanish under a still pointer (a
+    // click on it, the spider dying), and the tooltip re-checks only on pointermove:
+    // drop a pending or shown chip tooltip once the chip is gone.
+    if (!spiderChip && this.hoverTarget?.kind === 'spider-order') this.cancelTooltip();
+    setSpiderOrder(spiderLive, spiderChip);
 
     this.undergroundLabelText.setText(
       `${undergroundLabel} ${glyphFor('COLONY_TOGGLE', 'keyboard')}`,
@@ -2476,6 +2543,13 @@ export class UIScene extends Phaser.Scene {
     return import.meta.env.DEV ? this.endScreenTitleShown : null;
   }
 
+  /** #400 — Dev/E2E-only: the HUD tooltip on screen now (its text), or null. Read
+   *  through window.__phase9_test.getTooltipShown(); null outside Dev builds. */
+  tooltipShown(): string | null {
+    if (!import.meta.env.DEV || this.tooltipText === null) return null;
+    return this.tooltipText.text;
+  }
+
   /** Promote a queued caption once the active one has fully faded. */
   private onCaptionFinished(): void {
     const result = completeCaption(this.captionState);
@@ -2808,6 +2882,18 @@ export class UIScene extends Phaser.Scene {
       active: !colony.alarmActive,
       issuedAtTick: world.tick,
     };
+    const paused = this.isPausedFn ? this.isPausedFn() : false;
+    if (!enqueueCommand(world, cmd, paused)) this.flashPausedQueueFull(paused);
+  }
+
+  /** #400 — call off the player's spider order (MarkSpiderPriority off) through the
+   *  command queue. spiderOrderClearCommand reads the queue-folded order, so a
+   *  second click while paused finds nothing to clear and sends nothing. */
+  private callOffSpiderOrder(): void {
+    const world = this.getWorld();
+    if (world === undefined) return;
+    const cmd = spiderOrderClearCommand(world, PLAYER_COLONY_ID);
+    if (cmd === null) return;
     const paused = this.isPausedFn ? this.isPausedFn() : false;
     if (!enqueueCommand(world, cmd, paused)) this.flashPausedQueueFull(paused);
   }

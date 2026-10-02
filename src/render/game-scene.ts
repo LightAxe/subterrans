@@ -101,6 +101,7 @@ import {
   STARVATION_GRACE_TICKS,
   UNDERGROUND_CEILING_ROW_Y,
 } from '../sim/constants.js';
+import { FP_SHIFT } from '../sim/fixed.js';
 import { GameOutcome } from '../sim/game-over.js';
 import { drawSurfaceTerrain, drawSurfaceEntities, type GfxLike } from './draw-surface.js';
 import {
@@ -160,7 +161,7 @@ import {
   panInputState,
 } from '../input/camera-input.js';
 import { enqueueCommand } from '../input/command-queue.js';
-import { handleSetRallyPoint } from '../input/surface-input.js';
+import { handleSetRallyPoint, handleSurfaceCommandTap } from '../input/surface-input.js';
 import type { SimCommand } from '../sim/commands.js';
 import { registerGestureArbiter, type GestureArbiter } from '../input/gesture-arbiter.js';
 import { thresholdLogicalPx, DRAG_THRESHOLD_PX } from '../input/gesture.js';
@@ -353,6 +354,8 @@ interface UIScenePhase9 {
   // #389 — Dev/E2E observability for __phase9_test.getEndScreenCauseLine() / getEndScreenTitle().
   endScreenCauseLine?(): string | null;
   endScreenTitle?(): string | null;
+  // #400 — Dev/E2E observability for __phase9_test.getTooltipShown().
+  tooltipShown?(): string | null;
   // #290 PR 6 / #350 — true while nothing is showing and nothing is pending, so
   // recurring captions (raid news, the spider-rampage warning) may enter without
   // taking the slot a one-shot caption would need.
@@ -475,6 +478,9 @@ declare global {
        *  oldest first (UIScene.captionsShown). A caption is up for 1.5 s (a
        *  long-hold one longer), so a spec asserts on the log rather than racing the live Text. Dev-build only. */
       getCaptionsShown?(): string[];
+      /** #400 — the HUD tooltip on screen now (its text), or null when none is up
+       *  (UIScene.tooltipShown). Dev-build only. */
+      getTooltipShown?(): string | null;
       /** #372 — each caption this round, oldest first: the final full-opacity hold
        *  scheduled for it (ms) and whether it gave way. Dev-build only. */
       getCaptionHolds?(): { text: string; holdMs: number; yielded: boolean }[];
@@ -556,6 +562,12 @@ declare global {
        *  (top centre), as a late caption source would (an autosave failure resolving
        *  after game over). Returns what showCaption returns: false if not admitted. */
       offerCaption?(text: string): boolean;
+      /** #400 — a Command tap on the spider, through the exact enqueue the surface
+       *  tap uses (handleSurfaceCommandTap with the spider hit): it TOGGLES the
+       *  player's spider order, folding in any queued one. Lets a spec set the order
+       *  without driving the camera to a moving spider. Returns false if there is no
+       *  spider or the command was dropped (paused cap). */
+      tapSpiderAsPlayer?(): boolean;
       /** #290 PR 6 — the player colony's raid counters (food in fp: stolen by it,
        *  stolen from it; completed raid hauls) and its food total, read-only, so a
        *  spec can prove a raid moved food. Null before the first boot. */
@@ -880,6 +892,7 @@ export class GameScene extends Phaser.Scene {
       alarmHotkeyAccepts: (): number => this.alarmHotkeyAccepts,
       getTick: (): number => this.world?.tick ?? -1,
       getCaptionsShown: (): string[] => this.getUIScene()?.captionsShown?.() ?? [],
+      getTooltipShown: (): string | null => this.getUIScene()?.tooltipShown?.() ?? null,
       getCaptionHolds: () => this.getUIScene()?.captionHolds?.() ?? [],
       getArmyWarningLog: (): ArmyWarningLogEntry[] => [...this.armyWarningLog],
       getRampageWarningTicks: (): number[] => [...this.rampageWarningTicks],
@@ -921,6 +934,18 @@ export class GameScene extends Phaser.Scene {
       },
       advanceCaptionClock: (ms: number): void => {
         this.getUIScene()?.advanceCaptionClock?.(ms);
+      },
+      tapSpiderAsPlayer: (): boolean => {
+        const w = this.world;
+        if (w === undefined || w.spider === null) return false;
+        return !handleSurfaceCommandTap(
+          w,
+          w.spider.posX >> FP_SHIFT,
+          w.spider.posY >> FP_SHIFT,
+          true,
+          isPausedByAny(this.pauseReasons),
+          PLAYER_COLONY_ID,
+        );
       },
       rallyPlayerAt: (tileX: number, tileY: number): boolean =>
         this.world !== undefined &&

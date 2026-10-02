@@ -50,6 +50,11 @@ export type { AntSpriteLayer } from './ant-sprite-layer.js';
 // white border so a pending MarkSpiderPriority is never mistaken for an applied one (Codex). These
 // mirror draw-command-legibility's queued/removal palette; exact hues are UAT-tunable.
 const COLOR_SPIDER_PRIORITY_QUEUED = 0x3a7bd5; // proto-blue — queued ON (not yet committed)
+/** #400 — the queued-ON spider-mark colour, for the HUD's spider-order chip too. */
+export const SPIDER_PRIORITY_QUEUED_COLOR = COLOR_SPIDER_PRIORITY_QUEUED;
+/** S7/D1 — the COMMITTED spider-priority border round the spider. #400: the HUD's spider-order
+ *  chip (spider-order-chip.ts) is framed in it too, so the chip reads as that order. */
+export const SPIDER_PRIORITY_COMMITTED_COLOR = 0xffffff;
 const COLOR_SPIDER_PRIORITY_REMOVAL = 0xd5773a; // orange — queued OFF (committed until resume)
 import {
   type CameraView,
@@ -558,7 +563,7 @@ export function drawSurfaceEntities(
         pendingSpiderPriority === true
           ? COLOR_SPIDER_PRIORITY_QUEUED
           : committedSpiderPriority
-            ? 0xffffff
+            ? SPIDER_PRIORITY_COMMITTED_COLOR
             : null;
       if (spiderMainBorder !== null || pendingSpiderPriority === false) {
         const pl = Math.round(spiderWorldX - SPIDER_SPRITE_WIDTH / 2) - 2;

@@ -17,6 +17,7 @@ import type { HudLayout } from './hud-layout.js';
 import { toolButtonVisualAt, speedControlAt, type SpeedControl } from './hud-controls.js';
 import { isInsideSlider } from './triangle-widget.js';
 import { glyphFor } from './input-glyphs.js';
+import { spiderOrderChipState } from './spider-order-chip-state.js';
 
 export interface TooltipRect {
   x: number;
@@ -32,6 +33,7 @@ export type TooltipTarget =
   | { kind: 'speed'; control: SpeedControl; anchor: TooltipRect }
   | { kind: 'view-toggle'; anchor: TooltipRect }
   | { kind: 'alarm-toggle'; anchor: TooltipRect }
+  | { kind: 'spider-order'; anchor: TooltipRect }
   | { kind: 'colony-toggle'; anchor: TooltipRect }
   | { kind: 'slider'; anchor: TooltipRect }
   | { kind: 'stats'; anchor: TooltipRect };
@@ -57,6 +59,10 @@ export function tooltipTargetAt(
   if (inRect(px, py, hud.VIEW_TOGGLE)) return { kind: 'view-toggle', anchor: hud.VIEW_TOGGLE };
   if (inRect(px, py, hud.ALARM_TOGGLE)) {
     return { kind: 'alarm-toggle', anchor: hud.ALARM_TOGGLE };
+  }
+  // #400 — the spider-order chip, only while it is drawn (spiderOrderChipState).
+  if (spiderOrderChipState.visible && inRect(px, py, hud.SPIDER_ORDER)) {
+    return { kind: 'spider-order', anchor: hud.SPIDER_ORDER };
   }
   if (view === 'underground' && inRect(px, py, hud.UNDERGROUND_COLONY_TOGGLE)) {
     return { kind: 'colony-toggle', anchor: hud.UNDERGROUND_COLONY_TOGGLE };
@@ -118,6 +124,9 @@ export function tooltipTextFor(target: TooltipTarget): string {
       // neither go foraging NOR can be recruited as fighters. The second half is the surprising one — a player
       // who sounds the alarm and then drags the Forage/Fight slider gets nothing.
       return `Recall foragers and idle workers to the nest ${glyphFor('ALARM_TOGGLE', 'keyboard')} — they wait by a blocked entrance, and can't forage or be recruited as fighters until the all-clear`;
+    case 'spider-order':
+      // #400: the order no longer lapses when the spider eats, so say it stays on.
+      return 'Your fighters are hunting the spider until it dies — click to call them off';
     case 'slider':
       return 'Forage ↔ Fight — drag to balance workers between foraging and fighting';
     case 'stats':

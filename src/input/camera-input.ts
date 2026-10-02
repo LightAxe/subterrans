@@ -27,6 +27,7 @@ import type * as Phaser from 'phaser';
 import type { HudLayout } from '../render/hud-layout.js';
 import { antActivityPanelState } from '../render/ant-activity-panel-state.js';
 import { hintStripState } from '../render/hint-strip-state.js';
+import { spiderOrderChipState } from '../render/spider-order-chip-state.js';
 import { type ViewState, worldPxDimensions } from '../render/camera.js';
 import {
   type CameraView,
@@ -131,6 +132,12 @@ export function isPointerOverHUD(
   // (legacy/test) pass undefined and the toggle stays unmasked.
   if (viewState !== undefined && viewState.activeView === 'underground') {
     zones.push(hud.UNDERGROUND_COLONY_TOGGLE);
+  }
+  // #400 — the spider-order chip is drawn only while the player's spider order is in
+  // force (UIScene sets spiderOrderChipState every frame); mask its band only then, so
+  // the rest of the time it is world, as it always was.
+  if (spiderOrderChipState.visible) {
+    zones.push(hud.SPIDER_ORDER);
   }
   for (const zone of zones) {
     if (px >= zone.x && px < zone.x + zone.w && py >= zone.y && py < zone.y + zone.h) {

@@ -11,6 +11,7 @@ import {
 } from './tooltips.js';
 import { buildHudLayout } from './hud-layout.js';
 import { DEFAULT_LAYOUT } from './layout.js';
+import { spiderOrderChipState, resetSpiderOrderChipState } from './spider-order-chip-state.js';
 
 // #238: tooltips.ts + hud-controls.ts now take the built HUD layout / its rects;
 // at the default 800×592 layout hud.* == the former HUD table.
@@ -48,6 +49,25 @@ describe('tooltipTargetAt', () => {
     const text = tooltipTextFor({ kind: 'alarm-toggle', anchor: hud.ALARM_TOGGLE }).toLowerCase();
     expect(text).toContain('forag');
     expect(text).toContain('fighter');
+  });
+
+  it('#400: hits the spider-order chip only while it is drawn, on both views', () => {
+    const c = center(hud.SPIDER_ORDER);
+    try {
+      resetSpiderOrderChipState();
+      expect(tooltipTargetAt(c.x, c.y, 'surface', hud)).toBeNull();
+      spiderOrderChipState.visible = true;
+      expect(tooltipTargetAt(c.x, c.y, 'surface', hud)?.kind).toBe('spider-order');
+      expect(tooltipTargetAt(c.x, c.y, 'underground', hud)?.kind).toBe('spider-order');
+    } finally {
+      resetSpiderOrderChipState();
+    }
+  });
+
+  it('#400: the spider-order tooltip says the order lasts until the spider dies, and how to stop it', () => {
+    const text = tooltipTextFor({ kind: 'spider-order', anchor: hud.SPIDER_ORDER }).toLowerCase();
+    expect(text).toContain('until it dies');
+    expect(text).toContain('call them off');
   });
 
   it('hits the alarm toggle in both views', () => {
@@ -107,6 +127,7 @@ describe('tooltipTextFor', () => {
     { kind: 'view-toggle', anchor: hud.VIEW_TOGGLE },
     { kind: 'colony-toggle', anchor: hud.UNDERGROUND_COLONY_TOGGLE },
     { kind: 'alarm-toggle', anchor: hud.ALARM_TOGGLE },
+    { kind: 'spider-order', anchor: hud.SPIDER_ORDER },
     { kind: 'slider', anchor: hud.TRIANGLE },
     { kind: 'stats', anchor: hud.STATS },
   ];

@@ -73,6 +73,9 @@ export const DIALOG_NEW_GAME_RECT: Rect = dialogItems[3]!.rect;
 export const VIEW_TOGGLE_RECT: Rect = buildHudLayout(DEFAULT_LAYOUT).VIEW_TOGGLE;
 /** C1 — colony alarm toggle, drawn on both views. */
 export const ALARM_TOGGLE_RECT: Rect = buildHudLayout(DEFAULT_LAYOUT).ALARM_TOGGLE;
+/** #400 — the spider-order chip ("Call off spider"), drawn while the player's spider
+ *  order is in force, on both views. */
+export const SPIDER_ORDER_RECT: Rect = buildHudLayout(DEFAULT_LAYOUT).SPIDER_ORDER;
 /** Underground colony toggle ("Your Colony [X]"), drawn on the underground view only. */
 export const COLONY_TOGGLE_RECT: Rect = buildHudLayout(DEFAULT_LAYOUT).UNDERGROUND_COLONY_TOGGLE;
 /** #372 — the minimap rect (160 × 160 in the bottom-right corner). */

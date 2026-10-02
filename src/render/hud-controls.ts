@@ -191,7 +191,8 @@ export function queueFullHint(paused: boolean): string {
  * only). Pure data — no Phaser types — so the spec can import it type-only.
  */
 export interface HudButtonGeometry {
-  /** 'view-toggle' | 'alarm-toggle' | 'colony-toggle' | 'tool:<id>' | 'speed:<control>'. */
+  /** 'view-toggle' | 'alarm-toggle' | 'spider-order' | 'colony-toggle' | 'tool:<id>' |
+   *  'speed:<control>'. */
   id: string;
   /** The label as currently rendered. */
   text: string;
