@@ -64,16 +64,18 @@ describe('buildOutcomeAttribution — TimeoutTiebreak', () => {
 // ---------------------------------------------------------------------------
 
 describe('buildOutcomeAttribution — StalemateTiebreak', () => {
-  it('Victory gameOutcome → enemy starved first narrative', () => {
+  // #389 — a stalemate leaves both queens alive, so no line may say one starved.
+  // The sim never ends a stalemate as a win or loss; if it did, no narrative.
+  it('Victory gameOutcome → no narrative (no queen starved)', () => {
     const result = buildOutcomeAttribution([roundEndEvent('StalemateTiebreak', 0, 0)], 'Victory');
     expect(result.primaryCause).toBe('StalemateTiebreak');
-    expect(result.narrativeSeed).toBe('Both colonies ran out of food; the enemy starved first.');
+    expect(result.narrativeSeed).toBeNull();
   });
 
-  it('Defeat gameOutcome → player queen starved narrative', () => {
+  it('Defeat gameOutcome → no narrative (no queen starved)', () => {
     const result = buildOutcomeAttribution([roundEndEvent('StalemateTiebreak', 0, 0)], 'Defeat');
     expect(result.primaryCause).toBe('StalemateTiebreak');
-    expect(result.narrativeSeed).toBe('Both colonies ran out of food; your queen starved first.');
+    expect(result.narrativeSeed).toBeNull();
   });
 
   it('no gameOutcome provided → draw narrative', () => {
@@ -147,7 +149,7 @@ describe('buildOutcomeAttribution — queen_death narratives (Defeat perspective
   it('MutualDestruction → symmetric narrative (same for both outcomes)', () => {
     const result = buildOutcomeAttribution([queenDeathEvent('MutualDestruction')], 'Defeat');
     expect(result.primaryCause).toBe('MutualDestruction');
-    expect(result.narrativeSeed).toBe('Both queens died in the same final fight.');
+    expect(result.narrativeSeed).toBe('Both queens died at the same time.');
   });
 });
 
@@ -177,7 +179,7 @@ describe('buildOutcomeAttribution — queen_death narratives (Victory perspectiv
   it('MutualDestruction Victory → same symmetric narrative', () => {
     const result = buildOutcomeAttribution([queenDeathEvent('MutualDestruction')], 'Victory');
     expect(result.primaryCause).toBe('MutualDestruction');
-    expect(result.narrativeSeed).toBe('Both queens died in the same final fight.');
+    expect(result.narrativeSeed).toBe('Both queens died at the same time.');
   });
 
   it('cause === null with no gameOutcome → defeat fallback narrative', () => {
@@ -195,7 +197,7 @@ describe('buildOutcomeAttribution — queen_death narratives (Victory perspectiv
   it('cause === null with MutualDestruction gameOutcome → both-fell narrative', () => {
     const result = buildOutcomeAttribution([queenDeathEvent(null)], 'MutualDestruction');
     expect(result.primaryCause).toBeNull();
-    expect(result.narrativeSeed).toBe('Both queens fell in the final battle.');
+    expect(result.narrativeSeed).toBe('Both queens died at the same time.');
   });
 });
 

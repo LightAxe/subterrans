@@ -20,6 +20,11 @@
 // events. The event that ends it must still be recorded: with the buffer full, a
 // queen death still gives the end screen its cause and narrative and the playtrace
 // its roundEndReason, and a stalemate its narrative and roundEndReason.
+//
+// #389 — the end screen's cause line (the survey's line; the GameOver overlay's
+// fallback when there is no narrative) names how the match really ended — a
+// stalemate or timeout with both queens alive is never "both queens died" — even
+// with the event that ended it lost.
 import { describe, it, expect } from 'vitest';
 import { tick } from '../sim/tick.js';
 import { createScenario } from '../sim/scenario.js';
@@ -50,7 +55,11 @@ import { emitEvent, PLAYTRACE_EVENT_CAP_PER_ROUND } from '../sim/telemetry.js';
 import { runAIController } from '../render/ai-controller.js';
 import { buildOutcomeAttribution, buildPlaytraceSummary } from '../render/summary-builder.js';
 import { buildPlaytraceEnvelope } from '../render/playtrace-upload.js';
-import { formatCauseSubtitle, queenDeathCauseAt } from '../render/ui-scene-logic.js';
+import {
+  formatCauseSubtitle,
+  queenDeathCauseAt,
+  roundEndReasonAt,
+} from '../render/ui-scene-logic.js';
 import { hashWorldState } from './world-hash.js';
 import { deserializeWorldState, serializeWorldState } from './save.js';
 
@@ -258,7 +267,9 @@ function endOfMatchView(
       : outcome === GameOutcome.Defeat
         ? 'Defeat'
         : 'MutualDestruction';
-  const cause = queenDeathCauseAt(world.events, world.tick - 1);
+  const deathTick = world.tick - 1;
+  const cause = queenDeathCauseAt(world.events, deathTick);
+  const reason = roundEndReasonAt(world, deathTick, outcome);
   const summary = buildPlaytraceSummary(world, false, label);
   const envelope = buildPlaytraceEnvelope(
     {
@@ -278,7 +289,7 @@ function endOfMatchView(
     summary,
   );
   return {
-    subtitle: formatCauseSubtitle(outcome, cause),
+    subtitle: formatCauseSubtitle(outcome, cause, reason),
     narrative: summary.outcomeAttribution.narrativeSeed,
     roundEndReason: envelope.roundEndReason,
     droppedStructural: summary.eventOverflow.droppedStructural,
@@ -319,5 +330,92 @@ describe('#388 — a full event buffer still records the end of the match', () =
     expect(view.droppedStructural).toBeGreaterThan(0);
     expect(view.narrative).toBe('Both colonies ran out of food and the round ended in a draw.');
     expect(view.roundEndReason).toBe('StalemateTiebreak');
+    // #389 — the cause line (the survey's, and the GameOver fallback) says so too.
+    expect(view.subtitle).toBe('Both colonies ran out of food — a draw');
+  }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// #389 — the end screen's cause line keys off how the match really ended
+// ---------------------------------------------------------------------------
+
+/** Drop every terminal event, as a buffer that lost the one that ended the match. */
+function loseTerminalEvents(world: WorldState): void {
+  const kept = world.events.filter((e) => e.type !== 'round_end' && e.type !== 'queen_death');
+  world.events.length = 0;
+  world.events.push(...kept);
+}
+
+describe('#389 — the end-screen cause line names the real round-end reason', () => {
+  it('a stalemate: a draw for want of food, with both queens alive — and still so with its round_end lost', () => {
+    const world = worldNearOldCap(7);
+    setPilesForTest(world, []);
+    for (const cid of [PLAYER_COLONY_ID, ENEMY_COLONY_ID]) {
+      setColonyFoodForTest(world, world.colonies[cid]!, 0);
+    }
+    const outcome = step(world);
+    expect(outcome).toBe(GameOutcome.MutualDestruction);
+    for (const cid of [PLAYER_COLONY_ID, ENEMY_COLONY_ID]) {
+      expect(world.ants.alive[world.colonies[cid]!.queenEntityId], `queen ${cid}`).toBe(1);
+    }
+    expect(endOfMatchView(world, outcome).subtitle).toBe('Both colonies ran out of food — a draw');
+    // The issue's case: no narrative, so the GameOver overlay falls back to the
+    // cause line — which must not claim the (living) queens died.
+    loseTerminalEvents(world);
+    const view = endOfMatchView(world, outcome);
+    expect(view.narrative).toBeNull();
+    expect(view.subtitle).toBe('Both colonies ran out of food — a draw');
+  }, 60_000);
+
+  it('a double queen death: both queens died at the same time — with or without its events', () => {
+    const world = worldNearOldCap(7);
+    let outcome: GameOutcome = GameOutcome.None;
+    const deadline = world.tick + 400;
+    while (outcome === GameOutcome.None && world.tick < deadline) {
+      for (const cid of [PLAYER_COLONY_ID, ENEMY_COLONY_ID]) {
+        setColonyFoodForTest(world, world.colonies[cid]!, 0);
+      }
+      outcome = step(world);
+    }
+    expect(outcome).toBe(GameOutcome.MutualDestruction);
+    for (const cid of [PLAYER_COLONY_ID, ENEMY_COLONY_ID]) {
+      expect(world.ants.alive[world.colonies[cid]!.queenEntityId], `queen ${cid}`).toBe(0);
+    }
+    expect(roundEnds(world)).toBe(0);
+    const view = endOfMatchView(world, outcome);
+    expect(view.roundEndReason).toBe('QueenDeath');
+    expect(view.subtitle).toBe('Both queens died at the same time');
+    // They starved — the narrative names no fight.
+    expect(view.narrative).toBe('Both queens died at the same time.');
+    loseTerminalEvents(world);
+    expect(endOfMatchView(world, outcome).subtitle).toBe('Both queens died at the same time');
+  }, 60_000);
+
+  it('a single queen death: her cause; with the event lost, no line rather than a draw', () => {
+    const world = worldNearOldCap(7);
+    let outcome: GameOutcome = GameOutcome.None;
+    const deadline = world.tick + 400;
+    while (outcome === GameOutcome.None && world.tick < deadline) {
+      setColonyFoodForTest(world, world.colonies[PLAYER_COLONY_ID]!, 0);
+      outcome = step(world);
+    }
+    expect(outcome).toBe(GameOutcome.Defeat);
+    expect(endOfMatchView(world, outcome).subtitle).toBe('Your queen starved');
+    loseTerminalEvents(world);
+    expect(endOfMatchView(world, outcome).subtitle).toBe('');
+  }, 60_000);
+
+  it('a V66 timeout: says time ran out — and still so with its round_end lost', () => {
+    const world = worldNearOldCap(7, V66);
+    let outcome: GameOutcome = GameOutcome.None;
+    while (outcome === GameOutcome.None && world.tick <= MATCH_TIMEOUT_TICKS) outcome = step(world);
+    expect(outcome).toBe(GameOutcome.Victory); // the player has the extra worker
+    expect(endOfMatchView(world, outcome).subtitle).toBe(
+      'Time ran out — your colony had more workers',
+    );
+    loseTerminalEvents(world);
+    const view = endOfMatchView(world, outcome);
+    expect(view.narrative).toBeNull();
+    expect(view.subtitle).toBe('Time ran out — your colony had more workers');
   }, 60_000);
 });

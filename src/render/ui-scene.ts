@@ -392,6 +392,7 @@ import {
   PLAYTRACE_INCLUDE_SNAPSHOT_DEFAULT,
   truncateFreeText,
   type PlaytraceSurvey,
+  type RoundEndReason,
 } from './playtrace-upload.js';
 
 /** Issue #115 — duration of the post-Save-Now "Saved" / "Save failed" flash
@@ -599,6 +600,11 @@ export class UIScene extends Phaser.Scene {
   // fades in 1.5 s, too fast to catch by polling the live Text. Written only
   // under import.meta.env.DEV; cleared with the caption queue each round.
   private captionsShownLog: string[] = [];
+  // #389 — the end screen's second line as drawn: the GameOver overlay's (its
+  // narrative, or the formatCauseSubtitle fallback) or the survey's (its cause
+  // line, or the "Tell us what you think:" prompt); null when none is up. Read
+  // via __phase9_test.getEndScreenCauseLine().
+  private endScreenCauseLineShown: string | null = null;
   // #372 — the full-opacity hold (ms) actually scheduled for the active caption:
   // time already held + the delay just scheduled; null until its fade-in ends.
   // Also tells a long-hold caption's fade-in (null) from its fade-out (set, no
@@ -1901,6 +1907,7 @@ export class UIScene extends Phaser.Scene {
   public showGameOverOverlay(
     outcome: GameOutcome,
     cause: QueenDeathCause,
+    roundEndReason: RoundEndReason | null,
     onRestart: () => void,
     narrativeSeed?: string | null,
   ): void {
@@ -1924,11 +1931,12 @@ export class UIScene extends Phaser.Scene {
     title.setDepth(21);
 
     // S6: prefer narrativeSeed from summary-builder; fall back to formatCauseSubtitle
-    // for pre-V22 saves or cases where buildPlaytraceSummary returns null.
+    // when it has none (no terminal event in the buffer — #389: the fallback names
+    // how the match really ended, from roundEndReason, never a guess).
     const causeText =
       narrativeSeed != null && narrativeSeed !== ''
         ? narrativeSeed
-        : formatCauseSubtitle(outcome, cause);
+        : formatCauseSubtitle(outcome, cause, roundEndReason);
     const causeLabel = this.add.text(W / 2, H / 2 - 25, causeText, {
       fontSize: '18px',
       fontFamily: 'monospace',
@@ -1938,6 +1946,7 @@ export class UIScene extends Phaser.Scene {
     });
     causeLabel.setOrigin(0.5);
     causeLabel.setDepth(21);
+    this.endScreenCauseLineShown = causeText;
 
     // Kill stats subtitle — read via plain-object bracket access (ADR-0006).
     // GameScene only triggers this overlay after a tick produces an outcome,
@@ -2448,6 +2457,14 @@ export class UIScene extends Phaser.Scene {
     return import.meta.env.DEV ? [...this.captionsShownLog] : [];
   }
 
+  /** #389 — Dev/E2E-only: the end screen's second line as drawn (GameOver: the
+   *  narrative or the cause fallback; survey: the cause line or its "Tell us what
+   *  you think:" prompt); null when none is up, and outside Dev builds. Read
+   *  through window.__phase9_test.getEndScreenCauseLine(). */
+  endScreenCauseLine(): string | null {
+    return import.meta.env.DEV ? this.endScreenCauseLineShown : null;
+  }
+
   /** Promote a queued caption once the active one has fully faded. */
   private onCaptionFinished(): void {
     const result = completeCaption(this.captionState);
@@ -2660,6 +2677,7 @@ export class UIScene extends Phaser.Scene {
   public hideGameOverOverlay(): void {
     for (const obj of this.gameOverGroup) obj.destroy();
     this.gameOverGroup = [];
+    this.endScreenCauseLineShown = null;
     this.gameOverOnRestart = null;
     this.recomputeActiveOverlay();
   }
@@ -3668,6 +3686,8 @@ export class UIScene extends Phaser.Scene {
     confirmedSubmit: boolean;
     outcome: GameOutcome;
     cause: QueenDeathCause;
+    /** #389 — how the match ended, for the cause line (formatCauseSubtitle). */
+    roundEndReason: RoundEndReason | null;
   } = {
     rating: 0,
     freeText: '',
@@ -3679,6 +3699,7 @@ export class UIScene extends Phaser.Scene {
     confirmedSubmit: false,
     outcome: 0, // GameOutcome.None
     cause: null,
+    roundEndReason: null,
   };
   private surveyTextarea: HTMLTextAreaElement | null = null;
   /** #303 — DOM `<input type="email">` overlaid on SURVEY_EMAIL_INPUT_RECT.
@@ -3708,6 +3729,7 @@ export class UIScene extends Phaser.Scene {
       confirmedSubmit: false,
       outcome: callbacks.outcome ?? 0,
       cause: callbacks.cause ?? null,
+      roundEndReason: callbacks.roundEndReason ?? null,
     };
     this.renderSurveyOverlay();
     this.recomputeActiveOverlay();
@@ -3716,6 +3738,7 @@ export class UIScene extends Phaser.Scene {
   public hideSurveyOverlay(): void {
     for (const obj of this.surveyGroup) obj.destroy();
     this.surveyGroup = [];
+    this.endScreenCauseLineShown = null;
     this.surveyCallbacks = null;
     this.removeSurveyDomInputs();
     this.recomputeActiveOverlay();
@@ -3752,6 +3775,7 @@ export class UIScene extends Phaser.Scene {
   private renderSurveyOverlay(): void {
     for (const obj of this.surveyGroup) obj.destroy();
     this.surveyGroup = [];
+    this.endScreenCauseLineShown = null;
 
     if (this.surveyState.showConfirmation) {
       // Tear down the DOM inputs before the confirmation screen replaces the
@@ -3799,7 +3823,11 @@ export class UIScene extends Phaser.Scene {
       outcomeLabel.setDepth(41);
       this.surveyGroup.push(outcomeLabel);
 
-      const causeText = formatCauseSubtitle(this.surveyState.outcome, this.surveyState.cause);
+      const causeText = formatCauseSubtitle(
+        this.surveyState.outcome,
+        this.surveyState.cause,
+        this.surveyState.roundEndReason,
+      );
       const secondLine = causeText !== '' ? causeText : 'Tell us what you think:';
       const causeLabel = this.add.text(this.layout.w / 2, SURVEY_TITLE_Y + 33, secondLine, {
         fontSize: '16px',
@@ -3809,6 +3837,7 @@ export class UIScene extends Phaser.Scene {
       causeLabel.setOrigin(0.5, 0);
       causeLabel.setDepth(41);
       this.surveyGroup.push(causeLabel);
+      this.endScreenCauseLineShown = secondLine;
     }
 
     // Rating label — clarifies what 1–5 means.
@@ -4284,6 +4313,9 @@ export interface SurveyOverlayCallbacks {
   /** Why the relevant queen died — passed to formatCauseSubtitle. Omitted on
    *  pause-menu-quit or when cause is unknown (pre-V16 saves). */
   cause?: QueenDeathCause;
+  /** #389 — how the match ended (roundEndReasonAt), passed to formatCauseSubtitle
+   *  so a tiebreak's cause line says so. Omitted on pause-menu-quit. */
+  roundEndReason?: RoundEndReason | null;
   /** Player submitted. The callback fires the upload (fire-and-forget) then
    *  the overlay transitions to the confirmation screen — do NOT call
    *  restartGame here; wait for onNewGame / onRetry. */
