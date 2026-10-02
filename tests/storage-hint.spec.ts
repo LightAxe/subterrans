@@ -38,6 +38,7 @@ interface TestHook {
   getCaptionHolds?: () => { text: string; holdMs: number; yielded: boolean }[];
   getTick?: () => number;
   freezeCaptionClock?: (frozen: boolean) => void;
+  getCaptionQueue?: () => { active: string | null; pending: string | null };
 }
 
 async function freezeCaptionClock(page: Page, frozen: boolean): Promise<void> {
@@ -62,6 +63,18 @@ async function hintHold(page: Page): Promise<{ holdMs: number; yielded: boolean 
     const h = t?.getCaptionHolds?.().find((c) => c.text === hint);
     return h ? { holdMs: h.holdMs, yielded: h.yielded } : null;
   }, HINT);
+}
+
+/** The caption showing and the one waiting behind it (UIScene's queue). */
+async function captionQueue(
+  page: Page,
+): Promise<{ active: string | null; pending: string | null }> {
+  return await page.evaluate(() => {
+    const t = (window as unknown as { __phase9_test?: TestHook }).__phase9_test;
+    const q = t?.getCaptionQueue?.();
+    if (q === undefined) throw new Error('no getCaptionQueue hook');
+    return { active: q.active, pending: q.pending };
+  });
 }
 
 async function simTick(page: Page): Promise<number> {
@@ -239,10 +252,13 @@ test.describe('#395 — Food Storage hint', () => {
     await freezeCaptionClock(page, true);
     const shownBy = await simTick(page);
     // The hint showed first and the army is not yet owed its warning (from tick 220).
-    expect(shownBy).toBeLessThan(215);
+    expect(shownBy).toBeLessThan(220);
     expect((await captions(page)).some((c) => c.startsWith(GATHERING_PREFIX))).toBe(false);
     // The warning is owed behind the hint for a while; the hint is asked to give way.
     await expect.poll(() => simTick(page), { timeout: 40_000 }).toBeGreaterThan(260);
+    // Nothing queued behind the hint (an event caption would make it give way too):
+    // the owed gathering warning is what asks it to.
+    expect(await captionQueue(page)).toEqual({ active: HINT, pending: null });
     await freezeCaptionClock(page, false);
     // It held only the floor, and the warning followed it.
     await expect

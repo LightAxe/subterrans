@@ -1876,23 +1876,6 @@ export class GameScene extends Phaser.Scene {
         uiScene.showCaption(captionText, this.layout.w / 2, 60, 'spiderPriority');
       }
     }
-    // #395 (V70) — the queen lays only while stores cover the egg reserve, which the
-    // entrance pool alone never can: tell the player when storage is what stops her
-    // (storage-hint.ts). Advanced only while UIScene is up, so the caption is never
-    // marked shown without reaching the screen.
-    if (uiScene) {
-      const storageText = advanceStorageHint(this.storageHint, this.world, PLAYER_COLONY_ID);
-      if (storageText) {
-        uiScene.showCaption(
-          storageText,
-          this.layout.w / 2,
-          60,
-          'foodStorageNeeded',
-          STORAGE_HINT_HOLD_MS,
-        );
-      }
-    }
-
     // Recurring captions (no one-shot key) enter only while the caption queue is
     // fully idle (offerRecurringCaption, fail-closed). Taking the pending slot
     // behind an active caption would make an arriving one-shot caption (rallyRaid,
@@ -1919,6 +1902,25 @@ export class GameScene extends Phaser.Scene {
         }
       } else {
         gatheringOwed = true;
+      }
+    }
+
+    // #395 (V70) — the queen lays only while stores cover the egg reserve, which the
+    // entrance pool alone never can: tell the player when storage is what stops her
+    // (storage-hint.ts). Advanced only while UIScene is up, so the caption is never
+    // marked shown without reaching the screen. After the gathering warning, so on a
+    // tie the army's warning goes first and the hint queues behind it (as a one-shot
+    // it takes the pending slot, and the warning gives way to its readable floor).
+    if (uiScene) {
+      const storageText = advanceStorageHint(this.storageHint, this.world, PLAYER_COLONY_ID);
+      if (storageText) {
+        uiScene.showCaption(
+          storageText,
+          this.layout.w / 2,
+          60,
+          'foodStorageNeeded',
+          STORAGE_HINT_HOLD_MS,
+        );
       }
     }
 
