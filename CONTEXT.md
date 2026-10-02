@@ -32,9 +32,15 @@ Sim math is integer-only for determinism.
 _Avoid_: float position, decimal.
 
 **simVersion**:
-The behavior version stamped on a save; gates determinism-affecting changes and
-is sticky on load (a save replays at the version it was written under). Distinct
-from the save envelope's `version`.
+The behaviour version stamped on a save. A sim-behaviour change bumps it; a bare
+constant retune or a render-only change never does. It is sticky on load: a save
+keeps the version it was written under. Until 1.0 (owner decision, 2026-10-01) new
+behaviour is **not** gated, and each bump also raises `MIN_ACCEPTED_SIM_VERSION` to
+the new `LATEST_SIM_VERSION`. Older saves are then rejected, and a snapshot replays
+only on the build that recorded it. The `simVersion >= V_X`
+**gates** already in the code predate this rule and stay until a separate reaping
+decision; the sticky-gate rolling window is the post-1.0 plan (ARCHITECTURE.md
+Principle 7). Distinct from the save envelope's `version`.
 _Avoid_: save version, schema version, format version.
 
 **Sim/render boundary**:
@@ -592,7 +598,9 @@ _Avoid_: checkpoint.
 **Input log / replay**:
 The recorded SimCommand stream — **player and AI** — that reproduces a match
 deterministically from its seed, difficulty and `simVersion` (since #395, V69, the
-world is generated at that version: map generation is version-gated too).
+world is generated at that version, because V69's map change is version-gated).
+Pre-1.0 nothing new is gated, so it is only guaranteed to replay on the build that
+recorded it.
 _Avoid_: history, journal.
 
 **Autosave**:

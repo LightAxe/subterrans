@@ -1,29 +1,95 @@
 // version-policy.test.ts
-// #228 — simVersion acceptance-window policy guard. See save.ts's
-// DELIBERATE_WINDOW_BREAK_AT for the exception ritual this test enforces.
+// simVersion / MIN_ACCEPTED_SIM_VERSION policy guard (#228, revised for the pre-1.0
+// no-gate policy of 2026-10-01 — AGENTS.md "simVersion and saves", ARCHITECTURE.md
+// Principle 7).
+//
+// Pre-1.0 there are no simVersion gates. A sim-behaviour PR bumps LATEST and sets
+// MIN to the same value, so MIN === LATEST is the normal state, not an exception.
+// This file checks four things:
+//   - LATEST is the newest registered version;
+//   - MIN never exceeds LATEST;
+//   - MIN never drops below its floor (V50, and above V70 once past the transition);
+//   - once past the transition from the gated policy, MIN equals LATEST.
+// At 1.0 the post-1.0 rolling window (MIN held back while LATEST advances behind
+// sticky gates) replaces the last of these.
 import { describe, it, expect } from 'vitest';
-import { MIN_ACCEPTED_SIM_VERSION, DELIBERATE_WINDOW_BREAK_AT } from './save.js';
-import { LATEST_SIM_VERSION } from '../sim/types.js';
+import { MIN_ACCEPTED_SIM_VERSION } from './save.js';
+import * as simTypes from '../sim/types.js';
 
-describe('simVersion acceptance-window policy (#228)', () => {
+const { LATEST_SIM_VERSION, SIM_VERSION_V50_LOCATED_FOOD } = simTypes;
+
+/**
+ * The last simVersion written under the earlier gated, rolling-window policy.
+ * #402 (V69) and #405 (V70) were opened before the policy changed and may still
+ * land with their gates while MIN stays put. Every version above this one is
+ * ungated, so once LATEST passes it, MIN must equal LATEST.
+ *
+ * Frozen. Raising it would be a policy change, not housekeeping. If #402 or #405 is
+ * dropped instead of landing, lower it to the last gated version that did land.
+ * Once LATEST is past it, the first post-transition sim PR may delete it along with
+ * the transition branches below, leaving MIN === LATEST unconditional.
+ */
+const LAST_GATED_SIM_VERSION = 70;
+
+/**
+ * The highest value MIN had reached when this guard was written (the V50
+ * located-food save wipe, #290). MIN may never drop below it. Past the transition,
+ * MIN === LATEST plus "LATEST is the newest registered version" keep MIN moving
+ * forward, so this floor needs no per-PR upkeep.
+ */
+const MIN_FLOOR = SIM_VERSION_V50_LOCATED_FOOD;
+
+const POLICY_HINT =
+  'Pre-1.0 policy (AGENTS.md "simVersion and saves"): a PR that bumps ' +
+  'LATEST_SIM_VERSION also sets MIN_ACCEPTED_SIM_VERSION (src/platform/save.ts) to ' +
+  'the same value, and does not gate the change behind `simVersion >=`.';
+
+/** Every `SIM_VERSION_V<n>…` export of types.ts, with the n its name claims. */
+function registeredVersions(): { name: string; nameVersion: number; value: unknown }[] {
+  const exported: Record<string, unknown> = simTypes;
+  const out: { name: string; nameVersion: number; value: unknown }[] = [];
+  for (const [name, value] of Object.entries(exported)) {
+    const m = /^SIM_VERSION_V(\d+)(?:_|$)/.exec(name);
+    if (m) out.push({ name, nameVersion: Number(m[1]), value });
+  }
+  return out;
+}
+
+describe('simVersion policy (#228; pre-1.0: no gates, MIN moves with LATEST)', () => {
+  it('LATEST_SIM_VERSION is the newest registered SIM_VERSION_V* constant', () => {
+    const versions = registeredVersions();
+    expect(versions.length).toBeGreaterThan(0);
+    for (const v of versions) {
+      expect(v.value, `${v.name} must equal the version number in its name`).toBe(v.nameVersion);
+    }
+    const newest = Math.max(...versions.map((v) => v.nameVersion));
+    expect(
+      LATEST_SIM_VERSION,
+      'point LATEST_SIM_VERSION at the newest SIM_VERSION_V* constant',
+    ).toBe(newest);
+  });
+
   it('MIN_ACCEPTED never exceeds LATEST (the window is never negative)', () => {
     expect(MIN_ACCEPTED_SIM_VERSION).toBeLessThanOrEqual(LATEST_SIM_VERSION);
   });
 
-  it('the window is open (MIN < LATEST) unless a version-scoped deliberate break is declared', () => {
-    // Raising MIN to LATEST silently discards every player save. If you are here
-    // because this failed: either leave MIN alone and gate your change behind
-    // `simVersion >= <new version>`, or follow the deliberate-break ritual on
-    // DELIBERATE_WINDOW_BREAK_AT in save.ts (set it to the new LATEST in the same
-    // PR that raises MIN; set it back to null in the next LATEST bump).
-    if (DELIBERATE_WINDOW_BREAK_AT === null) {
-      expect(MIN_ACCEPTED_SIM_VERSION).toBeLessThan(LATEST_SIM_VERSION);
+  it('MIN_ACCEPTED never drops below its floor', () => {
+    expect(MIN_ACCEPTED_SIM_VERSION).toBeGreaterThanOrEqual(MIN_FLOOR);
+    if (LATEST_SIM_VERSION > LAST_GATED_SIM_VERSION) {
+      // Ungated behaviour cannot reproduce the gated era, so once MIN has left it,
+      // it may never sink back into it.
+      expect(MIN_ACCEPTED_SIM_VERSION).toBeGreaterThan(LAST_GATED_SIM_VERSION);
+    }
+  });
+
+  it('a simVersion bump moves MIN with LATEST (no simVersion gates pre-1.0)', () => {
+    if (LATEST_SIM_VERSION > LAST_GATED_SIM_VERSION) {
+      expect(MIN_ACCEPTED_SIM_VERSION, POLICY_HINT).toBe(LATEST_SIM_VERSION);
     } else {
-      // A declared break is valid ONLY at the current LATEST and ONLY while the
-      // window is closed — this forces the flag back to null on the next LATEST
-      // bump and blocks a stale break from surviving a combined MIN+LATEST raise.
-      expect(MIN_ACCEPTED_SIM_VERSION).toBe(LATEST_SIM_VERSION);
-      expect(DELIBERATE_WINDOW_BREAK_AT).toBe(LATEST_SIM_VERSION);
+      // Transition: the last gated PRs may leave MIN at the legacy floor. The only
+      // other value it may take is LATEST; a partial raise into the window is never
+      // valid.
+      expect([MIN_FLOOR, LATEST_SIM_VERSION], POLICY_HINT).toContain(MIN_ACCEPTED_SIM_VERSION);
     }
   });
 });

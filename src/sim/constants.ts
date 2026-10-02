@@ -7,12 +7,13 @@
 //
 // A BARE CONSTANT RETUNE (only the numeric literal changes — no new code path,
 // WorldState field, tick-order change, or PRNG draw count/order change) is NOT a
-// `simVersion` bump and must NOT be version-gated (ADR-0015 item 3). Within a build the
-// value is applied identically across record and replay, so determinism (SCEN-06) holds;
-// cross-build replay of an OLDER save under a new value is deliberately not guaranteed
-// (ADR-0014 — short rounds, rolling MIN_ACCEPTED_SIM_VERSION). A change that ALSO alters
-// an algorithm, a WorldState field, tick order, or PRNG draw count/order IS a gated
-// change — that is no longer a bare retune.
+// `simVersion` bump (ADR-0015 item 3). Within a build the value is applied identically
+// across record and replay, so determinism (SCEN-06) holds; cross-build replay of an
+// OLDER save under a new value is deliberately not guaranteed (ADR-0014). A change that
+// ALSO alters an algorithm, a WorldState field, tick order, or PRNG draw count/order is
+// no longer a bare retune: it is a sim-behaviour change, and bumps simVersion per the
+// pre-1.0 policy (AGENTS.md "simVersion and saves" — bump LATEST and MIN together, no
+// `simVersion >=` gate).
 //
 // A few STRUCTURAL / must-not-drift constants are marked `// structural` below (e.g.
 // MAX_ENTITIES sizes serialized typed arrays; SURFACE_GRID_WIDTH sizes the pheromone

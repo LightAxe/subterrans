@@ -74,8 +74,9 @@ reviews:
         And a bare balance-constant retune in src/sim/constants.ts
         (a numeric-literal change with no new WorldState field, tick-order
         change, or PRNG draw-count/order change is not tech debt and needs no
-        simVersion bump — ADR-0015). Do flag a genuine save-shape change that is
-        missing a simVersion bump.
+        simVersion bump — ADR-0015). Do flag a genuine save-shape or behaviour
+        change that is missing a simVersion bump (see the `**` entry for the
+        pre-1.0 simVersion policy).
     - path: 'src/render/**'
       instructions: >-
         Render / Phaser layer. It reads sim state and PRODUCES commands; it must
@@ -104,6 +105,24 @@ reviews:
         non-deterministic across runs or JS engines; prefer pinned deterministic
         outputs. (Sim test files still keep the fixed-point float/division ban —
         see the src/sim rule, #241.)
+
+    - path: '**'
+      instructions: >-
+        PRE-1.0 simVersion POLICY (AGENTS.md "simVersion and saves"): sim
+        behaviour changes are NOT gated behind simVersion. Each sim-behaviour PR
+        (src/sim/ behaviour, or the AI-controller policy in
+        src/render/ai-controller.ts) bumps LATEST_SIM_VERSION and sets
+        MIN_ACCEPTED_SIM_VERSION (src/platform/save.ts) to the same value. Never
+        ask for a `world.simVersion >= V_X` gate, a kept old code path, proof
+        that an older simVersion replays byte-identically, or a justification
+        of the save wipe that raising MIN causes. Deleting or re-pinning to
+        LATEST an old-version-pinned test (`*-vNN-parity.test.ts`, a save test
+        below MIN) is allowed. DO flag a NEW gate, a behaviour change with no
+        bump, a bump that leaves MIN behind LATEST, and a bump for a bare
+        constant retune or a render-only (draw / HUD / camera / input) change.
+        Sim PRs opened under the old gated policy (#402 V69, #405 V70) are
+        exempt. The existing gates are legacy and stay until a separate reaping
+        decision.
 
 chat:
   auto_reply: true

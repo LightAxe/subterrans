@@ -40,7 +40,7 @@ These are non-negotiable. See [ARCHITECTURE.md](ARCHITECTURE.md) for full explan
 4. **Seeded deterministic PRNG** — Single Mulberry32 instance per world. `Math.random()` is banned in `src/sim/`.
 5. **No wall-clock time in simulation** — `Date`, `performance.now()`, and all real-time APIs are banned in `src/sim/`. Time = tick count.
 6. **Fixed-point integer math** — All simulation quantities are integers (1 tile = 256 units). Floats are banned in `src/sim/`.
-7. **Snapshot saves with replay logging** — JSON world snapshots + input log. Same seed + same inputs = same output.
+7. **Snapshot saves with replay logging** — JSON world snapshots + input log. Same seed + same inputs = same output, within a build. Until 1.0 there are no version gates: each sim change raises the minimum loadable `simVersion` to the latest, so once that applies a save loads only on a build at its own `simVersion` (see [simVersion and saves](#simversion-and-saves--pre-10-policy-no-gates)).
 
 ## Multi-Platform Constraints
 
@@ -56,7 +56,7 @@ Phase 1 targets web only. The architecture preserves portability for native wrap
 
 - **`src/sim/`**: Full test coverage. Every system function, every component store operation, every edge case. These are pure functions operating on data — they are trivially testable.
 - **`src/render/`, `src/input/`, `src/platform/`**: Smoke tests. Verify initialization, basic rendering, input translation.
-- **Deterministic replay tests**: A recorded input sequence + seed must always produce the same final world state. These tests catch non-determinism bugs.
+- **Deterministic replay tests**: A recorded input sequence + seed must always produce the same final world state on the same build. These tests catch non-determinism bugs. Before 1.0 they are not required to hold across builds or across `simVersion`s (see [simVersion and saves](#simversion-and-saves--pre-10-policy-no-gates)).
 - **The full Vitest (unit/integration) suite and the Playwright E2E suite both run in CI** on every push and PR via the `verify` and `e2e` jobs (`.github/workflows/ci.yml`). The coverage-% gate (`test:coverage`) is intentionally local-only by design — not CI-gated — because v8 instrumentation blows the long integration tests' timeouts on the CI runner while `verify` already gates the same suite un-instrumented (see Building and Running; decision in #188).
 
 ## Branching & PR Workflow
@@ -84,6 +84,7 @@ The review checklist:
 - [ ] No variable timestep usage
 - [ ] Tests cover new simulation logic
 - [ ] Deterministic replay is not broken (replay tests pass)
+- [ ] A sim-behaviour change bumps `LATEST_SIM_VERSION` and sets `MIN_ACCEPTED_SIM_VERSION` to the same value, with **no** `simVersion >=` gate (pre-1.0 policy, below)
 - [ ] New bit-packed keys or grid-size assumptions carry a compile-time guard (entrance-flow.ts pattern) + a docs/phase-4-preflight.md row
 
 ## Review guidelines
@@ -101,8 +102,49 @@ Use strong language deliberately — these are non-negotiable invariants of the 
 - Wall-clock APIs are forbidden in `src/sim/`: `Date`, `Date.now()`, `performance.now()`, `setTimeout`, `setInterval`, `requestAnimationFrame`. Time in the simulation is tick count, not real time.
 - Floating-point arithmetic is forbidden in `src/sim/`. All quantities are fixed-point integers using `FP_SHIFT = 8` / `FP_ONE = 256` (see `src/sim/fixed.ts`). Float literals (`1.5`, `0.1`), the division operator (`/`), and `Math.sqrt`/`sin`/`cos`/`atan2` are banned. The ESLint `simSafetyConfig` enforces this; review still reads PRs that disable the rule inline.
 - Every PRNG call must be seeded from the world's RNG instance — never construct a fresh `Mulberry32` per call site, and never thread a literal seed through new code without explaining why in the PR description.
-- **Balance-constant retunes are not tech debt and not a `simVersion` bump.** A change to a gameplay-balance value in `src/sim/constants.ts` (e.g. `STARVATION_GRACE_TICKS`, `STARTING_FOOD`) that moves only the numeric literal — no new code path, `WorldState` field, tick-order change, or PRNG draw count/order change — must **not** be flagged as debt and must **not** be gated behind a new `simVersion` (ADR-0015 item 3, the standing rebuttal to "gate this behind a simVersion" on a bare retune). Do not ask authors to "revert to the PRD value." A change that _also_ alters an algorithm, a `WorldState` field, tick order, or PRNG draw count/order **is** a gated change. Constants that must not drift are marked `// structural` in that file; for anything unmarked, apply that bare-retune test.
-- **Raising `MIN_ACCEPTED_SIM_VERSION` is a player-facing save wipe, not housekeeping (#228).** The default posture for any sim behavior change is a sticky `simVersion >=` gate with `MIN_ACCEPTED_SIM_VERSION` (`src/platform/save.ts`) left where it is, so saves inside the window keep loading. A PR that raises MIN must justify the wipe explicitly in its description and follow the `DELIBERATE_WINDOW_BREAK_AT` ritual next to the constant (set it to the new LATEST in the same PR; back to `null` in the next LATEST bump — `version-policy.test.ts` enforces this). Flag any MIN raise that arrives as a silent convention. Gates whose version is ≤ MIN are production-dead and may be **reaped** (deleted, with their pinned old-side tests) in a mechanical, replay-verified follow-up per the playbook in ARCHITECTURE.md Principle 7.
+- **Balance-constant retunes are not tech debt and not a `simVersion` bump.** A change to a gameplay-balance value in `src/sim/constants.ts` (e.g. `STARVATION_GRACE_TICKS`, `STARTING_FOOD`) that moves only the numeric literal — no new code path, `WorldState` field, tick-order change, or PRNG draw count/order change — must **not** be flagged as debt and must **not** bump `simVersion` (ADR-0015 item 3). Do not ask authors to "revert to the PRD value." A change that _also_ alters an algorithm, a `WorldState` field, tick order, or PRNG draw count/order **is** a sim-behaviour change and bumps `simVersion` per the pre-1.0 policy below (bump, no gate). Constants that must not drift are marked `// structural` in that file; for anything unmarked, apply that bare-retune test.
+
+### simVersion and saves — pre-1.0 policy (no gates)
+
+**Until 1.0, sim behaviour changes are not gated behind `simVersion`, and older saves are not kept playable.** Owner decision, 2026-10-01: backward compatibility is a 1.0-level concern, and before 1.0 it cost more review and test time than it was worth. The sticky-gate / rolling-window scheme in ARCHITECTURE.md Principle 7 is the **post-1.0** plan. It is not the current rule.
+
+- **No gates.** A sim behaviour change just changes behaviour. Do not wrap new behaviour in `if (world.simVersion >= V_X)`. Do not keep the old path for older saves. Do not prove that older versions replay byte-identically. For new work that means no pinned `BYTE_GATE_SIM_VERSION` byte gate, no pinned both-AI replays, and no V-pinned parity tests.
+- **Bump both versions together.** A PR that changes sim behaviour does three things. Sim behaviour means an algorithm, a `WorldState` field, tick order, PRNG draw count/order, or the rule-based AI's policy in `src/render/ai-controller.ts`. AI-policy changes have bumped since V40 (V40, V53, V61–V63) because a loaded game continues under the AI. The three things:
+  - adds a `SIM_VERSION_V*` constant;
+  - points `LATEST_SIM_VERSION` at it;
+  - sets `MIN_ACCEPTED_SIM_VERSION` (`src/platform/save.ts`) to the same value.
+
+  Older in-progress saves are then rejected with `OldSimVersionError`. That save wipe is accepted and needs no justification beyond the bump. `version-policy.test.ts` checks the MIN/LATEST rules:
+  - MIN never exceeds LATEST;
+  - MIN never drops below its V50 floor;
+  - LATEST is the newest registered version;
+  - once past the transition below, MIN equals LATEST.
+
+  The "no gates" rule itself is a review rule; the test does not check it.
+- **Still required. Block on these:**
+  - **Determinism within a build:** the same seed and commands give the same game, proven by replay tests and save/load-continue tests.
+  - **CLNY-08 colony parity:** every rule is colony-agnostic.
+  - **The sim code rules:** no `/`, no floats, no module-level state.
+  - **For behaviour changes:** the AI-economy seed sweep, mutation testing and adversarial review.
+- **Bare balance-constant retunes still don't bump `simVersion`**, and render-only changes never do. Render-only means drawing, HUD, camera and input code, not the AI controller's policy.
+- **Existing gates stay for now.** About 60 `world.simVersion >= V_X` gates already exist: about 45 in `src/sim/`, the rest in `src/render/` (the AI controller and a few HUD readers) and `src/platform/save.ts`. They stay where they are. Whether and when to reap them is a separate, later decision. Once MIN equals LATEST, every one of them is production-dead, because no loadable save or fresh world is below MIN. Reaping is then a mechanical refactor (playbook in ARCHITECTURE.md Principle 7). Do not ask a PR to add a gate. Do not ask a PR to reap gates unless that is its stated purpose.
+- **Legacy version-pinned tests.** Some existing tests pin an old version: the `*-vNN-parity.test.ts` goldens run at an old `simVersion`, and some save tests load a save below LATEST. An ungated change, or the MIN raise, may break one. When that happens, delete the test or re-pin it to LATEST. **Never keep it green by adding a gate.** A save test that loads a version below MIN is production-dead once MIN moves.
+- **Transition.** Sim PRs opened under the old policy (#402 V69, #405 V70) may still land with their gates and leave MIN where it is. The first sim PR after them sets MIN equal to LATEST, and MIN stays equal to LATEST from then on. Until then, saves from V50 up still load.
+- **Out-of-window snapshots are only guaranteed to replay on the build that recorded them.** A save, F9 export or playtrace snapshot outside this build's `[MIN, LATEST]` can't be loaded or replayed here. `scripts/analyze-snapshot.ts` says so and points at a build:
+  - **Playtrace:** the recording build itself. Its `gameVersion` carries that build's git SHA.
+  - **F9 export:** it has no build id, so the CLI points at the last commit at that `simVersion`. That is not necessarily the recording build: a bare constant retune at the same `simVersion` (retunes never bump it) can still make the replay diverge. If origin/main never reached that version, the CLI lists the branch commits that touched it instead.
+- **Standing rebuttal for reviewers.** Before 1.0, these findings are out of policy:
+  - "gate this behind a new simVersion";
+  - "keep the old code path for pre-VNN saves";
+  - "prove the previous version still replays byte-identically";
+  - "raising MIN wipes saves, justify it";
+  - "you broke or deleted the VNN parity / old-version save test".
+
+  Do not raise them. Authors should decline them by citing this section. The valid `simVersion` findings are:
+  - a sim behaviour change with no bump;
+  - a bump that leaves MIN behind LATEST (after the transition);
+  - a new gate;
+  - a bump for a bare constant retune or a render-only change.
 
 ### Sim/render boundary (FNDN-04, FNDN-07)
 
@@ -130,7 +172,7 @@ Use strong language deliberately — these are non-negotiable invariants of the 
 ### Test coverage
 
 - Any new logic under `src/sim/` must ship with Vitest unit tests in the same PR. Untested sim code is a blocker, not a follow-up.
-- Changes to tick-order, command application, save format, or PRNG usage must include or update a deterministic replay test. If the PR claims "replay still works" without a test demonstrating it, ask for one.
+- Changes to tick-order, command application, save format, or PRNG usage must include or update a deterministic replay test. If the PR claims "replay still works" without a test demonstrating it, ask for one. This means replay **within the current build**: same seed and commands, plus save/load-continue. It does not mean a test pinned to an older `simVersion` (see the pre-1.0 policy above).
 - Render/input/platform changes need at least a smoke test (initialization + one happy path). Full coverage is not required at those layers.
 - **80% coverage gate.** `npm run test:coverage` runs Vitest with v8 instrumentation and enforces global thresholds of 80% on statements / branches / functions / lines (see `vitest.config.ts`). Phaser scene files and `src/main.ts` are excluded from the gate because they are exercised by Playwright E2E, not unit tests. **Run `npm run test:coverage` and confirm the gate passes before pushing.** It is not part of `verify` — coverage instrumentation slows the suite to ~6 minutes and causes some long integration tests to hit their hard-coded timeouts, so keep it as a separate pre-push step rather than wiring it into the fast local loop. It is intentionally **not** CI-gated (a deliberate decision, not a TODO): the instrumented run multiplies the long integration tests several-fold past their inline timeouts on the slower 2-core CI runner, and making it green would mean scaling per-test timeouts across ~11 sites to absorb a flaky multiplier — permanent complexity for a signal `verify` already covers un-instrumented. So coverage stays a local pre-push step. See #188 (closed) for the full rationale. A few deliberately long statistical tests (the ≥2000-tick queen-survival run in `src/sim/scenario.test.ts` and the multi-seed overlap-suppression sweep in `src/sim/surface-features.test.ts`) carry explicit generous inline timeouts sized for instrumented runs, so the local gate passes on a typical dev machine (#227).
 
@@ -169,7 +211,7 @@ In-game, `F9` downloads a debug snapshot (`subterrans-debug-seed<seed>-tick<tick
 node --experimental-strip-types scripts/analyze-snapshot.ts <snapshot.json>
 ```
 
-The CLI replays the recorded inputLog from seed and byte-compares the result against the captured snapshot (a free SCEN-06 determinism check — exits 1 on regression), then reports tile-occupancy clusters, underground ants stuck on non-Open tiles, and stationary / oscillating ants from a per-ant motion history sampled during replay. Each motion group is annotated with its dominant `(task, subTask)` so a real bug stands out from expected stuck cases. See PR #121 for the design notes.
+The CLI replays the recorded inputLog from seed and byte-compares the result against the captured snapshot (a free SCEN-06 determinism check — exits 1 on regression), then reports tile-occupancy clusters, underground ants stuck on non-Open tiles, and stationary / oscillating ants from a per-ant motion history sampled during replay. Each motion group is annotated with its dominant `(task, subTask)` so a real bug stands out from expected stuck cases. See PR #121 for the design notes. A snapshot whose `simVersion` is outside this build's `[MIN_ACCEPTED_SIM_VERSION, LATEST_SIM_VERSION]` is not replayed. The CLI exits 2 and says which build to check out. For a playtrace, the envelope's `gameVersion` SHA is the recording build itself. An F9 export has no build id, so the CLI points at the last commit at that `simVersion`, or, if origin/main never reached it, lists the branch commits that touched it. That commit is not necessarily the recording build: a bare constant retune at the same `simVersion` (retunes never bump it) can still make the replay diverge. Before 1.0, a snapshot is only guaranteed to replay on the build that recorded it.
 
 ## Playtrace upload (issue #122 / ADR 0013)
 

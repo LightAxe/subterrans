@@ -52,12 +52,14 @@ const { createScenario } = await import('../src/sim/scenario.js');
 const { tick } = await import('../src/sim/tick.js');
 const { Zone, UndergroundTileState, ugGet } = await import('../src/sim/terrain.js');
 const { FP_SHIFT } = await import('../src/sim/fixed.js');
-const { SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES } = await import('../src/sim/types.js');
+const { SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES, LATEST_SIM_VERSION } =
+  await import('../src/sim/types.js');
 const { AntTask, ForagingSubState } = await import('../src/sim/enums.js');
 const { serializeWorldState, deserializeWorldState, MIN_ACCEPTED_SIM_VERSION, OldSimVersionError } =
   await import('../src/platform/save.js');
 const { indexByDrainTick, summarizeDrainTickSource } =
   await import('../src/platform/input-log-replay.js');
+const { snapshotWindowMessage } = await import('../src/platform/snapshot-window.js');
 
 const ANT_TASK_NAME: Record<number, string> = {
   [AntTask.Idle]: 'Idle',
@@ -147,24 +149,27 @@ console.log(
 );
 console.log('');
 
-// #290 PR 2 — a snapshot older than this build's acceptance window (every capture
-// before the V50 located-food save wipe) can be neither loaded nor replayed here:
-// its state shape predates the food store. Say so instead of crashing on load.
-function explainPreWindowSnapshot(got: unknown): never {
-  console.error(
-    `[analyze-snapshot] This snapshot was captured on simVersion ${String(got)}, below this ` +
-      `build's minimum (${MIN_ACCEPTED_SIM_VERSION}); its saved state cannot be loaded here.\n` +
-      `  Check out a commit from before the #290 located-food save wipe (V50; the last ` +
-      `pre-wipe build is main before #290 PR 2 merged) and analyze it there.`,
-  );
+// A snapshot outside this build's [MIN_ACCEPTED_SIM_VERSION, LATEST_SIM_VERSION]
+// window can be neither loaded nor replayed here. Pre-1.0 (AGENTS.md "simVersion and
+// saves") sim behaviour changes are not version-gated, so a snapshot is only
+// guaranteed to replay on the build that recorded it. Say which build to check out
+// (snapshot-window.ts) instead of crashing on load or reporting a bogus SCEN-06
+// mismatch.
+// A missing or non-integer simVersion is refused here as well: deserializeWorldState
+// would reject it anyway, after a pointless full replay and a bogus SCEN-06 warning.
+function refuseOutOfWindow(got: number | null): void {
+  const msg = snapshotWindowMessage(got, MIN_ACCEPTED_SIM_VERSION, LATEST_SIM_VERSION);
+  if (msg === null) return;
+  console.error(msg);
   process.exit(2);
 }
-{
+const snapshotSimVersion: number = (() => {
   const v = (debug.snapshot as { simVersion?: unknown }).simVersion;
-  if (typeof v === 'number' && Number.isInteger(v) && v < MIN_ACCEPTED_SIM_VERSION) {
-    explainPreWindowSnapshot(v);
-  }
-}
+  const got = typeof v === 'number' && Number.isInteger(v) ? v : null;
+  refuseOutOfWindow(got); // exits for null and for anything outside [MIN, LATEST]
+  if (got === null) throw new Error('unreachable: refuseOutOfWindow exits on a missing simVersion');
+  return got;
+})();
 
 // --- 1. Replay-from-seed byte-equality check (SCEN-06) -----------------------
 
@@ -174,27 +179,11 @@ const replayStart = Date.now();
 const snapshotDifficulty = (debug.snapshot as { difficulty?: unknown }).difficulty;
 const replayDifficulty: 'Easy' | 'Normal' | 'Hard' =
   snapshotDifficulty === 'Easy' || snapshotDifficulty === 'Hard' ? snapshotDifficulty : 'Normal';
-// Restore simVersion from snapshot so version-gated paths (tiebreaks, brood modifier, etc.)
-// match the original session; without this a pre-V22 snapshot replayed on V22 code would
-// have V22 paths active, causing divergence. #395: the version goes INTO createScenario,
-// because map generation is version-gated too (V69 food fairness) — a V68 snapshot must
-// replay from the V68 map.
-const snapshotSimVersion = (debug.snapshot as { simVersion?: unknown }).simVersion;
-const replaySimVersion =
-  typeof snapshotSimVersion === 'number' &&
-  Number.isInteger(snapshotSimVersion) &&
-  snapshotSimVersion > 0
-    ? snapshotSimVersion
-    : null;
-if (replaySimVersion === null) {
-  console.warn(
-    `[analyze-snapshot] Could not restore simVersion from snapshot (got ${String(snapshotSimVersion)}); replay runs at LATEST_SIM_VERSION — byte-equality may fail for pre-V22 captures.`,
-  );
-}
-const replay =
-  replaySimVersion !== null
-    ? createScenario(debug.seed, replayDifficulty, replaySimVersion)
-    : createScenario(debug.seed, replayDifficulty);
+// Replay at the snapshot's own simVersion (checked to be within [MIN, LATEST] above),
+// so the version-gated paths match the original session. #395: the version goes INTO
+// createScenario, because map generation is version-gated too (V69 food fairness), so
+// a V68 snapshot must replay from the V68 map.
+const replay = createScenario(debug.seed, replayDifficulty, snapshotSimVersion);
 
 // #296 — regroup by the tick each command was DRAINED on, not the tick it was
 // issued on. For player/AI input the two are the same; for a command the sim
@@ -328,7 +317,13 @@ console.log(
 if (!replayMatches) {
   console.log(`  WARNING: SCEN-06 determinism regression — replayed state differs from captured.`);
   console.log(
-    `  (or a benign serializer key-order change between snapshot capture and this build)`,
+    `  (or a benign serializer key-order change between snapshot capture and this build,`,
+  );
+  console.log(
+    `  or the snapshot was recorded on a different build at the same simVersion — a constant`,
+  );
+  console.log(
+    `  retune does not bump it; replay on the recording build, e.g. a playtrace's gameVersion sha)`,
   );
   console.log(`  Cluster / stuck-in-dirt reports below use the CAPTURED snapshot (trustworthy).`);
   console.log(`  Motion-history reports use the REPLAYED trajectory and may not reflect the`);
@@ -342,7 +337,7 @@ const world = (() => {
   try {
     return deserializeWorldState(debug.snapshot);
   } catch (e) {
-    if (e instanceof OldSimVersionError) explainPreWindowSnapshot(e.got);
+    if (e instanceof OldSimVersionError) refuseOutOfWindow(e.got);
     throw e;
   }
 })();
@@ -661,5 +656,8 @@ console.log('');
 console.log('Done.');
 
 // Exit 1 on replay mismatch so CI / scripts can detect a determinism
-// regression without parsing stdout. All other paths exit 0.
+// regression without parsing stdout. Exit 2 is a usage error or a snapshot from
+// outside this build's simVersion window, exit 3 a malformed snapshot; a completed
+// analysis with a matching replay exits 0. (An uncaught exception, e.g. a crash
+// mid-replay or a non-version load error, also exits 1.)
 if (!replayMatches) process.exit(1);

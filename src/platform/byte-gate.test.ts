@@ -18,6 +18,10 @@
 //       npx vitest run src/platform/byte-gate.test.ts
 //   A version-gated change: add BYTE_GATE_SIM_VERSION=<base LATEST> to the verify
 //   run (and optionally the capture) to pin every scenario to the pre-gate version.
+//   Pre-1.0 there are no version-gated changes (AGENTS.md "simVersion and saves"),
+//   so this pin is not used for new work. Once MIN === LATEST it accepts only LATEST.
+//   It stays for the post-1.0 window. Behaviour-preserving refactors, gate reaping
+//   included, still use plain capture/verify.
 //
 // Proof obligation: same scenarios ⇒ byte-identical serialized WorldState (incl.
 // rngState — the RNG-pull-reorder detector) at every checkpoint and at the end.
