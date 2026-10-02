@@ -58,10 +58,8 @@ import {
   resolveCursorTool,
   cursorToolChanged,
   computeInterpAlpha,
-  captureRetryTarget,
   createRetryWorld,
   type CursorTool,
-  type RetryTarget,
 } from './game-scene-logic.js';
 import {
   type ViewState,
@@ -281,8 +279,8 @@ interface UIScenePhase9 {
   hideSaveLoadDialogOverlay(): void;
   // Issue #131 — survey overlay. After submit or skip, the overlay shows a
   // confirmation screen with New Game / Retry. onNewGame restarts with a new
-  // seed; onRetry restarts on the same map (seed, difficulty, simVersion).
-  // onSkip was removed.
+  // seed; onRetry restarts with the same seed and difficulty, under the newest
+  // rules. onSkip was removed.
   showSurveyOverlay(callbacks: {
     quitFromPauseMenu: boolean;
     outcome?: import('../sim/game-over.js').GameOutcome;
@@ -2210,9 +2208,8 @@ export class GameScene extends Phaser.Scene {
     // The submission flow is async; meanwhile the player will start the
     // next session and the live references would otherwise change beneath us.
     const outcome = this.currentOutcome;
-    // Capture the Retry target now (seed, difficulty, simVersion), pinned to the
-    // world this survey is about; Retry fires later, from the confirmation screen.
-    const retryTarget = captureRetryTarget(this.world, this.currentSeed);
+    // Capture seed now — retryGame() needs it but resetSessionState runs first.
+    const retrySeed = this.currentSeed;
     // Issue #131 — when opened from the pause menu's "Quit & feedback" action,
     // dismiss the pause menu and transition to GameOver. GameOver is the
     // correct semantic state: the player has quit, the loop is already paused,
@@ -2281,18 +2278,17 @@ export class GameScene extends Phaser.Scene {
         this.restartGame();
       },
       onRetry: () => {
-        this.retryGame(retryTarget);
+        this.retryGame(retrySeed);
       },
     });
   }
 
-  /** Issue #131 — restart the game on the same map the player just played.
+  /** Issue #131 — restart the game with the same seed the player just lost on.
    *  Mirrors restartGame() but skips generateFreshSeed, using the captured
-   *  target instead so the player gets the exact same map to retry. #395: the
-   *  target carries the lost world's simVersion, because from V69 map generation
-   *  is version-gated (a game resumed from a V68 save retries on the V68 map, and
-   *  keeps that version's rules, as the resumed game did). */
-  private retryGame(target: RetryTarget): void {
+   *  seed instead so the player gets the same map to retry. #395: at LATEST, the
+   *  newest rules (createRetryWorld): a game resumed from a pre-V69 save retries
+   *  with V69's food placement on the same terrain. */
+  private retryGame(seed: number): void {
     const wasSuspended = this.autosaveSuspended;
     if (!wasSuspended) {
       void deleteSave();
@@ -2300,10 +2296,9 @@ export class GameScene extends Phaser.Scene {
     this.currentOutcome = GameOutcome.None;
     this.currentCause = null;
     this.resetSessionState();
-    this.currentSeed = target.seed;
+    this.currentSeed = seed;
     // S5: retry preserves the previous game's difficulty (same seed + same difficulty).
-    this.currentDifficulty = target.difficulty;
-    this.world = createRetryWorld(target);
+    this.world = createRetryWorld(seed, this.currentDifficulty);
     this.finishBoot();
     if (wasSuspended) {
       this.autosaveSuspended = true;

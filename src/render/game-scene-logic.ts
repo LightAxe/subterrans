@@ -186,35 +186,24 @@ export function generateFreshSeed(nowMs: number): number {
 }
 
 // ---------------------------------------------------------------------------
-// Retry — the same map the player just lost on (#131, #395)
+// Retry — the same seed again, under the newest rules (#131, #395)
 // ---------------------------------------------------------------------------
 
-/** What Retry needs to rebuild the map the player just lost on. */
-export interface RetryTarget {
-  readonly seed: number;
-  readonly difficulty: WorldState['difficulty'];
-  /** The lost world's simVersion: map generation is version-gated from V69 (#395). */
-  readonly simVersion: number;
-}
-
 /**
- * Capture the Retry target from the world the player is about to leave. Take it
- * before the session resets: `seed` is the session's seed (GameScene.currentSeed),
- * and the difficulty and simVersion are the world's own.
+ * #395 — the world Retry starts after a lost game: the same seed and difficulty, at
+ * LATEST, as a new game is (Rob, 2026-10-01: Retry plays the newest rules).
+ *
+ * From V69 map generation is version-gated, so a game resumed from a pre-V69 save
+ * retries on its seed's V69 map. Terrain and colonies are the same; only the food
+ * piles V69's food fairness moves or adds (and the world rng) differ.
+ *
+ * Building the old map and stamping LATEST on it was rejected: that world's map
+ * would no longer follow from its seed and simVersion, and a from-seed replay of
+ * the retried game (analyze-snapshot) would regenerate the V69 map and report a
+ * mismatch.
  */
-export function captureRetryTarget(world: WorldState, seed: number): RetryTarget {
-  return { seed, difficulty: world.difficulty, simVersion: world.simVersion };
-}
-
-/**
- * #395 — the world Retry starts: the lost world's seed, difficulty AND simVersion.
- * From V69 the same seed generates a different map (food fairness moves piles), so
- * a game resumed from a V68 save and retried must be regenerated at V68 for "the
- * exact same map". The retried world keeps that version's rules too, as the resumed
- * game did. Only Retry does this: a new game is always created at LATEST.
- */
-export function createRetryWorld(target: RetryTarget): WorldState {
-  return createScenario(target.seed, target.difficulty, target.simVersion);
+export function createRetryWorld(seed: number, difficulty: WorldState['difficulty']): WorldState {
+  return createScenario(seed, difficulty);
 }
 
 // ---------------------------------------------------------------------------
