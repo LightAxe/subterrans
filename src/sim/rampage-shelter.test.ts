@@ -24,7 +24,7 @@ import type { SpiderBehaviorState, WorldState } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { killAnt } from './ant-death.js';
 import { addChamberForTest } from './food/food-test-utils.js';
-import { rampageThreatens } from './ant/ant-system.js';
+import { rampageThreatens, rampageThreatRule } from './ant/ant-system.js';
 import { rampageShelterActive, rampageShelterDashRoutes } from './ant/idle-reserve.js';
 import { spiderOnRampage } from './spider.js';
 import { depositDangerCross } from './pheromone/danger.js';
@@ -951,6 +951,57 @@ describe('#377 — a rampage that does not threaten this colony leaves its idle 
     world.spider!.hungerTicks = HUNGRY;
     world.simVersion = V67;
     expect(rampageThreatens(world, player)).toBe(false);
+  });
+
+  it('rampageThreatRule (#397): the geometry alone, ungated; rampageThreatens is the shelter gate plus the rule', () => {
+    const world = quiet(V68);
+    const player = world.colonies[P]!;
+    const enemy = world.colonies[E]!;
+    const placements: [{ x: number; y: number }, SpiderBehaviorState, number][] = [
+      [LAIR, 'Rampaging', P],
+      [LAIR, 'Rampaging', E],
+      [LAIR, 'Chasing', P], // a stale target is not the camp
+      [THREAT_EDGE, 'Patrolling', -1],
+      [THREAT_EDGE, 'Rampaging', E],
+      [THREAT_OUT, 'Hunting', -1],
+    ];
+    let rules = 0;
+    let gatedOut = 0;
+    for (const version of [V67, V68]) {
+      for (const hunger of [HUNGRY, 0]) {
+        for (const open of [true, false]) {
+          for (const [tile, state, target] of placements) {
+            world.simVersion = version;
+            holdSpider(world, tile.x, tile.y);
+            world.spider!.state = state;
+            world.spider!.rampageTargetColonyId = target;
+            world.spider!.hungerTicks = hunger;
+            player.entrances[0]!.isOpen = open;
+            for (const colony of [player, enemy]) {
+              const rule = rampageThreatRule(world, colony);
+              expect(rampageThreatens(world, colony)).toBe(rampageShelterActive(world) && rule);
+              if (rule) rules++;
+              if (rule && !rampageShelterActive(world)) gatedOut++;
+            }
+          }
+        }
+      }
+    }
+    expect(rules).toBeGreaterThan(10); // not vacuous
+    expect(gatedOut).toBeGreaterThan(5); // the rule holds where the shelter gate does not
+    // The rule asks only where the spider is: fed, below V68, camping our door.
+    player.entrances[0]!.isOpen = true;
+    world.simVersion = V67;
+    holdSpider(world, LAIR.x, LAIR.y);
+    world.spider!.state = 'Rampaging';
+    world.spider!.rampageTargetColonyId = P;
+    world.spider!.hungerTicks = 0;
+    expect([rampageThreatRule(world, player), rampageThreatens(world, player)]).toEqual([
+      true,
+      false,
+    ]);
+    world.spider = null;
+    expect(rampageThreatRule(world, player)).toBe(false);
   });
 });
 

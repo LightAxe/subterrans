@@ -43,6 +43,7 @@ export { NO_FREE_HOSTILE, invaderHuntStep } from './invader-retarget.js';
 export {
   tickIdleReserveAndFlee,
   rampageThreatens,
+  rampageThreatRule,
   shelterRetreatDir,
   shelterPassesThroughFriends,
 } from './idle-reserve.js';

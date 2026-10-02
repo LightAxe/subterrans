@@ -375,11 +375,14 @@ next open entrance by `entranceId` (across both colonies, wrapping), and it keep
 **rotating** that way until it kills an ant. If the entrance it left is the only open one
 in the world, it may camp it again only `SPIDER_RAMPAGE_REVISIT_COOLDOWN_TICKS` later, and
 patrols and hunts meanwhile. So a colony sheltering underground gets a window to come out.
-The spider is **on a rampage** (`spiderOnRampage`, the window the rampage caption
-covers) from the moment it grows hungry until it eats (or dies). That can span several
-camps: the `Rampaging` state, its timeout and its rotation above each count one camp at
-one entrance, and between camps (or when an ant comes near) it chases, hunts or
-patrols, still hungry, until it has eaten.
+The spider is **on a rampage** (`spiderOnRampage`) from the moment it grows hungry
+until it eats (or dies) — one **hungry spell**. That can span several camps: the
+`Rampaging` state, its timeout and its rotation above each count one camp at one
+entrance, and between camps (or when an ant comes near) it chases, hunts or patrols,
+still hungry, until it has eaten. The **rampage warning** (the caption "The spider has
+gone hungry and is hunting on the surface.") comes once per hungry spell, when the
+rampage first **threatens** the viewing colony (see Rampage shelter below — the moment
+its idle workers head in), not on each camp (#397).
 _Avoid_: frenzy, attack.
 
 **Rampage shelter** (simVersion V68, #377):

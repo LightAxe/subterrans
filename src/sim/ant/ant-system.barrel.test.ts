@@ -46,6 +46,7 @@ const PUBLIC_FUNCTIONS = [
   'shelterRetreatDir', // V65 (#373) — the shelter retreat step, pinned by its unit tests
   'shelterPassesThroughFriends', // V65 (#373) — occupancy pass-through rule, pinned by its unit test
   'rampageThreatens', // V68 (#377) — the rampage shelter's per-colony gate, consumed by tick.ts step 10a
+  'rampageThreatRule', // #397 — the threat geometry alone, shared by rampageThreatens and the rampage warning
 ] as const;
 
 describe('ant-system barrel public API (#212)', () => {
@@ -55,7 +56,7 @@ describe('ant-system barrel public API (#212)', () => {
     });
   }
 
-  it('exports EXACTLY the 37 public functions (no accidental widening or narrowing)', () => {
+  it('exports EXACTLY the 38 public functions (no accidental widening or narrowing)', () => {
     const exportedFns = Object.keys(barrel)
       .filter((k) => typeof (barrel as Record<string, unknown>)[k] === 'function')
       .sort();

@@ -2,14 +2,13 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
-  captionForEvent,
   captionKeyRetries,
+  captionText,
   checkAndTrigger,
   resetCaptions,
   triggered,
   untrigger,
 } from './onboarding-captions.js';
-import type { SimEvent } from '../sim/telemetry.js';
 
 // Always start each test with a clean slate.
 beforeEach(() => {
@@ -150,60 +149,46 @@ describe('checkAndTrigger — chamber type substitution', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Event → caption policy (captionForEvent)
+// Caption text outside the one-shot registry (captionText)
 // ---------------------------------------------------------------------------
 
-describe('captionForEvent — recurring alerts fire every time', () => {
-  it('spider_rampage_start returns its caption on EVERY call (per-event dispatch)', () => {
+describe('captionText — the rampage warning text, not a one-shot', () => {
+  it('spiderRampage returns its text on EVERY call', () => {
+    // A text lookup that marks nothing: the warning recurs once per hungry spell
+    // (#397, recurring-captions.ts), not only in the first one (#190).
     const expected = 'The spider has gone hungry and is hunting on the surface.';
-    // Two separate rampage events must both produce the caption — this is the
-    // regression guard for #190 (rampage popup only fired on the first rampage).
-    expect(captionForEvent('spider_rampage_start')).toBe(expected);
-    expect(captionForEvent('spider_rampage_start')).toBe(expected);
-    // ...and again after many occurrences.
-    expect(captionForEvent('spider_rampage_start')).toBe(expected);
+    expect(captionText('spiderRampage')).toBe(expected);
+    expect(captionText('spiderRampage')).toBe(expected);
+    expect(captionText('spiderRampage')).toBe(expected);
   });
 
   it('the spider rampage copy no longer mentions tunnels (#190)', () => {
-    const text = captionForEvent('spider_rampage_start');
-    expect(text).not.toBeNull();
-    expect(text?.toLowerCase()).not.toContain('tunnel');
+    expect(captionText('spiderRampage').toLowerCase()).not.toContain('tunnel');
   });
 
-  it('recurring dispatch does not touch the one-shot triggered map', () => {
-    captionForEvent('spider_rampage_start');
-    captionForEvent('spider_rampage_start');
+  it('the lookup does not touch the one-shot triggered map', () => {
+    captionText('spiderRampage');
+    captionText('spiderRampage');
     expect(triggered.has('spiderRampage')).toBe(false);
-  });
-});
-
-describe('captionForEvent — #394: no invasion caption', () => {
-  it('invasion_start has no caption: the army warning announces every wave instead', () => {
-    expect(captionForEvent('invasion_start')).toBeNull();
-    expect(captionForEvent('invasion_start')).toBeNull();
     expect(triggered.size).toBe(0);
   });
 });
 
-describe('captionForEvent — unknown / caption-less events', () => {
-  it('returns null for events with no caption', () => {
-    expect(captionForEvent('combat_kill')).toBeNull();
-    expect(captionForEvent('ai_state_transition')).toBeNull();
-    // Defensive runtime check: an event type outside the union (e.g. one that
-    // existed in an older save/telemetry stream) must still map to null. The
-    // cast is required because the signature now narrows to SimEvent['type'].
-    expect(captionForEvent('not_a_real_event' as SimEvent['type'])).toBeNull();
-  });
-});
-
-describe('captionForEvent vs checkAndTrigger — one-shot onboarding unaffected', () => {
+describe('captionText vs checkAndTrigger — one-shot onboarding unaffected', () => {
   it('genuine onboarding one-shots still fire exactly once', () => {
-    // Per-event recurring dispatch must not regress the one-shot onboarding tips.
+    // Recurring text lookups must not regress the one-shot onboarding tips.
     for (const key of ['dig', 'chamber', 'foodMark', 'rally'] as const) {
       resetCaptions();
       expect(checkAndTrigger(key)).not.toBeNull();
       expect(checkAndTrigger(key)).toBeNull();
     }
+  });
+
+  it("reading a one-shot key's text does not use up its one showing", () => {
+    expect(captionText('dig')).toBe(checkAndTrigger('dig'));
+    resetCaptions();
+    captionText('rally');
+    expect(checkAndTrigger('rally')).toBe(captionText('rally'));
   });
 });
 

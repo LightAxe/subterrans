@@ -501,21 +501,36 @@ export function rampageShelterActive(world: WorldState): boolean {
 
 /**
  * #377 (V68) — the spider THREATENS `colony`: it is on a rampage
- * (rampageShelterActive) and it is
+ * (rampageShelterActive) and its camp target or its position puts it at or near the
+ * colony's door (rampageThreatRule, below).
+ * Only then does the rampage shelter apply to the colony — every V68 rule reads
+ * this (steps 10a, 15b and 16), not rampageShelterActive — so a colony the spider is
+ * not hunting keeps its idle reserve out, as at V67. Pure: the simVersion, tick and
+ * difficulty, the spider's saved state, hunger and position, and the colony's
+ * entrances. Always false below V68.
+ */
+export function rampageThreatens(world: WorldState, colony: ColonyRecord): boolean {
+  return rampageShelterActive(world) && rampageThreatRule(world, colony);
+}
+
+/**
+ * #377/#397 — where a rampage threatens `colony`, without asking whether there is
+ * one: the spider is
  *  - camping, or on its way to camp, one of this colony's entrances (Rampaging with
  *    rampageTargetColonyId this colony — a V54 rotation's target included), or
  *  - within RAMPAGE_THREAT_RADIUS_TILES (Manhattan) of one of its open entrances,
  *    whatever it is doing: chasing a straggler between camps (the camper's divert
  *    clears its target), hunting, patrolling hungry, or camping the other colony's
  *    door nearby.
- * Only then does the rampage shelter apply to the colony — every V68 rule reads
- * this (steps 10a, 15b and 16), not rampageShelterActive — so a colony the spider is
- * not hunting keeps its idle reserve out, as at V67. Pure: the spider's saved state
- * and position, and the colony's entrances. Always false below V68.
+ * No rampage gate and no simVersion gate: rampageThreatens adds the shelter's gate
+ * (rampageShelterActive: V68 or later, and on a rampage), and the render-side rampage
+ * warning (recurring-captions.ts) adds spiderOnRampage alone, so it warns on a
+ * pre-V68 save too. The one place this geometry lives. Pure and side-effect-free;
+ * false when there is no spider.
  */
-export function rampageThreatens(world: WorldState, colony: ColonyRecord): boolean {
-  if (!rampageShelterActive(world)) return false;
-  const spider = world.spider!; // rampageShelterActive: a spider on a rampage
+export function rampageThreatRule(world: WorldState, colony: ColonyRecord): boolean {
+  const spider = world.spider;
+  if (spider === null) return false;
   if (spider.state === 'Rampaging' && spider.rampageTargetColonyId === colony.colonyId) {
     return true;
   }
