@@ -2354,6 +2354,12 @@ export class UIScene extends Phaser.Scene {
     if (dropped !== null) untrigger(key);
   }
 
+  /** #395 — the one-shot key of the caption waiting in the pending slot (null: none,
+   *  or one without a key), so GameScene revalidates only what is waiting. */
+  pendingCaptionKey(): CaptionKey | null {
+    return this.captionState.pending?.captionKey ?? null;
+  }
+
   /** #290 PR 6 / #350 — true while nothing is showing and nothing is pending, so
    *  a recurring caption (raid news, the spider-rampage warning) waits instead
    *  of taking the slot a one-shot caption would need. */

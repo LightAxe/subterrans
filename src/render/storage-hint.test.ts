@@ -8,6 +8,7 @@ import {
   storageHintCondition,
   STORAGE_HINT_DWELL_TICKS,
   STORAGE_HINT_REARM_TICKS,
+  storageHintStale,
   type StorageHintState,
 } from './storage-hint.js';
 import { checkAndTrigger, resetCaptions, untrigger } from './onboarding-captions.js';
@@ -367,8 +368,8 @@ describe('advanceStorageHint', () => {
     for (let t = from; t <= to; t++) {
       // eslint-disable-next-line no-restricted-syntax -- test fixture: stage the world tick
       world.tick = t;
-      const { caption } = advanceStorageHint(state, world, PLAYER_COLONY_ID);
-      if (caption !== null) shown.push(`${t}:${caption}`);
+      const text = advanceStorageHint(state, world, PLAYER_COLONY_ID);
+      if (text !== null) shown.push(`${t}:${text}`);
     }
     return shown;
   }
@@ -509,16 +510,16 @@ describe('advanceStorageHint', () => {
 describe('withdrawing an out-of-date hint (#395, Codex P2)', () => {
   beforeEach(() => resetCaptions());
 
-  it('withdraw is set whenever storage no longer blocks the queen', () => {
+  it('storageHintStale is set whenever storage no longer blocks the queen', () => {
     const { world, colony } = scenario();
     readyToLay(world, colony);
-    const s = createStorageHintState();
-    expect(advanceStorageHint(s, world, PLAYER_COLONY_ID).withdraw).toBe(false); // blocked
+    expect(storageHintStale(world, PLAYER_COLONY_ID)).toBe(false); // blocked
     pendStorage(world, PLAYER_COLONY_ID, 30);
-    expect(advanceStorageHint(s, world, PLAYER_COLONY_ID).withdraw).toBe(true); // neither
+    expect(storageHintStale(world, PLAYER_COLONY_ID)).toBe(true); // a larder designated
     delete world.pendingChambers[`${PLAYER_COLONY_ID}:30:9`];
+    expect(storageHintStale(world, PLAYER_COLONY_ID)).toBe(false);
     addChamber(world, colony, ChamberType.FoodStorage);
-    expect(advanceStorageHint(s, world, PLAYER_COLONY_ID).withdraw).toBe(true); // covered
+    expect(storageHintStale(world, PLAYER_COLONY_ID)).toBe(true); // covered
   });
 
   it('dropPendingCaption drops only a pending caption with that key', () => {
@@ -564,18 +565,16 @@ describe('withdrawing an out-of-date hint (#395, Codex P2)', () => {
     const frame = (t: number) => {
       // eslint-disable-next-line no-restricted-syntax -- test fixture: stage the world tick
       world.tick = t;
-      const f = advanceStorageHint(s, world, PLAYER_COLONY_ID);
-      if (f.caption !== null) {
-        admitCaption(q, {
-          text: f.caption,
-          x: 0,
-          y: 0,
-          source: 'event',
-          captionKey: 'foodStorageNeeded',
-        });
+      // GameScene: the withdraw first (before the loop), then the hint's step.
+      if (
+        q.pending?.captionKey === 'foodStorageNeeded' &&
+        storageHintStale(world, PLAYER_COLONY_ID)
+      ) {
+        if (dropPendingCaption(q, 'foodStorageNeeded') !== null) untrigger('foodStorageNeeded');
       }
-      if (f.withdraw && dropPendingCaption(q, 'foodStorageNeeded') !== null) {
-        untrigger('foodStorageNeeded');
+      const text = advanceStorageHint(s, world, PLAYER_COLONY_ID);
+      if (text !== null) {
+        admitCaption(q, { text, x: 0, y: 0, source: 'event', captionKey: 'foodStorageNeeded' });
       }
     };
     for (let t = 0; t <= STORAGE_HINT_DWELL_TICKS; t++) frame(t);

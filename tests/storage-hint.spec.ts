@@ -8,7 +8,9 @@
 // The condition, the dwell, the re-arm and the pending-chamber rule are pinned in
 // src/render/storage-hint.test.ts. What only a browser proves is the GameScene
 // wiring: the per-frame step runs for the player's colony and its caption reaches
-// UIScene's queue.
+// UIScene's queue, and a hint left waiting behind another caption is withdrawn once
+// the player designates a larder (Codex P2), playing or paused, before the
+// designation's own 'chamber' caption needs the slot.
 //
 // Setup, without touching a running sim: the page builds the raid world
 // (raid-test-utils.ts: the player has a completed Queen chamber with the queen in
@@ -33,6 +35,7 @@ const HOLD_MS = 4000;
 const YIELD_FLOOR_MS = 2000;
 const GATHERING_PREFIX = 'An enemy army is gathering near your';
 const RALLY_TEXT = 'Fighters will converge here.';
+const CHAMBER_TEXT = 'Chambers give workers and brood a purpose. This one is a Food Storage.';
 /** ChamberType.FoodStorage. */
 const FOOD_STORAGE = 2;
 
@@ -43,6 +46,7 @@ interface TestHook {
   freezeCaptionClock?: (frozen: boolean) => void;
   getCaptionQueue?: () => { active: string | null; pending: string | null };
   rallyPlayerAt?: (tileX: number, tileY: number) => boolean;
+  isPaused?: () => boolean;
   placePlayerChamberAt?: (chamberType: number, tileX: number, tileY: number) => boolean;
 }
 
@@ -80,6 +84,51 @@ async function captionQueue(
     if (q === undefined) throw new Error('no getCaptionQueue hook');
     return { active: q.active, pending: q.pending };
   });
+}
+
+async function setPaused(page: Page, on: boolean): Promise<void> {
+  const paused = await page.evaluate(
+    () => (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.isPaused?.() ?? false,
+  );
+  if (paused !== on) await page.keyboard.press('Space');
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.isPaused?.() ?? null,
+      ),
+    )
+    .toBe(on);
+}
+
+/** Hold a rally caption on screen (caption clock stopped) before the hint is due,
+ *  and wait for the hint to queue behind it. */
+async function queueHintBehindRally(page: Page): Promise<void> {
+  await expect.poll(() => simTick(page), { timeout: 40_000 }).toBeGreaterThanOrEqual(100);
+  await freezeCaptionClock(page, true);
+  expect(await simTick(page)).toBeLessThan(DWELL_TICKS);
+  const rallied = await page.evaluate(() =>
+    (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.rallyPlayerAt?.(40, 62),
+  );
+  expect(rallied).toBe(true);
+  await expect
+    .poll(() => captionQueue(page), { timeout: 40_000 })
+    .toEqual({ active: RALLY_TEXT, pending: HINT });
+}
+
+/** Designate a larder that would cover the reserve (tick.ts gate i: just below the
+ *  row-6 tunnel), through the real enqueue. */
+async function designateLarder(page: Page): Promise<void> {
+  const placed = await page.evaluate(
+    (t: number) =>
+      (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.placePlayerChamberAt?.(
+        t,
+        28,
+        7,
+      ),
+    FOOD_STORAGE,
+  );
+  expect(placed).toBe(true);
 }
 
 async function simTick(page: Page): Promise<number> {
@@ -284,39 +333,44 @@ test.describe('#395 — Food Storage hint', () => {
   }) => {
     test.setTimeout(90_000);
     await bootStorageSave(page, 'plain');
-    // Before the hint is due (tick 200), hold a rally caption on screen: the
-    // caption clock stops, the sim runs on.
-    await expect.poll(() => simTick(page), { timeout: 40_000 }).toBeGreaterThanOrEqual(100);
-    await freezeCaptionClock(page, true);
-    expect(await simTick(page)).toBeLessThan(DWELL_TICKS);
-    const rallied = await page.evaluate(() =>
-      (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.rallyPlayerAt?.(40, 62),
-    );
-    expect(rallied).toBe(true);
-    // The hint comes due and waits behind it.
-    await expect
-      .poll(() => captionQueue(page), { timeout: 40_000 })
-      .toEqual({ active: RALLY_TEXT, pending: HINT });
-    // The player designates a larder that would cover the reserve (tick.ts gate i:
-    // just below the row-6 tunnel). The out-of-date hint is withdrawn.
-    const placed = await page.evaluate(
-      (t: number) =>
-        (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.placePlayerChamberAt?.(
-          t,
-          28,
-          7,
-        ),
-      FOOD_STORAGE,
-    );
-    expect(placed).toBe(true);
+    await queueHintBehindRally(page);
+    await designateLarder(page);
+    // The hint is withdrawn before the designation drains, so its own 'chamber'
+    // caption takes the slot.
     await expect
       .poll(() => captionQueue(page), { timeout: 10_000 })
-      .toEqual({ active: RALLY_TEXT, pending: null });
-    // The rally caption finishes and the hint never follows.
+      .toEqual({ active: RALLY_TEXT, pending: CHAMBER_TEXT });
+    // The captions run out and the hint never follows.
     await freezeCaptionClock(page, false);
     const t0 = await simTick(page);
     await expect.poll(() => simTick(page), { timeout: 40_000 }).toBeGreaterThan(t0 + 200);
-    expect(await captions(page)).toContain(RALLY_TEXT);
-    expect(await captions(page)).not.toContain(HINT);
+    const shown = await captions(page);
+    expect(shown).toContain(CHAMBER_TEXT);
+    expect(shown).not.toContain(HINT);
+  });
+
+  test('designated while paused, the waiting hint is withdrawn before it can show', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await bootStorageSave(page, 'plain');
+    await queueHintBehindRally(page);
+    // Paused, the command waits undrained; the projected world counts it.
+    await setPaused(page, true);
+    await designateLarder(page);
+    await expect
+      .poll(() => captionQueue(page), { timeout: 10_000 })
+      .toEqual({ active: RALLY_TEXT, pending: null });
+    // The caption clock runs while paused: the rally caption ends with nothing behind it.
+    await freezeCaptionClock(page, false);
+    await expect
+      .poll(() => captionQueue(page), { timeout: 10_000 })
+      .toEqual({ active: null, pending: null });
+    await setPaused(page, false);
+    const t0 = await simTick(page);
+    await expect.poll(() => simTick(page), { timeout: 40_000 }).toBeGreaterThan(t0 + 200);
+    const shown = await captions(page);
+    expect(shown).toContain(CHAMBER_TEXT);
+    expect(shown).not.toContain(HINT);
   });
 });

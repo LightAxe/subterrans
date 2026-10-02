@@ -234,6 +234,7 @@ import { advanceQueenDanger, createQueenDangerState } from './queen-danger.js';
 import {
   advanceStorageHint,
   createStorageHintState,
+  storageHintStale,
   STORAGE_HINT_HOLD_MS,
 } from './storage-hint.js';
 // Stage 3b controls rework (issue #18, #3) — first-use navigation hints.
@@ -352,6 +353,8 @@ interface UIScenePhase9 {
   captionQueueIdle?(): boolean;
   /** #395 — withdraw the pending caption keyed `key` (UIScene.withdrawPendingCaption). */
   withdrawPendingCaption?(key: CaptionKey): void;
+  /** #395 — the one-shot key of the caption waiting in the pending slot, or null. */
+  pendingCaptionKey?(): CaptionKey | null;
   /** #372 — a long-hold caption (the army warning, the #395 storage hint)
    *  shortens its hold so a caption waiting behind it is not held back
    *  (UIScene.yieldLongCaption). */
@@ -499,10 +502,10 @@ declare global {
        *  camera to it. Returns false if the command was dropped (paused cap). */
       rallyPlayerAt?(tileX: number, tileY: number): boolean;
       /** #395 — designate a player chamber of `chamberType` at anchor (tileX, tileY)
-       *  through the input layer's enqueueCommand (the path the chamber menu's
-       *  command takes): a command, not a state write, so the drain, the caption hook
-       *  and the sim all run as for a real placement. Returns false if the command
-       *  was dropped (queue cap). */
+       *  through the input layer's enqueueCommand (the enqueue the chamber menu's
+       *  command takes, minus its feedforward check): a command, not a state write,
+       *  so the drain, the caption hook and the sim all run as for a real placement.
+       *  True means enqueued, not accepted by the sim; false: dropped (queue cap). */
       placePlayerChamberAt?(chamberType: number, tileX: number, tileY: number): boolean;
       /** #290 PR 6 — the player colony's raid counters (food in fp: stolen by it,
        *  stolen from it; completed raid hauls) and its food total, read-only, so a
@@ -1842,6 +1845,18 @@ export class GameScene extends Phaser.Scene {
    * Also fires world-state-based captions (spider visible, spiderPriority, etc.).
    * Called once per render frame while Playing.
    */
+  private withdrawStaleStorageHint(): void {
+    if (!this.world) return;
+    if (this.gamePhase !== GamePhase.Playing && this.gamePhase !== GamePhase.Paused) return;
+    const uiScene = this.getUIScene();
+    if (uiScene?.pendingCaptionKey?.() !== 'foodStorageNeeded') return;
+    // The projected world folds in queued commands: a larder designated while
+    // paused, or still to drain this frame, already counts.
+    if (storageHintStale(this.projection.get(this.world), PLAYER_COLONY_ID)) {
+      uiScene.withdrawPendingCaption?.('foodStorageNeeded');
+    }
+  }
+
   private checkQueenStatusForEffects(): void {
     if (!this.world) return;
     const playerColony = this.world.colonies[PLAYER_COLONY_ID];
@@ -1934,19 +1949,21 @@ export class GameScene extends Phaser.Scene {
     // tie the army's warning goes first and the hint queues behind it (as a one-shot
     // it takes the pending slot, and the warning gives way to its readable floor).
     if (uiScene) {
-      const storage = advanceStorageHint(this.storageHint, this.world, PLAYER_COLONY_ID);
-      if (storage.caption) {
+      // On the projected world: a larder the player has ordered, still queued, counts.
+      const storageText = advanceStorageHint(
+        this.storageHint,
+        this.projection.get(this.world),
+        PLAYER_COLONY_ID,
+      );
+      if (storageText) {
         uiScene.showCaption(
-          storage.caption,
+          storageText,
           this.layout.w / 2,
           60,
           'foodStorageNeeded',
           STORAGE_HINT_HOLD_MS,
         );
       }
-      // A hint still waiting behind another caption whose reason has gone (Food
-      // Storage designated or built since it was queued) never shows.
-      if (storage.withdraw) uiScene.withdrawPendingCaption?.('foodStorageNeeded');
     }
 
     // #350 — the spider-rampage warning, owed from its spider_rampage_start until
@@ -2805,6 +2822,11 @@ export class GameScene extends Phaser.Scene {
     if (this.viewState.activeView !== this.lastActiveView) {
       this.lastActiveView = this.viewState.activeView;
     }
+
+    // #395 — a storage hint still waiting behind another caption is withdrawn once
+    // it is out of date. Before the loop drains, so the designation's own 'chamber'
+    // caption finds the slot free; while Paused too (the caption clock runs on).
+    this.withdrawStaleStorageHint();
 
     // Drive platform accumulator. When paused/GameOver, gameLoop.pause() already
     // freezes tick execution via its internal flag — update() is safe to call.
