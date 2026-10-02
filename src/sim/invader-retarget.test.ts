@@ -464,6 +464,9 @@ describe('#364 — full ticks: a pile of invaders spreads over the defenders', (
           for (const i of invaders) world.ants.lastMealTick[i] = world.tick;
           world.ants.lastMealTick[near] = world.tick;
           world.ants.lastMealTick[far] = world.tick;
+          // #400 (V71): step 16f clamps every ant to its max HP where it stands, so
+          // "unkillable" is restored each tick (no blow takes more than one tick's HP).
+          for (const id of [...invaders, near, far]) world.ants.hp[id] = UNKILLABLE_HP;
           tick(world, []);
           invaders.forEach((i, k) => {
             expect(world.ants.alive[i]).toBe(1);

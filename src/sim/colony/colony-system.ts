@@ -13,8 +13,8 @@
 //   tickFoodConsumption IS the concrete implementation of PRD §8a steps 3 AND 4.
 //   Feed success/failure is evaluated inline per entity (queen first, then each live larva).
 //   Each ant's hunger clock is `ants.lastMealTick` (#288, V50; src/sim/hunger.ts):
-//   On success (withdrawFood returns true):  lastMealTick = world.tick (and the V66
-//     queen regains 1 HP on regen ticks, up to her max — feedQueenOrDrain).
+//   On success (withdrawFood returns true):  lastMealTick = world.tick. (A fed queen
+//     heals in step 16f from #400, V71 — health.ts — while also safe and at home.)
 //   On failure (withdrawFood returns false): kill the ant once ticks since its last
 //     meal reach its profile's starve-after (300). Pre-V50 this was a countdown
 //     reset to STARVATION_GRACE_TICKS and decremented per failed meal — the same
@@ -46,8 +46,6 @@ import {
   RECONCILE_INTERVAL_TICKS,
   NURSE_MIN_WORKERS,
   QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
-  QUEEN_FED_HP_REGEN_INTERVAL_TICKS,
-  COMBAT_HP_QUEEN,
 } from '../constants.js';
 import {
   clampColonyFoodStores,
@@ -163,18 +161,16 @@ function feedOrStarve(
 /**
  * The queen's meal from V66 (#375). She eats as `feedOrStarve` would (QUEEN_HUNGER:
  * a meal due every tick); a failed meal no longer kills her outright at the
- * starve-after. Instead she loses 1 HP (`ants.hp`; the home-ground combat buffer is
- * not drained) each time the ticks since her last meal reach a multiple of
- * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS, and dies of starvation (`despawnAnt`,
- * 'starvation') at 0 HP. Fed at tick s and never again, a queen at h HP dies at
- * s + h × 10: at full HP (30) the V65 tick s + 300. A meal stops the drain; the
- * interval restarts from her new last meal.
+ * starve-after. Instead she loses 1 HP (`ants.hp`) each time the ticks since her last
+ * meal reach a multiple of QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS, and dies of
+ * starvation (`despawnAnt`, 'starvation') at 0 HP. Fed at tick s and never again, a
+ * queen at h HP dies at s + h × 6: at full home HP (QUEEN_HP_HOME, 50) the V65 tick
+ * s + 300. A meal stops the drain; the interval restarts from her new last meal.
  *
- * While she is fed she heals: on a tick she eats whose number is a multiple of
- * QUEEN_FED_HP_REGEN_INTERVAL_TICKS she regains 1 HP, up to COMBAT_HP_QUEEN. So a
- * short hunger burst heals back while a long famine still kills. The regen heals
- * any lost HP, combat damage included, and never touches the home-ground buffer.
- * Keyed on world.tick, so it needs no saved state.
+ * Up to V70 a meal also healed her, mid-fight too. From #400 (V71) she heals in step
+ * 16f like every ant (health.ts): while fed — she ate this tick — safe from blows
+ * and in her nest. So a short hunger burst still heals back while a long famine
+ * still kills.
  */
 function feedQueenOrDrain(world: WorldState, colony: ColonyRecord, id: number): void {
   const ants = world.ants;
@@ -182,9 +178,6 @@ function feedQueenOrDrain(world: WorldState, colony: ColonyRecord, id: number): 
   if (sinceMeal < QUEEN_HUNGER.mealIntervalTicks) return;
   if (withdrawFood(world, colony, QUEEN_HUNGER.mealFp)) {
     ants.lastMealTick[id] = world.tick;
-    if (world.tick % QUEEN_FED_HP_REGEN_INTERVAL_TICKS === 0 && ants.hp[id]! < COMBAT_HP_QUEEN) {
-      ants.hp[id] = ants.hp[id]! + 1;
-    }
     return;
   }
   if (sinceMeal % QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS !== 0) return;

@@ -1551,8 +1551,8 @@ export const SIM_VERSION_V67_NO_MATCH_TIMEOUT = 67 as const;
  * backpressure demotes searchers to Idle — so it was steady attrition. From V68
  * (every colony alike — CLNY-08), while the spider is ON A RAMPAGE (spider.ts
  * spiderOnRampage: out hunting hungry, from the moment it grows hungry until it eats
- * or dies; the window the rampage caption covers, of which the Rampaging state is
- * only the entrance-camping part — a camper diverts to chase any ant that comes near)
+ * or dies — one hungry spell, of which the Rampaging state is only the
+ * entrance-camping part: a camper diverts to chase any ant that comes near)
  * AND THREATENS THE COLONY (idle-reserve.ts rampageThreatens: it is camping, or on
  * its way to camp, one of the colony's entrances — Rampaging with
  * rampageTargetColonyId the colony — or it is within RAMPAGE_THREAT_RADIUS_TILES,
@@ -1670,7 +1670,34 @@ export const SIM_VERSION_V69_FOOD_FAIRNESS = 69 as const;
  * UNCHANGED (V50).
  */
 export const SIM_VERSION_V70_EGG_RESERVE = 70 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V70_EGG_RESERVE;
+
+/**
+ * #400 (V71) — the health model. The first sim change under the pre-1.0 policy: no
+ * version gate, and MIN_ACCEPTED is raised to V71 with it (every older save is
+ * rejected). Every rule is colony-agnostic (CLNY-08).
+ *   - Max HP by territory (health.ts antMaxHp): an ant's max HP is COMBAT_HP_BASE
+ *     (16) away and 20 on its home ground (underground in its own nest); the queen's
+ *     is COMBAT_HP_QUEEN away and QUEEN_HP_HOME in her nest. Damage just lowers HP;
+ *     leaving home lowers the max and clamps HP down to it, coming home raises it
+ *     without healing. The `ants.homeGroundBonusHp` buffer (granted on an ant's first
+ *     fight at home and drained before its HP) is gone; the +25% home-ground damage
+ *     stays. The queen's HUD bar is her HP out of her max where she stands.
+ *   - Healing (health.ts tickHealth, new step 16f between movement and combat):
+ *     every creature heals 1 HP per interval while fed (not hungry) and safe (not hit
+ *     for HEAL_SAFE_TICKS — new per-creature `ants.lastHitTick` and
+ *     `spider.lastHitTick`, stamped by combat). Ants heal only on their home ground
+ *     (ANT_HEAL_INTERVAL_TICKS; the queen QUEEN_HEAL_INTERVAL_TICKS, replacing V66's
+ *     fed regeneration, which healed her mid-fight). The spider heals anywhere
+ *     (SPIDER_HEAL_INTERVAL_TICKS); eating no longer heals it (the V23 feeding heal is
+ *     gone). Eggs are laid at their home max HP.
+ *   - The queen's base HP is raised (COMBAT_HP_QUEEN) to make up for the lost
+ *     mid-fight healing, and her starvation drain retuned so a queen at full home HP
+ *     still starves QUEEN_STARVE_AFTER_TICKS after her last meal.
+ *   - A spider priority (MarkSpiderPriority) stays on until the player clears it or
+ *     the spider dies: no feed, hunt end, rampage end or chase divert clears it.
+ */
+export const SIM_VERSION_V71_HEALTH_MODEL = 71 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V71_HEALTH_MODEL;
 
 /**
  * S2 — AI colony state machine states.
@@ -1720,7 +1747,12 @@ export interface SpiderState {
   lastKillTileY: number;
   feedAwayTileX: number; // V23: ~10-tile feed destination after a kill; -1 default
   feedAwayTileY: number;
-  feedArrivedTick: number; // V23: tick the spider reached feedAwayTile (heal-window clock); -1 while traveling
+  feedArrivedTick: number; // V23: tick the spider reached feedAwayTile (feed-window clock); -1 while traveling
+  /**
+   * #400 (V71): tick of the last blow an ant landed on the spider (combat.ts); -1 =
+   * never hit. It heals only once HEAL_SAFE_TICKS have passed since (health.ts).
+   */
+  lastHitTick: number;
   /** V54 (#337): entranceId the current rampage camps (a rotated rampage); -1 = the
    *  nearest open entrance of rampageTargetColonyId (the pre-V54 rule). */
   rampageEntranceId: number;
@@ -2197,6 +2229,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
     ds.feedAwayTileX = ss.feedAwayTileX;
     ds.feedAwayTileY = ss.feedAwayTileY;
     ds.feedArrivedTick = ss.feedArrivedTick;
+    ds.lastHitTick = ss.lastHitTick;
     ds.rampageEntranceId = ss.rampageEntranceId;
     ds.rampageRotationEntranceId = ss.rampageRotationEntranceId;
     ds.rampageRotationTick = ss.rampageRotationTick;
@@ -2268,7 +2301,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
   // reads these every combat tick; the render interpolation reads them for
   // fighter-size visual. Not copying would cause one-frame stale combat state.
   dst.ants.hp.set(src.ants.hp);
-  dst.ants.homeGroundBonusHp.set(src.ants.homeGroundBonusHp);
+  dst.ants.lastHitTick.set(src.ants.lastHitTick);
   dst.ants.attackCooldown.set(src.ants.attackCooldown);
   dst.ants.combatOpponentId.set(src.ants.combatOpponentId);
   // #209 PR A (V34) — flee/shelter phase. Round-trips through the double-buffer

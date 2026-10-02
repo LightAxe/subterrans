@@ -11,6 +11,7 @@ import { tickSpider } from './spider.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath, checkTiebreaks } from './game-over.js';
 import { advanceAIState, getAIStateForColony, setAIRallyOperation } from './ai-state.js';
+import { tickHealth } from './health.js';
 import { detectAndResolveCombat } from './combat.js';
 import {
   getScratch,
@@ -222,6 +223,7 @@ void (undefined as unknown as PendingChamber);
  * 16b. tickForagerActions — forager pickup (surface) + deposit (underground) (Phase 9 playability fix)
  * 16c. tickNurseActions — nurse arrival→Feeding→Idle state machine (09 reproduction-gate memo: finite nursing)
  * 16d. tickFoodPileSpawn — runtime food-pile respawn (issue #112: time-gated spawn after depletion)
+ * 16f. tickHealth — clamp to max HP by territory; heal while fed and safe (#400, V71)
  * 17.  detectAndResolveCombat (NEW in Phase 9 / CMBT-04)
  * 18.  checkQueenDeath — game-over detection (NEW in Phase 9 / CMBT-06/07)
  * 19.  rngState writeback + world.tick increment
@@ -1716,6 +1718,16 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   //           land in a deterministic order before combat's own RNG draws.
   // ---------------------------------------------------------------------------
   tickFoodPileSpawn(world, rng);
+
+  // ---------------------------------------------------------------------------
+  // Step 16f (#400, V71): health — every colony's queen and workers clamp down to
+  //           their max HP where they now stand (lower off home ground) or heal
+  //           toward it (fed, safe and on home ground); the spider heals while fed
+  //           and safe (health.ts). After movement, so a step out of the nest has
+  //           already lowered an ant's max; before combat, so the fight sees the
+  //           clamped HP. No RNG.
+  // ---------------------------------------------------------------------------
+  tickHealth(world);
 
   // ---------------------------------------------------------------------------
   // Step 17: combat detection + resolution (Phase 9 / CMBT-04) — runs after step 16 tickAntMovement.

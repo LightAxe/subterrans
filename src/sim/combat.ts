@@ -8,7 +8,9 @@
 //   - Strike when cooldown decrements to 0; resets to COMBAT_COOLDOWN_TICKS.
 //   - Strikes are simultaneous: both ants can die the same tick.
 //   - Home-ground damage bonus: COMBAT_DAMAGE_HOMEGROUND on own grid (underground only).
-//   - Home-ground HP buffer: homeGroundBonusHp depletes before hp.
+//   - #400 (V71): a blow just lowers HP and stamps the victim's lastHitTick (the
+//     healing clock, health.ts). An ant's higher max HP at home lives in health.ts;
+//     the V16–V70 home-ground HP buffer (homeGroundBonusHp) is gone.
 //
 // Kills route through ant-death.ts `killAnt` (#289): combat_kill event, queen-death
 // context, operation counters, killCount, V34 alarm and V37 corpse drop live there.
@@ -24,7 +26,6 @@ import type { Zone } from './terrain.js';
 import { FP_SHIFT } from './fixed.js';
 import { getScratch } from './scratch.js';
 import {
-  COMBAT_HP_HOMEGROUND_BONUS,
   COMBAT_DAMAGE_BASE,
   COMBAT_DAMAGE_HOMEGROUND,
   COMBAT_COOLDOWN_TICKS,
@@ -37,6 +38,7 @@ import {
   SURFACE_GRID_HEIGHT,
 } from './constants.js';
 import { killAnt } from './ant-death.js';
+import { antOnHomeGround } from './health.js';
 
 // ---------------------------------------------------------------------------
 // Per-tick combat-sweep scratch (no-alloc rule, AGENTS.md hot-loop section).
@@ -225,23 +227,22 @@ export function detectAndResolveCombat(world: WorldState, _rng: Rng): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Apply `damage` to `antIdx`, depleting homeGroundBonusHp first, then hp.
- * Returns true if the ant should die (hp <= 0 after depletion).
+ * Apply `damage` to `antIdx`: lower its HP and stamp its lastHitTick (#400, V71 — it
+ * is not safe to heal for HEAL_SAFE_TICKS). Returns true if the ant should die
+ * (hp <= 0).
  */
 function applyDamage(world: WorldState, antIdx: number, damage: number): boolean {
   const { ants } = world;
-  let bonus = ants.homeGroundBonusHp[antIdx]!;
-  if (bonus > 0) {
-    if (damage <= bonus) {
-      ants.homeGroundBonusHp[antIdx] = bonus - damage;
-      return false;
-    }
-    // Damage overflows bonus into hp
-    damage -= bonus;
-    ants.homeGroundBonusHp[antIdx] = 0;
-  }
+  ants.lastHitTick[antIdx] = world.tick;
   ants.hp[antIdx] = ants.hp[antIdx]! - damage;
   return ants.hp[antIdx] <= 0;
+}
+
+/** #400 (V71): an ant lands `damage` on the spider, which is then not safe to heal. */
+function damageSpider(world: WorldState, damage: number): void {
+  const spider = world.spider!;
+  spider.hp -= damage;
+  spider.lastHitTick = world.tick;
 }
 
 /**
@@ -253,9 +254,7 @@ function strikeDamage(world: WorldState, antId: number, strikes: boolean): numbe
   if (!strikes) return 0;
   const { ants } = world;
   if (ants.task[antId] === AntTask.Fighting) {
-    return ants.zone[antId] === 1 && ants.currentGridColonyId[antId] === ants.colonyId[antId]!
-      ? COMBAT_DAMAGE_HOMEGROUND
-      : COMBAT_DAMAGE_BASE;
+    return antOnHomeGround(world, antId) ? COMBAT_DAMAGE_HOMEGROUND : COMBAT_DAMAGE_BASE;
   }
   // Non-fighters retaliate with reduced damage.
   const cid = ants.colonyId[antId]!;
@@ -315,35 +314,9 @@ function resolveCombatOnTile_v16(
   const aNew = ants.combatOpponentId[antA] !== antB;
   const bNew = ants.combatOpponentId[antB] !== antA;
 
-  // aFresh/bFresh: ant has never entered V16 combat (cooldown still 0 from initAnt
-  // or save migration). Used to decide whether to grant a fresh home-ground bonus.
-  // Distinct from aNew (new pairing) — a post-kill survivor has aNew=true (new
-  // opponent) but aFresh=false (cooldown was COMBAT_COOLDOWN_TICKS, not 0).
-  const aFresh = ants.attackCooldown[antA] === 0;
-  const bFresh = ants.attackCooldown[antB] === 0;
-
   if (aNew || bNew) {
     ants.combatOpponentId[antA] = antB;
     ants.combatOpponentId[antB] = antA;
-    // Fresh ants get a full bonus based on current location.
-    // Veteran ants (new pairing, but were already in combat) keep their depleted
-    // bonus if still on home ground; it's zeroed if they've moved off home ground.
-    // This prevents unintended healing (bonus restored on replacement) while
-    // also clearing stale bonus after a position change.
-    const aOnHome =
-      ants.zone[antA] === 1 && ants.currentGridColonyId[antA] === ants.colonyId[antA]!;
-    const bOnHome =
-      ants.zone[antB] === 1 && ants.currentGridColonyId[antB] === ants.colonyId[antB]!;
-    if (aFresh) {
-      ants.homeGroundBonusHp[antA] = aOnHome ? COMBAT_HP_HOMEGROUND_BONUS : 0;
-    } else if (!aOnHome) {
-      ants.homeGroundBonusHp[antA] = 0;
-    }
-    if (bFresh) {
-      ants.homeGroundBonusHp[antB] = bOnHome ? COMBAT_HP_HOMEGROUND_BONUS : 0;
-    } else if (!bOnHome) {
-      ants.homeGroundBonusHp[antB] = 0;
-    }
     // Fighters skip windup (always ready to strike); non-fighters wind up.
     // Only reset cooldown for the newly-paired side — the other side keeps its
     // accumulated progress to avoid penalizing an ongoing combatant on a re-entry.
@@ -394,10 +367,7 @@ function resolveCombatOnTile_v16(
   if (aDies) killAnt(world, antA, cidB, antB, 'Ant');
 
   // After a kill, clear the survivor's opponent tracking so the next encounter
-  // is detected as a new pairing (triggering proper windup and home-ground bonus
-  // normalization). The survivor's cooldown stays at COMBAT_COOLDOWN_TICKS (set
-  // at the strike tick above), so aFresh=false on the next windup — the depleted
-  // bonus is preserved for home-ground survivors and zeroed for off-home ones.
+  // is detected as a new pairing (triggering a proper windup).
   if (bDies && !aDies) ants.combatOpponentId[antA] = -1;
   if (aDies && !bDies) ants.combatOpponentId[antB] = -1;
 }
@@ -631,7 +601,6 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
         // First contact for this fighter: pair and set windup.
         ants.combatOpponentId[idx] = -2;
         ants.attackCooldown[idx] = COMBAT_COOLDOWN_TICKS;
-        ants.homeGroundBonusHp[idx] = 0; // spider is surface-only; underground bonus does not apply
         anyNewPairing = true;
         continue;
       }
@@ -661,7 +630,7 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
     const antDies = spiderDamage > 0 && applyDamage(world, swarmRetaliationTarget, spiderDamage);
 
     if (totalAntDamage > 0) {
-      spider.hp -= totalAntDamage;
+      damageSpider(world, totalAntDamage);
       if (spider.hp <= 0) {
         // Clear on-tile swarm fighter pairings immediately; off-tile sentinels
         // are cleared by clearSpiderPairingSentinels in tickSpider the same tick.
@@ -695,7 +664,6 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
     // Fresh pair: set windup (no strike this tick).
     ants.attackCooldown[activeAntIdx] = COMBAT_COOLDOWN_TICKS;
     ants.combatOpponentId[activeAntIdx] = -2; // sentinel: paired with spider
-    ants.homeGroundBonusHp[activeAntIdx] = 0; // spider is surface-only; underground bonus does not apply
     spider.attackCooldown = COMBAT_COOLDOWN_TICKS;
     return;
   }
@@ -723,7 +691,7 @@ export function resolveSpiderCombatOnTile(world: WorldState): void {
   const antDies2 = spiderDamage2 > 0 && applyDamage(world, activeAntIdx, spiderDamage2);
 
   if (antDamage > 0) {
-    spider.hp -= antDamage;
+    damageSpider(world, antDamage);
     if (spider.hp <= 0) {
       ants.combatOpponentId[activeAntIdx] = -1;
     }

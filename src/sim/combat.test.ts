@@ -135,6 +135,7 @@ function placeSpider(
     feedAwayTileX: -1,
     feedAwayTileY: -1,
     feedArrivedTick: -1,
+    lastHitTick: -1,
     rampageEntranceId: -1,
     rampageRotationEntranceId: -1,
     rampageRotationTick: -1,
@@ -276,8 +277,10 @@ describe('killAnt (ant-death.ts kill sugar)', () => {
 
 import {
   COMBAT_HP_BASE,
+  COMBAT_HP_HOMEGROUND_BONUS,
   COMBAT_COOLDOWN_TICKS,
   COMBAT_DAMAGE_BASE,
+  COMBAT_DAMAGE_HOMEGROUND,
   COMBAT_DAMAGE_WORKER,
   COMBAT_DAMAGE_QUEEN,
   COMBAT_HP_QUEEN,
@@ -342,12 +345,10 @@ describe('V16 combat resolver', () => {
   });
 
   it('1v1 underground home defender vs attacker: home defender wins with HP=4 remaining at T=20 (D-32 TTK)', () => {
-    // Home defender: on own colony grid → homeGroundBonusHp=4, hp=16, deals COMBAT_DAMAGE_HOMEGROUND=5.
-    // Attacker: on enemy grid → homeGroundBonusHp=0, hp=16, deals COMBAT_DAMAGE_BASE=4.
-    // T=5 (windup+5 ticks): strike 1. Defender takes 4→hp=16 (bonus absorbs). Attacker takes 5→hp=11.
-    // T=10: strike 2. Defender bonus=0, hp=16-4=12. Attacker hp=11-5=6.
-    // T=15: strike 3. Defender hp=12-4=8. Attacker hp=6-5=1.
-    // T=20: strike 4. Defender hp=8-4=4. Attacker hp=1-5=-4 → DEAD.
+    // #400 (V71): Home defender: on own colony grid → max HP 20 (staged full), deals
+    // COMBAT_DAMAGE_HOMEGROUND=5. Attacker: on enemy grid → max 16, deals COMBAT_DAMAGE_BASE=4.
+    // Strike 1: defender 20→16, attacker 16→11. Strike 2: 12 / 6. Strike 3: 8 / 1.
+    // Strike 4: defender 8→4; attacker 1→-4 → DEAD. (The V16–V70 buffer gave the same end.)
     const { world, cid1, cid2 } = makeV16World();
     // Defender (cid1) on their own grid (currentGridColonyId=cid1, zone=Underground)
     const defender = spawnFighter(world, cid1, 5, 7, Zone.Underground);
@@ -360,6 +361,8 @@ describe('V16 combat resolver', () => {
       cid1,
     ) as unknown as (typeof world.ants.currentGridColonyId)[0];
 
+    world.ants.hp[defender] = COMBAT_HP_BASE + COMBAT_HP_HOMEGROUND_BONUS; // full at home
+    const defenderHp0 = world.ants.hp[defender]!;
     // Run exactly COMBAT_COOLDOWN_TICKS+1 = 6 ticks per round, 4 rounds = 24 ticks total
     // But windup is on tick 1, first strike at tick 1+5=6. So T=6, T=12, T=18, T=24?
     // Wait - let me recount: windup happens when cooldown=0. T=1: windup, cooldown=5.
@@ -370,9 +373,8 @@ describe('V16 combat resolver', () => {
     // Attacker should be dead, defender should be alive
     expect(world.ants.alive[attacker]).toBe(0);
     expect(world.ants.alive[defender]).toBe(1);
-    // Defender's hp should be 4 after 4 strikes absorbed: bonus(4-4=0)+hp(16-4*3=4)
-    // Wait: Strike 1: bonus depletes (4-4=0), hp=16. Strike 2: hp=16-4=12. Strike 3: hp=12-4=8. Strike 4: hp=8-4=4.
-    expect(world.ants.hp[defender]).toBe(4);
+    // #400 (V71): no buffer — the defender's spawn HP minus the 4 strikes it absorbed.
+    expect(world.ants.hp[defender]).toBe(defenderHp0 - 4 * COMBAT_DAMAGE_BASE);
   });
 
   it('simultaneous kills: both ants die on same tick when both hp<=0', () => {
@@ -384,8 +386,6 @@ describe('V16 combat resolver', () => {
     runCombatTicks(world, 1); // windup tick
     world.ants.hp[a] = 4; // will die on next strike
     world.ants.hp[b] = 4;
-    world.ants.homeGroundBonusHp[a] = 0;
-    world.ants.homeGroundBonusHp[b] = 0;
     // One more full round (5 ticks) to reach the strike
     runCombatTicks(world, 5);
     // Both should die (4 damage each, both at hp=4)
@@ -414,7 +414,6 @@ describe('V16 combat resolver', () => {
     // Force a1 to die quickly: set hp=4 so one strike kills.
     runCombatTicks(world, 1); // windup tick (a1 vs b paired, a2 unpaired)
     world.ants.hp[a1] = 4;
-    world.ants.homeGroundBonusHp[a1] = 0;
     runCombatTicks(world, 5); // first strike tick: b hits a1 for 4 → a1 dies
     expect(world.ants.alive[a1]).toBe(0); // a1 is dead
     // a1's kill resets a2's cooldown (via cooldown=0 on replacement side).
@@ -425,7 +424,7 @@ describe('V16 combat resolver', () => {
     expect(world.ants.alive[b]).toBe(1); // b still alive (just wound up together)
   });
 
-  it('home-ground bonus HP depletes first before base HP', () => {
+  it('#400: a blow just lowers HP — no home-ground buffer absorbs it — and stamps lastHitTick', () => {
     const { world, cid1, cid2 } = makeV16World();
     const defender = spawnFighter(world, cid1, 5, 7, Zone.Underground);
     world.ants.currentGridColonyId[defender] = Number(
@@ -435,15 +434,40 @@ describe('V16 combat resolver', () => {
     world.ants.currentGridColonyId[attacker] = Number(
       cid1,
     ) as unknown as (typeof world.ants.currentGridColonyId)[0];
-    // Fighters skip windup: first strike fires on tick 1.
-    // Attacker deals COMBAT_DAMAGE_BASE=4; defender bonus=4 absorbs all → bonus=0, base HP intact.
-    runCombatTicks(world, 1); // first strike T=1 (no windup for fighters)
-    expect(world.ants.homeGroundBonusHp[defender]).toBe(0); // bonus fully depleted by first strike
-    expect(world.ants.hp[defender]).toBe(COMBAT_HP_BASE); // base HP untouched
-    // Second strike fires after COMBAT_COOLDOWN_TICKS=5 more ticks. Bonus=0 → base HP takes damage.
+    world.ants.hp[defender] = COMBAT_HP_BASE + COMBAT_HP_HOMEGROUND_BONUS; // full at home
+    expect(world.ants.lastHitTick[defender]).toBe(-1);
+    expect(world.ants.lastHitTick[attacker]).toBe(-1);
+    // Fighters skip windup: the first strikes fire on tick 1 (world.tick 0).
+    runCombatTicks(world, 1);
+    // The away attacker deals COMBAT_DAMAGE_BASE straight off the defender's HP; the
+    // home defender deals COMBAT_DAMAGE_HOMEGROUND back. Both blows are stamped.
+    expect(world.ants.hp[defender]).toBe(
+      COMBAT_HP_BASE + COMBAT_HP_HOMEGROUND_BONUS - COMBAT_DAMAGE_BASE,
+    );
+    expect(world.ants.hp[attacker]).toBe(COMBAT_HP_BASE - COMBAT_DAMAGE_HOMEGROUND);
+    expect(world.ants.lastHitTick[defender]).toBe(0);
+    expect(world.ants.lastHitTick[attacker]).toBe(0);
+    // Second strike after COMBAT_COOLDOWN_TICKS more ticks: restamped at its tick
+    // (runCombatTicks does not advance world.tick; stage the strike's tick).
+    world.tick = COMBAT_COOLDOWN_TICKS;
     runCombatTicks(world, COMBAT_COOLDOWN_TICKS);
-    expect(world.ants.homeGroundBonusHp[defender]).toBe(0);
-    expect(world.ants.hp[defender]).toBe(COMBAT_HP_BASE - COMBAT_DAMAGE_BASE);
+    expect(world.ants.hp[defender]).toBe(
+      COMBAT_HP_BASE + COMBAT_HP_HOMEGROUND_BONUS - 2 * COMBAT_DAMAGE_BASE,
+    );
+    expect(world.ants.lastHitTick[defender]).toBe(COMBAT_COOLDOWN_TICKS);
+  });
+
+  it('#400: a wind-up tick (no blow) does not stamp lastHitTick', () => {
+    const { world, cid1, cid2 } = makeV16World();
+    // Two non-fighters wind up on first contact and do not strike.
+    const a = spawnFighter(world, cid1, 5, 7, Zone.Surface);
+    const b = spawnFighter(world, cid2, 5, 7, Zone.Surface);
+    world.ants.task[a] = AntTask.Idle;
+    world.ants.task[b] = AntTask.Idle;
+    runCombatTicks(world, 1);
+    expect(world.ants.attackCooldown[a]).toBe(COMBAT_COOLDOWN_TICKS);
+    expect(world.ants.lastHitTick[a]).toBe(-1);
+    expect(world.ants.lastHitTick[b]).toBe(-1);
   });
 });
 
@@ -471,6 +495,9 @@ describe('V16 2v2 two-tile chamber frontage', () => {
     world.ants.currentGridColonyId[invA] = COLONY1;
     world.ants.currentGridColonyId[defB] = COLONY1;
     world.ants.currentGridColonyId[invB] = COLONY1;
+    // #400 (V71): defenders at home have max HP 20; stage them full.
+    world.ants.hp[defA] = COMBAT_HP_BASE + COMBAT_HP_HOMEGROUND_BONUS;
+    world.ants.hp[defB] = COMBAT_HP_BASE + COMBAT_HP_HOMEGROUND_BONUS;
 
     // Run 21 ticks: windup at T=1, strikes at T=6, T=11, T=16, T=21.
     runCombatTicks(world, 21);
@@ -478,10 +505,10 @@ describe('V16 2v2 two-tile chamber frontage', () => {
     // Both invaders dead (defender deals 5 home-ground damage × 4 strikes = 20 total).
     expect(world.ants.alive[invA]).toBe(0);
     expect(world.ants.alive[invB]).toBe(0);
-    // Both defenders alive (invader deals 4 damage × 4 strikes = 16; bonus absorbs first 4).
+    // Both defenders alive (invader deals 4 damage × 4 strikes = 16 of their 20).
     expect(world.ants.alive[defA]).toBe(1);
     expect(world.ants.alive[defB]).toBe(1);
-    // Each defender ends at hp=4 (took 16 total damage: 4 absorbed by bonus, 12 from hp=16).
+    // Each defender ends at hp=4 (20 − 16).
     expect(world.ants.hp[defA]).toBe(4);
     expect(world.ants.hp[defB]).toBe(4);
     // Pairs are independent — each tile resolved its own fight.

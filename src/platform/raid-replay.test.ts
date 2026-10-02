@@ -17,7 +17,7 @@ import { AntTask, FightingSubState } from '../sim/enums.js';
 import { PLAYER_COLONY_ID, ENEMY_COLONY_ID, FOOD_PICKUP_AMOUNT } from '../sim/constants.js';
 import { despawnAnt } from '../sim/ant-death.js';
 import { pileAtTile, pileCount } from '../sim/food/food-api.js';
-import { SIM_VERSION_V51_UNIFIED_HUNGER, type WorldState } from '../sim/types.js';
+import type { WorldState } from '../sim/types.js';
 import { addFighter, freeSurfaceTile, raidWorld } from '../sim/raid-test-utils.js';
 import { hashWorldState } from './world-hash.js';
 import { serializeWorldState, deserializeWorldState, type SerializedWorldState } from './save.js';
@@ -129,12 +129,6 @@ describe('save validation of the raid sub-states', () => {
     s.ants.subTask[id] = FightingSubState.Looting;
     s.ants.foodCarrying[id] = 0;
     expect(deserializeWorldState(s).ants.subTask[id]).toBe(FightingSubState.Looting);
-  });
-
-  it('rejects a raid sub-state below V52', () => {
-    const { s } = savedMidHaul();
-    s.simVersion = SIM_VERSION_V51_UNIFIED_HUNGER;
-    expect(() => deserializeWorldState(s)).toThrow(/subTask/);
   });
 
   it('rejects a raid sub-state on a non-fighter, and anything above Hauling', () => {

@@ -1080,17 +1080,24 @@ describe('Blockade (V60)', () => {
     const ids = blockaders(r, 2);
     run(w, 300, () => ids.every((id) => w.ants.subTask[id] === FightingSubState.Holding));
     const foe = addEnemySurfaceAnt(w, r.enemyDoor.x, r.enemyDoor.y);
-    w.ants.hp[foe] = 1_000_000; // it stays on the shaft tile for the whole test
     let onDoor = false;
     let wentDown = false;
-    run(w, 200, () => {
-      for (const id of ids) {
-        if (w.ants.zone[id] !== Zone.Surface) wentDown = true;
-        const t = tileOf(w, id);
-        if (t.x === r.enemyDoor.x && t.y === r.enemyDoor.y) onDoor = true;
-      }
-      return false;
-    });
+    run(
+      w,
+      200,
+      () => {
+        for (const id of ids) {
+          if (w.ants.zone[id] !== Zone.Surface) wentDown = true;
+          const t = tileOf(w, id);
+          if (t.x === r.enemyDoor.x && t.y === r.enemyDoor.y) onDoor = true;
+        }
+        return false;
+      },
+      // It stays on the shaft tile for the whole test. #400 (V71): step 16f clamps to
+      // the max HP where an ant stands, so the HP is restored before every tick.
+      () => (w.ants.hp[foe] = 1_000_000),
+    );
+    expect(w.ants.alive[foe]).toBe(1);
     expect(onDoor).toBe(true);
     expect(wentDown).toBe(false);
   });

@@ -38,7 +38,9 @@ import {
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
   MAX_ENTITIES,
+  COMBAT_HP_BASE,
   COMBAT_HP_QUEEN,
+  QUEEN_HP_HOME,
   QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
 } from '../sim/constants.js';
 import type { SimCommand } from '../sim/commands.js';
@@ -63,7 +65,8 @@ import {
   setPoolFoodForTest,
 } from '../sim/food/food-test-utils.js';
 import { QUEEN_HUNGER } from '../sim/hunger.js';
-import { SIM_VERSION_V50_LOCATED_FOOD, SIM_VERSION_V66_QUEEN_STARVES_HP } from '../sim/types.js';
+import { SIM_VERSION_V71_HEALTH_MODEL } from '../sim/types.js';
+import { stageQueenInNest } from '../sim/health-test-utils.js';
 import { pheromoneKeyIsSurface } from '../sim/pheromone/pheromone-store.js';
 
 describe('save.ts (SCEN-04 + SCEN-06)', () => {
@@ -1288,14 +1291,12 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         OldSimVersionError,
       );
     });
-    it('#290 PR 2 — the V50 save wipe: every pre-V50 simVersion (V30..V49) is rejected as old', () => {
-      // MIN rose from V30 to V50 with the located food store; the whole old
-      // acceptance window is now below it and reports OldSimVersionError (the
-      // bootFromSave path overwrites such a save instead of loading it).
-      /** MIN_ACCEPTED_SIM_VERSION before the wipe (the old acceptance window's floor). */
-      const PRE_WIPE_MIN_ACCEPTED_SIM_VERSION = 30;
-      expect(MIN_ACCEPTED_SIM_VERSION).toBe(SIM_VERSION_V50_LOCATED_FOOD);
-      for (let v = PRE_WIPE_MIN_ACCEPTED_SIM_VERSION; v < SIM_VERSION_V50_LOCATED_FOOD; v++) {
+    it('#400 — the V71 save wipe: every simVersion below MIN (V30 up) is rejected as old; MIN loads', () => {
+      // Pre-1.0 policy (no simVersion gates): MIN moves with LATEST. #400 (V71) was
+      // the first such raise, from the V50 floor (#290 PR 2) — so V30..V70 report
+      // OldSimVersionError (bootFromSave overwrites such a save instead of loading it).
+      expect(MIN_ACCEPTED_SIM_VERSION).toBe(SIM_VERSION_V71_HEALTH_MODEL);
+      for (let v = 30; v < MIN_ACCEPTED_SIM_VERSION; v++) {
         const snapshot = makeSavedSnapshot((s) => {
           s.simVersion = v;
         });
@@ -1308,11 +1309,8 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         expect(err, `simVersion ${v}`).toBeInstanceOf(OldSimVersionError);
         expect((err as OldSimVersionError).got).toBe(v);
       }
-      // V50 itself loads.
       expect(() =>
-        deserializeWorldState(
-          makeSavedSnapshot((s) => (s.simVersion = SIM_VERSION_V50_LOCATED_FOOD)),
-        ),
+        deserializeWorldState(makeSavedSnapshot((s) => (s.simVersion = MIN_ACCEPTED_SIM_VERSION))),
       ).not.toThrow();
     });
   });
@@ -1558,9 +1556,8 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       const w2 = deserializeWorldState(s);
       expect(w2.tick).toBe(1_000_000);
     });
-    it('#375 V66: a queen mid-famine is valid up to COMBAT_HP_QUEEN × drain interval since her meal', () => {
+    it('#375/#400: a queen mid-famine is valid up to QUEEN_HP_HOME × drain interval since her meal', () => {
       const w = createScenario(42);
-      expect(w.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V66_QUEEN_STARVES_HP);
       // eslint-disable-next-line no-restricted-syntax -- test fixture: stage the world tick
       w.tick = 1000;
       for (const c of Object.values(w.colonies)) {
@@ -1569,20 +1566,49 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       }
       const q = w.colonies[PLAYER_COLONY_ID]!.queenEntityId;
       w.ants.hp[q] = 1; // her last drain is due on the next tick
-      w.ants.lastMealTick[q] = w.tick - COMBAT_HP_QUEEN * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS;
+      w.ants.lastMealTick[q] = w.tick - QUEEN_HP_HOME * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS;
       expect(() => deserializeWorldState(serializeWorldState(w))).not.toThrow();
       w.ants.lastMealTick[q] -= 1;
       expect(() => deserializeWorldState(serializeWorldState(w))).toThrow(/lastMealTick/);
     });
-    it('#375 V66: rejects a live queen above COMBAT_HP_QUEEN (the queen window assumes the cap)', () => {
+    it('#400: rejects a live adult above its max HP where it stands (the queen window assumes it)', () => {
       const w = createScenario(42);
-      const q = w.colonies[PLAYER_COLONY_ID]!.queenEntityId;
+      const colony = w.colonies[PLAYER_COLONY_ID]!;
+      const q = colony.queenEntityId;
+      // On the surface (createScenario): her max is COMBAT_HP_QUEEN.
       w.ants.hp[q] = COMBAT_HP_QUEEN;
       expect(() => deserializeWorldState(serializeWorldState(w))).not.toThrow();
       w.ants.hp[q] = COMBAT_HP_QUEEN + 1;
-      expect(() => deserializeWorldState(serializeWorldState(w))).toThrow(/above COMBAT_HP_QUEEN/);
-      w.simVersion = SIM_VERSION_V66_QUEEN_STARVES_HP - 1; // pre-V66: not checked
+      expect(() => deserializeWorldState(serializeWorldState(w))).toThrow(/above its max HP/);
+      // In her nest: QUEEN_HP_HOME.
+      stageQueenInNest(w, colony);
+      w.ants.hp[q] = QUEEN_HP_HOME;
       expect(() => deserializeWorldState(serializeWorldState(w))).not.toThrow();
+      w.ants.hp[q] = QUEEN_HP_HOME + 1;
+      expect(() => deserializeWorldState(serializeWorldState(w))).toThrow(/above its max HP/);
+      w.ants.hp[q] = QUEEN_HP_HOME;
+      // A worker on the surface: COMBAT_HP_BASE.
+      const worker = colony.workers[0]!;
+      w.ants.hp[worker] = COMBAT_HP_BASE + 1;
+      expect(() => deserializeWorldState(serializeWorldState(w))).toThrow(/above its max HP/);
+    });
+    it('#400: ants.lastHitTick and spider.lastHitTick round-trip; a hit in the future is rejected (ant) or dropped (spider)', () => {
+      const w = createScenario(42);
+      for (let t = 0; t < 3; t++) tick(w, []);
+      const worker = w.colonies[PLAYER_COLONY_ID]!.workers[0]!;
+      w.ants.lastHitTick[worker] = w.tick - 1;
+      w.spider!.lastHitTick = w.tick - 2;
+      const loaded = deserializeWorldState(serializeWorldState(w));
+      expect(loaded.ants.lastHitTick[worker]).toBe(w.tick - 1);
+      expect(loaded.ants.lastHitTick[0]).toBe(-1);
+      expect(loaded.spider!.lastHitTick).toBe(w.tick - 2);
+      w.ants.lastHitTick[worker] = w.tick; // a blow lands during a tick: at most tick − 1
+      expect(() => deserializeWorldState(serializeWorldState(w))).toThrow(/lastHitTick/);
+      w.ants.lastHitTick[worker] = -2;
+      expect(() => deserializeWorldState(serializeWorldState(w))).toThrow(/lastHitTick/);
+      w.ants.lastHitTick[worker] = -1;
+      w.spider!.lastHitTick = w.tick;
+      expect(deserializeWorldState(serializeWorldState(w)).spider!.lastHitTick).toBe(-1);
     });
     it('#290 accepts tick 2^31 − 1 and rejects tick 2^31 (int32 tick domain for Int32 tick columns)', () => {
       const w = createScenario(42);

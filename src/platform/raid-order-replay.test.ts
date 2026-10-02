@@ -65,6 +65,8 @@ interface Scenario {
   before?: (w: WorldState) => void;
   /** The order is under way at SPLIT (so the save / copy lands mid-order). */
   midOrder: (w: WorldState) => boolean;
+  /** Surface columns of the player's fighters (default three). */
+  fighterXs?: readonly number[];
 }
 
 interface Run {
@@ -118,7 +120,7 @@ function pilesByOwnDoor(w: WorldState): number {
 
 function run(sc: Scenario, split: 'none' | 'save' | 'copy', changeAt = -1): Run {
   const r = raidWorld(sc.larderFp);
-  for (const x of [20, 22, 26]) addFighter(r.world, P, x, r.playerDoor.y - 2, null);
+  for (const x of sc.fighterXs ?? [20, 22, 26]) addFighter(r.world, P, x, r.playerDoor.y - 2, null);
   const log = sc.log(r);
   let world = r.world;
   const out: Run = {
@@ -186,6 +188,9 @@ function replayed(sc: Scenario, changeAt = -1): Run {
   expect(d.hashes).toEqual(a.hashes);
   return a;
 }
+
+/** #400 (V71): fighters enough to beat the queen in her nest with one left below. */
+const QUEEN_RAID_XS = [18, 20, 22, 24, 26] as const;
 
 const SLOW = 120_000; // four multi-thousand-tick runs; slow on a loaded CI box
 
@@ -287,6 +292,9 @@ describe('V60 raid orders replay deterministically, across save/load and copy (#
           return log;
         },
         midOrder: inEnemyNest,
+        // #400 (V71): with no mid-fight healing the queen's HP rose; three fighters
+        // no longer outlast her, so one would not still be below at SPLIT.
+        fighterXs: QUEEN_RAID_XS,
       };
       const a = replayed(sc);
       expect(a.aimedAtQueen).toBeGreaterThan(0);
@@ -314,6 +322,7 @@ describe('V60 raid orders replay deterministically, across save/load and copy (#
         // Keep her fed so only the fighters can hurt her (unfed, the 2000 fp pool
         // runs dry near tick 1000 and starvation alone would lower her HP).
         before: feedEnemy,
+        fighterXs: QUEEN_RAID_XS, // #400: enough to outlast her (see Assault)
       };
       const a = replayed(sc);
       expect(a.aimedAtQueen).toBeGreaterThan(0);

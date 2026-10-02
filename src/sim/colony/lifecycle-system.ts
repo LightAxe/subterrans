@@ -49,6 +49,8 @@ import {
   WORKER_BASE_SPEED,
   WORKER_LIFESPAN_TICKS,
   MIN_EGG_INTERVAL_TICKS,
+  COMBAT_HP_BASE,
+  COMBAT_HP_HOMEGROUND_BONUS,
 } from '../constants.js';
 
 // ---------------------------------------------------------------------------
@@ -338,6 +340,8 @@ export function tickQueenEggProduction(world: WorldState, colony: ColonyRecord):
     lifespan: WORKER_LIFESPAN_TICKS,
     zone: Zone.Underground, // Gate 6 guarantees queen is Underground
     lastMealTick: world.tick, // eggs do not eat; hatching resets the clock
+    // #400 (V71): laid in its own nest, so at its home-ground max HP (health.ts).
+    hp: COMBAT_HP_BASE + COMBAT_HP_HOMEGROUND_BONUS,
   });
 
   colony.eggs.push(eggId);

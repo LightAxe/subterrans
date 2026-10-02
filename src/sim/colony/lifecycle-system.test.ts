@@ -25,6 +25,8 @@ import {
   EGG_HATCH_TICKS,
   LARVA_MATURE_TICKS,
   WORKER_BASE_SPEED,
+  COMBAT_HP_BASE,
+  COMBAT_HP_HOMEGROUND_BONUS,
 } from '../constants.js';
 import type { WorldState } from '../types.js';
 import type { ColonyRecord } from './colony-store.js';
@@ -289,6 +291,9 @@ describe('tickQueenEggProduction — Gate 6 queen-in-chamber', () => {
     expect(world.ants.posX[eggId]).toBe(QUEEN_X);
     expect(world.ants.posY[eggId]).toBe(QUEEN_Y);
     expect(world.ants.zone[eggId]).toBe(Zone.Underground);
+    // #400 (V71): laid in its own nest, at its home-ground max HP, never hit.
+    expect(world.ants.hp[eggId]).toBe(COMBAT_HP_BASE + COMBAT_HP_HOMEGROUND_BONUS);
+    expect(world.ants.lastHitTick[eggId]).toBe(-1);
   });
 
   it('6i. issue #22 — lays egg at a non-queen Open chamber tile when underground grid is present', () => {

@@ -29,7 +29,9 @@ import {
   BASE_FOOD_STORAGE_CAPACITY,
   FOOD_CHAMBER_CAPACITY,
   COMBAT_HP_QUEEN,
+  QUEEN_HP_HOME,
 } from '../sim/constants.js';
+import { Zone } from '../sim/terrain.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { QUEEN_HUNGER } from '../sim/hunger.js';
 import {
@@ -142,15 +144,42 @@ describe('computeHudStats', () => {
     expect(computeHudStats(world, colony).queenHealthPct).toBe(100);
   });
 
-  it('queenHealthPct is HP / COMBAT_HP_QUEEN (the issue repro: 6/30 reads 20, not 100)', () => {
+  // #400 (V71): her max HP where she stands — COMBAT_HP_QUEEN on the surface (the
+  // fixture's queen, before she founds her nest), QUEEN_HP_HOME in her nest.
+  const pctOf = (hp: number, max: number): number => Math.round((hp * 100) / max);
+
+  it('queenHealthPct is HP / her max HP on the surface (#375: a wounded queen does not read 100)', () => {
     const { world, colony, queenId } = setupWorld();
     setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, STARVATION_GRACE_TICKS);
     world.ants.hp[queenId] = 6;
-    expect(computeHudStats(world, colony).queenHealthPct).toBe(20);
+    expect(computeHudStats(world, colony).queenHealthPct).toBe(pctOf(6, COMBAT_HP_QUEEN));
     world.ants.hp[queenId] = 15;
-    expect(computeHudStats(world, colony).queenHealthPct).toBe(50);
-    world.ants.hp[queenId] = 29;
-    expect(computeHudStats(world, colony).queenHealthPct).toBe(97);
+    expect(computeHudStats(world, colony).queenHealthPct).toBe(pctOf(15, COMBAT_HP_QUEEN));
+    world.ants.hp[queenId] = COMBAT_HP_QUEEN - 1;
+    expect(computeHudStats(world, colony).queenHealthPct).toBe(
+      pctOf(COMBAT_HP_QUEEN - 1, COMBAT_HP_QUEEN),
+    );
+  });
+
+  it('#400: in her nest the bar is out of QUEEN_HP_HOME, so it drops from the first blow', () => {
+    const { world, colony, queenId } = setupWorld();
+    world.ants.zone[queenId] = Zone.Underground; // currentGridColonyId is her own (initAnt)
+    setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, STARVATION_GRACE_TICKS);
+    world.ants.hp[queenId] = QUEEN_HP_HOME;
+    expect(computeHudStats(world, colony).queenHealthPct).toBe(100);
+    world.ants.hp[queenId] = QUEEN_HP_HOME - 5; // one fighter's home-ground blow
+    expect(computeHudStats(world, colony).queenHealthPct).toBe(
+      pctOf(QUEEN_HP_HOME - 5, QUEEN_HP_HOME),
+    );
+    expect(computeHudStats(world, colony).queenHealthPct).toBeLessThan(100);
+    // Coming home raises the max but does not heal: her surface HP reads below full.
+    world.ants.hp[queenId] = COMBAT_HP_QUEEN;
+    expect(computeHudStats(world, colony).queenHealthPct).toBe(
+      pctOf(COMBAT_HP_QUEEN, QUEEN_HP_HOME),
+    );
+    // Inside an enemy nest she would be away (never happens; the rule is colony-blind).
+    world.ants.currentGridColonyId[queenId] = 2;
+    expect(computeHudStats(world, colony).queenHealthPct).toBe(100);
   });
 
   it('V66: hunger alone does not move the bar (only the HP it drains does)', () => {
@@ -159,7 +188,7 @@ describe('computeHudStats', () => {
     setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, 5);
     expect(computeHudStats(world, colony).queenHealthPct).toBe(100);
     world.ants.hp[queenId] = 12;
-    expect(computeHudStats(world, colony).queenHealthPct).toBe(40);
+    expect(computeHudStats(world, colony).queenHealthPct).toBe(pctOf(12, COMBAT_HP_QUEEN));
   });
 
   it('pre-V66: the bar shows the lower of HP and meals-until-starvation', () => {
@@ -168,17 +197,9 @@ describe('computeHudStats', () => {
     setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, STARVATION_GRACE_TICKS >> 1);
     expect(computeHudStats(world, colony).queenHealthPct).toBe(50); // hunger lower
     world.ants.hp[queenId] = 6;
-    expect(computeHudStats(world, colony).queenHealthPct).toBe(20); // HP lower
+    expect(computeHudStats(world, colony).queenHealthPct).toBe(pctOf(6, COMBAT_HP_QUEEN)); // HP lower
     setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, 0);
     expect(computeHudStats(world, colony).queenHealthPct).toBe(0);
-  });
-
-  it('the home-ground combat buffer is not counted', () => {
-    const { world, colony, queenId } = setupWorld();
-    setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, STARVATION_GRACE_TICKS);
-    world.ants.hp[queenId] = 15;
-    world.ants.homeGroundBonusHp[queenId] = 10;
-    expect(computeHudStats(world, colony).queenHealthPct).toBe(50);
   });
 
   it('queenHealthPct clamps to [0, 100]', () => {

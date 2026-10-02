@@ -11,6 +11,8 @@ import {
 } from './types.js';
 import { PLAYTRACE_EVENT_CAP_PER_ROUND } from './telemetry.js';
 import { tickSpider, isSpiderPassable, computeFeedAwayTile } from './spider.js';
+import { createScenario } from './scenario.js';
+import { tick } from './tick.js';
 import { SurfaceMovementEffect } from './surface-features.js';
 import { initAnt } from './ant/ant-store.js';
 import { AntTask, PheromoneType } from './enums.js';
@@ -33,7 +35,6 @@ import {
   SPIDER_MEANDER_TICK_DIVISOR,
   SPIDER_FEED_TICKS,
   SPIDER_FEED_RETREAT_TILES,
-  SPIDER_FEED_HEAL_INTERVAL_TICKS,
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
   PLAYER_COLONY_ID,
@@ -80,6 +81,7 @@ function makeSpider(overrides: Partial<SpiderState> = {}): SpiderState {
     feedAwayTileX: -1,
     feedAwayTileY: -1,
     feedArrivedTick: -1,
+    lastHitTick: -1,
     rampageEntranceId: -1,
     rampageRotationEntranceId: -1,
     rampageRotationTick: -1,
@@ -1393,7 +1395,7 @@ describe('tickSpider', () => {
       }
     });
 
-    it('heals ~+1 HP per interval while parked at the feed tile, then resumes Patrolling', () => {
+    it('#400: eats at the feed tile without healing (tickSpider), then resumes Patrolling', () => {
       const world = makeWorld();
       world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
       const fx = 70;
@@ -1409,21 +1411,19 @@ describe('tickSpider', () => {
         hp: 40,
       });
 
-      // Advance through the heal window. No fighters anywhere → never interrupted.
-      const startHp = world.spider.hp;
+      // Through the whole feed window, no fighters anywhere → never interrupted. The
+      // spider's healing lives in health.ts (step 16f, fed and safe); the feed itself
+      // heals nothing (up to V70 it regained 1 HP every 10 ticks here).
       for (let t = arrived + 1; t <= arrived + SPIDER_FEED_TICKS; t++) {
         world.tick = t;
         tickSpider(world);
+        expect(world.spider.hp).toBe(40);
         if (world.spider === null || world.spider.state !== 'Feeding') break;
       }
-      // Healed by roughly SPIDER_FEED_TICKS / interval HP (within 2 of target).
-      // eslint-disable-next-line no-restricted-syntax -- test-only expected-count math; both operands are constants, result is floored
-      const expectedHeal = Math.floor(SPIDER_FEED_TICKS / SPIDER_FEED_HEAL_INTERVAL_TICKS);
-      expect(world.spider.hp).toBeGreaterThanOrEqual(startHp + expectedHeal - 2);
       expect(world.spider.state).toBe('Patrolling');
     });
 
-    it('a fighter reaching the feeding spider interrupts the heal → Patrolling', () => {
+    it('a fighter reaching the feeding spider interrupts the meal → Patrolling', () => {
       const world = makeWorld();
       world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;
       const fx = 70;
@@ -1659,7 +1659,7 @@ describe('spider terrain passability (#225, V31)', () => {
     expect(gotPastWall).toBe(true); // detoured around it (greedy would hold at wallX-1 for 300 ticks)
   });
 
-  it('Feeding stays terrain-blind under V31: crosses a boulder to the feed tile and heals (C3)', () => {
+  it('Feeding stays terrain-blind under V31: crosses a boulder to the feed tile and starts eating (C3)', () => {
     const world = makeCleanWorld();
     const sx = 64;
     const sy = 32;
@@ -1671,12 +1671,13 @@ describe('spider terrain passability (#225, V31)', () => {
       feedAwayTileX: sx + 2,
       feedAwayTileY: sy,
       feedArrivedTick: -1,
+      lastHitTick: -1,
       hp: SPIDER_HP_FULL - 5,
       lastKillTileX: sx,
       lastKillTileY: sy,
     });
     let reachedFeedTile = false;
-    let healed = false;
+    let ate = false;
     for (let t = 1; t <= 60; t++) {
       world.tick = t;
       tickSpider(world);
@@ -1684,11 +1685,11 @@ describe('spider terrain passability (#225, V31)', () => {
       if (world.spider.posX >> FP_SHIFT === sx + 2 && world.spider.posY >> FP_SHIFT === sy) {
         reachedFeedTile = true;
       }
-      if (world.spider.hp > SPIDER_HP_FULL - 5) healed = true;
+      if (world.spider.feedArrivedTick >= 0) ate = true; // the feed window began (#400: no heal)
     }
     // Passability-gated Feeding would livelock at sx (refusing the boulder step).
     expect(reachedFeedTile).toBe(true);
-    expect(healed).toBe(true);
+    expect(ate).toBe(true);
   });
 
   it('V31 meander fires the probe on a HardBlock hash target and steps onto passable ground', () => {
@@ -1822,5 +1823,79 @@ describe('spider terrain passability (#225, V31)', () => {
     }
     // Terrain-blind hatch walked it out onto passable ground (never stranded).
     expect(escaped).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #400 (V71) — a spider priority stays on until the player clears it or the spider dies
+// ---------------------------------------------------------------------------
+
+describe('#400 spider priority persists (only the player or the spider dying ends it)', () => {
+  /** A real scenario world (colonies, entrances, grids) with its spider restaged. */
+  function priorityWorld(spider: Partial<SpiderState>): WorldState {
+    const world = createScenario(11, 'Normal');
+    world.spider = makeSpider(spider);
+    world.spiderPriorityColonyId = PLAYER_COLONY_ID;
+    return world;
+  }
+
+  it('a kill out of danger sends it Feeding and the priority stays on (V70 cleared it)', () => {
+    const world = priorityWorld({ state: 'Chasing', killedThisTick: 1, hungerTicks: 1500 });
+    world.tick = 5000;
+    tickSpider(world);
+    expect(world.spider!.state).toBe('Feeding');
+    expect(world.spider!.hungerTicks).toBe(0);
+    expect(world.spiderPriorityColonyId).toBe(PLAYER_COLONY_ID);
+  });
+
+  it('a strike that times out with no kill (Striking → Patrolling) keeps it', () => {
+    const world = priorityWorld({ state: 'Striking', strikeStartTick: 4000 });
+    world.tick = 4000 + SPIDER_STRIKE_TICKS;
+    tickSpider(world);
+    expect(world.spider!.state).toBe('Patrolling');
+    expect(world.spiderPriorityColonyId).toBe(PLAYER_COLONY_ID);
+  });
+
+  it('a rampage that leashes out (Rampaging → Patrolling) keeps it', () => {
+    const world = priorityWorld({
+      state: 'Rampaging',
+      rampageStartTick: 4000,
+      rampageTargetColonyId: PLAYER_COLONY_ID,
+      rampageKillsThisRampage: 1,
+      hungerTicks: 1500,
+    });
+    world.tick = 4000 + SPIDER_RAMPAGE_MAX_TICKS;
+    tickSpider(world);
+    expect(world.spider!.state).toBe('Patrolling');
+    expect(world.spiderPriorityColonyId).toBe(PLAYER_COLONY_ID);
+  });
+
+  it('a hunt broken off to chase an attacking fighter (Hunting → Chasing) keeps it', () => {
+    const world = priorityWorld({ state: 'Hunting', huntStartTick: 4000 });
+    world.tick = 4010;
+    placeFighter(world, 65, 32);
+    tickSpider(world);
+    expect(world.spider!.state).toBe('Chasing');
+    expect(world.spiderPriorityColonyId).toBe(PLAYER_COLONY_ID);
+  });
+
+  it('its death clears it', () => {
+    const world = priorityWorld({ hp: 0 });
+    tickSpider(world);
+    expect(world.spider).toBeNull();
+    expect(world.spiderPriorityColonyId).toBeNull();
+  });
+
+  it('the player clears it (MarkSpiderPriority off) through tick()', () => {
+    const world = priorityWorld({});
+    tick(world, [
+      {
+        type: 'MarkSpiderPriority',
+        colonyId: PLAYER_COLONY_ID,
+        isPriority: false,
+        issuedAtTick: world.tick,
+      },
+    ]);
+    expect(world.spiderPriorityColonyId).toBeNull();
   });
 });

@@ -173,8 +173,6 @@ describe('combat cross-grid — tile-key gridColonyId extension (REQ-C4)', () =>
     // V16 fighters skip windup and strike immediately; 1 HP < COMBAT_DAMAGE_BASE → queen dies.
     // This tests cross-grid tile-key bucketing: ants sharing the same (tileX,tileY,grid) engage.
     world.ants.hp[enemyQueenId] = 1;
-    world.ants.homeGroundBonusHp[enemyQueenId] = 0;
-    // Mark queen as not-fresh so combat init does not overwrite homeGroundBonusHp=0.
     world.ants.attackCooldown[enemyQueenId] = 1;
     detectAndResolveCombat(world, new Rng(world.rngState));
 

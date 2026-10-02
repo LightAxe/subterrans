@@ -108,6 +108,7 @@ function placeAggroSpider(world: WorldState, tileX: number, tileY: number): Spid
     feedAwayTileX: -1,
     feedAwayTileY: -1,
     feedArrivedTick: -1,
+    lastHitTick: -1,
     rampageEntranceId: -1,
     rampageRotationEntranceId: -1,
     rampageRotationTick: -1,

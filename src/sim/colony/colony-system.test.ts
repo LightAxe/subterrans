@@ -51,7 +51,7 @@ import {
   FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP,
   BASE_FOOD_STORAGE_CAPACITY,
   PLAYER_COLONY_ID,
-  COMBAT_HP_QUEEN,
+  QUEEN_HP_HOME,
 } from '../constants.js';
 import { createUndergroundGrid, ugSet, UndergroundTileState } from '../terrain.js';
 import { FP_SHIFT } from '../fixed.js';
@@ -80,7 +80,9 @@ function setupWorldWithQueen(poolFp = 1000): { world: WorldState; colony: Colony
     posX: 256,
     posY: 256,
     task: AntTask.Idle,
-    hp: COMBAT_HP_QUEEN, // as createScenario spawns her; V66 starves her by HP (#375)
+    // At full health in her nest (#400: QUEEN_HP_HOME); V66 starves her by HP (#375),
+    // so her full home HP is what lasts STARVATION_GRACE_TICKS.
+    hp: QUEEN_HP_HOME,
   });
 
   const colony = createColonyRecord(COLONY_ID, queenId);
@@ -564,6 +566,9 @@ describe('tickFoodConsumption — CLNY-04 queen starvation cascade', () => {
     const q = colony.queenEntityId;
     expect(world.ants.lastMealTick[q]).toBe(-1);
     expect(queenMeals(world, colony)).toBe(STARVATION_GRACE_TICKS);
+    // #400 (V71): full health in her nest (step 3 alone does not clamp; on the
+    // surface her full HP, COMBAT_HP_QUEEN, starves sooner — queen-starvation-drain.test).
+    world.ants.hp[q] = QUEEN_HP_HOME;
     setColonyFoodForTest(world, colony, 0);
     for (let t = 0; t < STARVATION_GRACE_TICKS - 1; t++) {
       consume(world, colony);

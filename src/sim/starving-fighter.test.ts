@@ -284,6 +284,10 @@ describe('#363 — on the surface, a starving fighter drops the fight', () => {
     for (let t = 0; t < 30; t++) {
       setPoolFoodForTest(world, colony, 0); // hold the famine
       world.ants.lastMealTick[eid] = world.tick;
+      // #400 (V71): step 16f clamps to the max HP where an ant stands; restore
+      // "unkillable" each tick.
+      world.ants.hp[id] = UNKILLABLE_HP;
+      world.ants.hp[eid] = UNKILLABLE_HP;
       tick(world, []);
       expect(world.ants.alive[id]).toBe(1);
       expect(fighterWalksHomeToEat(world, id)).toBe(false);
@@ -322,6 +326,9 @@ describe('#363 — on the surface, a starving fighter drops the fight', () => {
         world.ants.posX[eid] = world.ants.posX[id]!;
         world.ants.posY[eid] = world.ants.posY[id]!;
         world.ants.lastMealTick[eid] = world.tick;
+        // #400 (V71): restore "unkillable" past step 16f's max-HP clamp each tick.
+        world.ants.hp[id] = UNKILLABLE_HP;
+        world.ants.hp[eid] = UNKILLABLE_HP;
         tick(world, []);
         if (fighterWalksHomeToEat(world, id)) walkedHome++;
         if (world.ants.combatOpponentId[id] === eid) dueled++;
@@ -411,6 +418,9 @@ describe('#363 — below ground in an enemy nest, a starving invader leaves from
     let ate = false;
     for (let t = 0; t < FIGHTER_MEAL_INTERVAL_TICKS && !ate; t++) {
       world.ants.lastMealTick[eid] = world.tick;
+      // #400 (V71): restore "unkillable" past step 16f's max-HP clamp each tick.
+      world.ants.hp[id] = UNKILLABLE_HP;
+      world.ants.hp[eid] = UNKILLABLE_HP;
       tick(world, []);
       expect(world.ants.alive[id]).toBe(1);
       if (world.ants.zone[id] === Zone.Surface) {
