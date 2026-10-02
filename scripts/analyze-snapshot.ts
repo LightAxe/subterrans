@@ -151,9 +151,10 @@ console.log('');
 
 // A snapshot outside this build's [MIN_ACCEPTED_SIM_VERSION, LATEST_SIM_VERSION]
 // window can be neither loaded nor replayed here. Pre-1.0 (AGENTS.md "simVersion and
-// saves") sim behaviour changes are not version-gated, so a snapshot replays only on
-// the build that recorded it. Say which build to check out (snapshot-window.ts),
-// instead of crashing on load or reporting a bogus SCEN-06 mismatch.
+// saves") sim behaviour changes are not version-gated, so a snapshot is only
+// guaranteed to replay on the build that recorded it. Say which build to check out
+// (snapshot-window.ts) instead of crashing on load or reporting a bogus SCEN-06
+// mismatch.
 // A missing or non-integer simVersion is refused here as well: deserializeWorldState
 // would reject it anyway, after a pointless full replay and a bogus SCEN-06 warning.
 function refuseOutOfWindow(got: number | null): void {
