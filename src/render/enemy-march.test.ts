@@ -622,6 +622,80 @@ describe('measureEnemyMarch — which entrance', () => {
   });
 });
 
+describe('measureEnemyMarch — reused scratch buffers (#404 review)', () => {
+  /** `h` with its own fresh scratch, sharing `h`'s samples. */
+  const freshScratch = (h: MarchHistory): MarchHistory => ({
+    ...h,
+    scratch: createMarchHistory().scratch,
+  });
+
+  it('allocates its buffers once: the same arrays measurement after measurement', () => {
+    const { world: w, h } = setup();
+    const ids = army(w, MARCH_MIN_FIGHTERS, 60, 63);
+    const { doors, own, army: tally, all } = h.scratch;
+    const [aim, ox] = [tally.aim, own.x];
+    stride(w, h, ids, -10, 0);
+    measureEnemyMarch(w, P, h);
+    advance(w, MARCH_SAMPLE_TICKS);
+    observeMarchHistory(h, w);
+    measureEnemyMarch(w, P, h);
+    expect(h.scratch.doors).toBe(doors);
+    expect(h.scratch.own).toBe(own);
+    expect(h.scratch.army).toBe(tally);
+    expect(h.scratch.all).toBe(all);
+    expect(h.scratch.army.aim).toBe(aim);
+    expect(h.scratch.own.x).toBe(ox);
+  });
+
+  it('a runner seen by one measurement is not left over for the next', () => {
+    const { world: w, h } = setup();
+    const ids = army(w, MARCH_MIN_FIGHTERS, 80, 64);
+    const own = addFighter(w, P, 40, 64, null);
+    place(w, own, 70.5 - 3 + 10, 65); // ends 3 tiles in front of the lead
+    stride(w, h, [...ids, own], -10, 0);
+    expect(measureEnemyMarch(w, P, h)).toMatchObject({ fighters: 0, chasing: MARCH_MIN_FIGHTERS });
+    // The quarry goes below: nobody is chased now.
+    w.ants.zone[own] = Zone.Underground;
+    const after = measureEnemyMarch(w, P, h);
+    expect(after).toMatchObject({ fighters: MARCH_MIN_FIGHTERS, chasing: 0 });
+    expect(after).toEqual(measureEnemyMarch(w, P, freshScratch(h)));
+  });
+
+  it('aims tallied by one measurement are not left over for the next (nor a door since closed)', () => {
+    const { world: w, h, player } = setup();
+    const top = addEntrance(w, player, 24, 30);
+    const west = army(w, 2, 60, 64);
+    const north = army(w, 4, 46, 46);
+    for (let t = 0; t < MARCH_WINDOW_TICKS; t++) {
+      observeMarchHistory(h, w);
+      advance(w, 1);
+    }
+    for (const id of west) {
+      const [x, y] = pos(w, id);
+      place(w, id, x - 10, y);
+    }
+    for (const id of north) {
+      const [x, y] = pos(w, id);
+      const dx = 24.5 - x;
+      const dy = 30.5 - y;
+      const d = Math.hypot(dx, dy);
+      place(w, id, x + (6 * dx) / d, y + (6 * dy) / d);
+    }
+    observeMarchHistory(h, w);
+    expect(measureEnemyMarch(w, P, h)!.entrance).toBe(top); // four aim at it
+    // The four die: the two aiming at the row-64 door are the march now.
+    for (const id of north) w.ants.alive[id] = 0;
+    const two = measureEnemyMarch(w, P, h)!;
+    expect(two).toMatchObject({ fighters: 2, entrance: { surfaceTileY: DOOR.y } });
+    expect(two).toEqual(measureEnemyMarch(w, P, freshScratch(h)));
+    // And with the top door closed (one door fewer than the buffers last held).
+    for (const id of north) w.ants.alive[id] = 1;
+    measureEnemyMarch(w, P, h);
+    top.isOpen = false;
+    expect(measureEnemyMarch(w, P, h)).toEqual(measureEnemyMarch(w, P, freshScratch(h)));
+  });
+});
+
 describe('MarchHistory — sampling', () => {
   it('samples every MARCH_SAMPLE_TICKS; a frame on the same tick takes nothing new', () => {
     const { world: w, h } = setup();

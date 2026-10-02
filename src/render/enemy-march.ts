@@ -148,6 +148,43 @@ export interface MarchHistory {
   samples: MarchSample[];
   head: number;
   count: number;
+  /** measureEnemyMarch's working buffers, reused every measurement (it runs every
+   *  tick, so it allocates none of them anew). Render-side scratch. */
+  scratch: MarchScratch;
+}
+
+/** Per entrance: how many fighters aim at it, their summed distance to it, and
+ *  their bounding box. */
+interface AimTally {
+  aim: number[];
+  dist: number[];
+  minX: number[];
+  minY: number[];
+  maxX: number[];
+  maxY: number[];
+}
+
+/** The viewer's surface fighters on the move: positions and unit headings. */
+interface OwnRunners {
+  x: number[];
+  y: number[];
+  hx: number[];
+  hy: number[];
+}
+
+/** The working buffers of one measureEnemyMarch call (contents are meaningless
+ *  between calls). */
+interface MarchScratch {
+  /** The viewer's open entrances. */
+  doors: NestEntrance[];
+  own: OwnRunners;
+  /** Per door, of the army (fighters not chasing), and of every marcher. */
+  army: AimTally;
+  all: AimTally;
+}
+
+function emptyTally(): AimTally {
+  return { aim: [], dist: [], minX: [], minY: [], maxX: [], maxY: [] };
 }
 
 export function createMarchHistory(): MarchHistory {
@@ -155,7 +192,13 @@ export function createMarchHistory(): MarchHistory {
   for (let i = 0; i < MARCH_HISTORY_SAMPLES; i++) {
     samples.push({ atTick: -1, ids: [], x: [], y: [] });
   }
-  return { world: null, lastTick: -1, samples, head: 0, count: 0 };
+  const scratch: MarchScratch = {
+    doors: [],
+    own: { x: [], y: [], hx: [], hy: [] },
+    army: emptyTally(),
+    all: emptyTally(),
+  };
+  return { world: null, lastTick: -1, samples, head: 0, count: 0, scratch };
 }
 
 /** Forget every sample. */
@@ -285,26 +328,22 @@ function otherDoorNearerAhead(
   return false;
 }
 
-/** Per entrance: how many fighters aim at it, their summed distance to it, and
- *  their bounding box. */
-interface AimTally {
-  aim: number[];
-  dist: number[];
-  minX: number[];
-  minY: number[];
-  maxX: number[];
-  maxY: number[];
-}
-
-function aimTally(n: number): AimTally {
-  return {
-    aim: new Array<number>(n).fill(0),
-    dist: new Array<number>(n).fill(0),
-    minX: new Array<number>(n).fill(Infinity),
-    minY: new Array<number>(n).fill(Infinity),
-    maxX: new Array<number>(n).fill(-Infinity),
-    maxY: new Array<number>(n).fill(-Infinity),
-  };
+/** Clear `t` for `n` entrances: no aims, empty boxes. */
+function resetTally(t: AimTally, n: number): void {
+  t.aim.length = n;
+  t.dist.length = n;
+  t.minX.length = n;
+  t.minY.length = n;
+  t.maxX.length = n;
+  t.maxY.length = n;
+  for (let d = 0; d < n; d++) {
+    t.aim[d] = 0;
+    t.dist[d] = 0;
+    t.minX[d] = Infinity;
+    t.minY[d] = Infinity;
+    t.maxX[d] = -Infinity;
+    t.maxY[d] = -Infinity;
+  }
 }
 
 /** Count a fighter at `x,y`, `dist` tiles from entrance `d`, as aiming at it. */
@@ -315,14 +354,6 @@ function tallyAim(t: AimTally, d: number, dist: number, x: number, y: number): v
   if (y < t.minY[d]!) t.minY[d] = y;
   if (x > t.maxX[d]!) t.maxX[d] = x;
   if (y > t.maxY[d]!) t.maxY[d] = y;
-}
-
-/** The viewer's surface fighters on the move: positions and unit headings. */
-interface OwnRunners {
-  x: number[];
-  y: number[];
-  hx: number[];
-  hy: number[];
 }
 
 /** Index of ant `id` in `s.ids` (ascending), or -1. */
@@ -358,7 +389,9 @@ function runnerAhead(own: OwnRunners, x: number, y: number, hx: number, hy: numb
  * The enemy fighters marching on the viewer's open entrances, or null when none
  * is (or the viewer has no open entrance, or `history` holds no sample old
  * enough). No threshold: see isEnemyMarching. `history` must have been observed
- * on this world (observeMarchHistory); this reads it, never writes it.
+ * on this world (observeMarchHistory); this reads its samples and writes only its
+ * scratch buffers (history.scratch), so it allocates nothing per call but the
+ * result (and none when there is no march).
  *
  * A fighter marches when it is alive, on the surface, of another colony, doing
  * the Fighting task, more than MARCH_HOME_RADIUS_TILES from its own colony's open
@@ -390,7 +423,10 @@ export function measureEnemyMarch(
   const viewer = world.colonies[viewerColonyId];
   if (viewer === undefined) return null;
   if (history.world !== world) return null;
-  const doors = viewer.entrances.filter((e) => e.isOpen);
+  const sc = history.scratch;
+  const doors = sc.doors;
+  doors.length = 0;
+  for (const e of viewer.entrances) if (e.isOpen) doors.push(e);
   const n = doors.length;
   if (n === 0) return null;
   const old = headingSample(history, world.tick);
@@ -401,14 +437,20 @@ export function measureEnemyMarch(
   // the window's minimum pace (MARCH_MIN_STEP_TILES a window).
   const minProgress = (MARCH_MIN_STEP_TILES * (world.tick - recent.atTick)) / MARCH_WINDOW_TICKS;
   // Per entrance, of the army (fighters not chasing) and of every marcher.
-  const army = aimTally(n);
-  const all = aimTally(n);
+  const army = sc.army;
+  const all = sc.all;
+  resetTally(army, n);
+  resetTally(all, n);
   let fighters = 0;
   let chasing = 0;
   const ants = world.ants;
   // The viewer's own surface fighters on the move, with their headings: an enemy
   // close behind one, going the same way, is chasing it.
-  const own: OwnRunners = { x: [], y: [], hx: [], hy: [] };
+  const own = sc.own;
+  own.x.length = 0;
+  own.y.length = 0;
+  own.hx.length = 0;
+  own.hy.length = 0;
   for (const id of viewer.workers) {
     if (ants.alive[id] !== 1) continue;
     if (ants.colonyId[id] !== viewerColonyId) continue;
