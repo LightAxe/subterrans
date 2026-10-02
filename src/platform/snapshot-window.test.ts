@@ -42,19 +42,38 @@ describe('snapshotWindowMessage (analyze-snapshot out-of-window guidance)', () =
     expect(msg).not.toBeNull();
     expect(msg).toContain("simVersion 69, newer than this build's LATEST (68)");
     expect(msg).toContain('run git fetch origin, then check out that sha');
-    // F9 export: fetch FIRST, then the last commit at V69 on origin/main, i.e. the
-    // parent of the commit that moved LATEST off V69, else origin/main itself. Pinned
-    // as one block so the fetch can't be dropped or reordered.
+    // F9 export, pinned as one block so no step can be dropped or reordered:
+    //   1. fetch first;
+    //   2. origin/main itself, but ONLY if its LATEST is V69 (checked first, so a
+    //      reverted and re-landed V69 still resolves to the tip);
+    //   3. else the parent of the commit that moved LATEST off V69 on origin/main;
+    //   4. else (origin/main never reached V69) list the branch commits touching it.
+    // Without the step-2 guard, a version origin/main never reached would check out a
+    // build that refuses the snapshot again (CodeRabbit on #407).
     expect(msg).toContain(
       '        git fetch origin\n' +
         `        c=$(git log origin/main --reverse --format=%h -S 'LATEST_SIM_VERSION = SIM_VERSION_V69_' -- src/sim/types.ts | sed -n 2p)\n` +
-        '        git checkout "${c:-origin/main}${c:+^}"',
+        "        if git grep -q 'LATEST_SIM_VERSION = SIM_VERSION_V69_' origin/main -- src/sim/types.ts; then git checkout origin/main\n" +
+        '        elif [ -n "$c" ]; then git checkout "$c^"\n' +
+        "        else echo 'origin/main never reached V69; branch commits that touched SIM_VERSION_V69_ (none listed? ask for the playtrace):'; git log --all --oneline -S 'SIM_VERSION_V69_' -- src/sim/types.ts; fi",
+    );
+    // Every checkout of origin/main is behind the LATEST check on the same line.
+    const lines = (msg ?? '').split('\n');
+    const tipCheckouts = lines.filter((l) => l.includes('git checkout origin/main'));
+    expect(tipCheckouts).toHaveLength(1);
+    expect(tipCheckouts[0]).toMatch(
+      /^ {8}if git grep -q 'LATEST_SIM_VERSION = SIM_VERSION_V69_' origin\/main -- src\/sim\/types\.ts; then git checkout origin\/main$/,
     );
     // The recording build is newer than this checkout, so the search must never be
     // over this checkout's own history.
     expect(msg).not.toContain('git log --reverse');
-    // An export from an unmerged branch: find the commit that added the constant.
-    expect(msg).toContain("git log --all --oneline -S 'SIM_VERSION_V69_' -- src/sim/types.ts");
+  });
+
+  it('well above LATEST: every command names the snapshot version, not LATEST + 1', () => {
+    const msg = snapshotWindowMessage(LATEST + 5, MIN, LATEST) ?? '';
+    expect(msg).toContain("simVersion 73, newer than this build's LATEST (68)");
+    for (const v of ['SIM_VERSION_V73_', 'never reached V73']) expect(msg).toContain(v);
+    expect(msg).not.toContain('V69');
   });
 
   it('missing or invalid simVersion: says so and does not invent a build', () => {
