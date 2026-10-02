@@ -30,9 +30,15 @@ export type EntityId = number; // incrementing counter from 0, no recycling per 
 
 /**
  * Sim-behavior version. Independent of SAVE_FORMAT_VERSION (which gates the
- * on-disk envelope shape). simVersion gates determinism-affecting algorithm
- * changes that DON'T change the snapshot shape — old saves still load fine,
- * but replay using the algorithm they were recorded under.
+ * on-disk envelope shape).
+ *
+ * PRE-1.0 POLICY (2026-10-01; AGENTS.md "simVersion and saves"): a sim-behaviour
+ * change adds a SIM_VERSION_V* constant, points LATEST_SIM_VERSION at it, and sets
+ * MIN_ACCEPTED_SIM_VERSION (platform/save.ts) to the same value. Do NOT wrap the new
+ * behaviour in a `simVersion >=` gate; older saves are rejected instead. The entries
+ * below, up to V70, record the earlier gated policy: their gates let an older save
+ * replay under the algorithm it was recorded with. Those gates stay until a separate
+ * reaping decision; once MIN === LATEST they are production-dead.
  *
  * v2 (LEGACY_SIM_VERSION) — issue #15 baseline. withdrawFood drains
  * FoodStorage chambers in colony.chambers array order; no carrier
@@ -1032,7 +1038,7 @@ export const SIM_VERSION_V49_ALARM_MUSTER = 49 as const;
  * #290 PR 2 — V50 the located food store and the count-up hunger clock.
  *
  * Storage swap, no behaviour change, and a DELIBERATE save wipe (MIN_ACCEPTED is
- * raised to V50; see DELIBERATE_WINDOW_BREAK_AT in platform/save.ts):
+ * raised to V50; see MIN_ACCEPTED_SIM_VERSION in platform/save.ts):
  *   - `world.foodPiles` (an array of pile objects), `ColonyRecord.foodStored` (the
  *     entrance pool) and `ChamberRecord.foodStored` (FoodStorage stock) become one
  *     structure-of-arrays table, `world.food` (src/sim/food/food-store.ts): one

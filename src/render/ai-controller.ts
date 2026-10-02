@@ -230,7 +230,7 @@ export function runAIController(world: WorldState, aiColonyId: ColonyId): void {
 }
 
 // ---------------------------------------------------------------------------
-// #293 — survival mode (render-side policy; no simVersion, nothing in WorldState)
+// #293 — survival mode (AI policy, shipped at V40; nothing in WorldState)
 // ---------------------------------------------------------------------------
 
 /** In survival mode at or below this many living workers (with a low larder). */

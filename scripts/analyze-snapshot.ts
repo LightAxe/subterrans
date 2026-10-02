@@ -52,7 +52,8 @@ const { createScenario } = await import('../src/sim/scenario.js');
 const { tick } = await import('../src/sim/tick.js');
 const { Zone, UndergroundTileState, ugGet } = await import('../src/sim/terrain.js');
 const { FP_SHIFT } = await import('../src/sim/fixed.js');
-const { SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES } = await import('../src/sim/types.js');
+const { SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES, LATEST_SIM_VERSION } =
+  await import('../src/sim/types.js');
 const { AntTask, ForagingSubState } = await import('../src/sim/enums.js');
 const { serializeWorldState, deserializeWorldState, MIN_ACCEPTED_SIM_VERSION, OldSimVersionError } =
   await import('../src/platform/save.js');
@@ -147,22 +148,51 @@ console.log(
 );
 console.log('');
 
-// #290 PR 2 — a snapshot older than this build's acceptance window (every capture
-// before the V50 located-food save wipe) can be neither loaded nor replayed here:
-// its state shape predates the food store. Say so instead of crashing on load.
+// A snapshot outside this build's [MIN_ACCEPTED_SIM_VERSION, LATEST_SIM_VERSION]
+// window can be neither loaded nor replayed here. Pre-1.0 (AGENTS.md "simVersion and
+// saves") sim behaviour changes are not version-gated and every sim PR raises MIN to
+// LATEST, so this build does not have the rules an older snapshot ran under. It must
+// be replayed on the build that recorded it. Say so instead of crashing on load or
+// reporting a bogus SCEN-06 mismatch.
+const SAME_BUILD_RULE =
+  `  Snapshots replay only on the build that recorded them: before 1.0, sim changes ` +
+  `are not version-gated, so a different build does not run the rules it was recorded under.\n`;
 function explainPreWindowSnapshot(got: unknown): never {
+  const n = typeof got === 'number' && Number.isInteger(got) ? got : null;
+  const captured =
+    n === null
+      ? `has a missing or invalid simVersion, so this build (minimum ` +
+        `${MIN_ACCEPTED_SIM_VERSION}) cannot place it`
+      : `was captured on simVersion ${n}, below this build's minimum (${MIN_ACCEPTED_SIM_VERSION})`;
   console.error(
-    `[analyze-snapshot] This snapshot was captured on simVersion ${String(got)}, below this ` +
-      `build's minimum (${MIN_ACCEPTED_SIM_VERSION}); its saved state cannot be loaded here.\n` +
-      `  Check out a commit from before the #290 located-food save wipe (V50; the last ` +
-      `pre-wipe build is main before #290 PR 2 merged) and analyze it there.`,
+    `[analyze-snapshot] This snapshot ${captured}; its saved state cannot be loaded here.\n` +
+      SAME_BUILD_RULE +
+      `  Check out the recording build and analyze it there:\n` +
+      `    - playtrace: the envelope's gameVersion is "<version>+<git sha>"; check out that sha.\n` +
+      (n === null
+        ? `    - F9 export: its simVersion is unreadable, so there is no build to point at.`
+        : `    - F9 export (no build id): use the last commit at simVersion ${n}, the parent ` +
+          `of the commit that first moved LATEST past it (a constant retune made at the same ` +
+          `simVersion after the capture can still make the replay differ):\n` +
+          `        git checkout "$(git log --reverse --format=%h ` +
+          `-S 'LATEST_SIM_VERSION = SIM_VERSION_V${n + 1}_' -- src/sim/types.ts | head -1)^"`),
+  );
+  process.exit(2);
+}
+function explainFutureSnapshot(got: number): never {
+  console.error(
+    `[analyze-snapshot] This snapshot was captured on simVersion ${got}, newer than this ` +
+      `build's LATEST (${LATEST_SIM_VERSION}); this build cannot load or replay it.\n` +
+      SAME_BUILD_RULE +
+      `  Check out the recording build (a playtrace's gameVersion sha) and analyze it there.`,
   );
   process.exit(2);
 }
 {
   const v = (debug.snapshot as { simVersion?: unknown }).simVersion;
-  if (typeof v === 'number' && Number.isInteger(v) && v < MIN_ACCEPTED_SIM_VERSION) {
-    explainPreWindowSnapshot(v);
+  if (typeof v === 'number' && Number.isInteger(v)) {
+    if (v < MIN_ACCEPTED_SIM_VERSION) explainPreWindowSnapshot(v);
+    if (v > LATEST_SIM_VERSION) explainFutureSnapshot(v);
   }
 }
 
@@ -328,7 +358,13 @@ console.log(
 if (!replayMatches) {
   console.log(`  WARNING: SCEN-06 determinism regression — replayed state differs from captured.`);
   console.log(
-    `  (or a benign serializer key-order change between snapshot capture and this build)`,
+    `  (or a benign serializer key-order change between snapshot capture and this build,`,
+  );
+  console.log(
+    `  or the snapshot was recorded on a different build at the same simVersion — a constant`,
+  );
+  console.log(
+    `  retune does not bump it; replay on the recording build, e.g. a playtrace's gameVersion sha)`,
   );
   console.log(`  Cluster / stuck-in-dirt reports below use the CAPTURED snapshot (trustworthy).`);
   console.log(`  Motion-history reports use the REPLAYED trajectory and may not reflect the`);
@@ -661,5 +697,8 @@ console.log('');
 console.log('Done.');
 
 // Exit 1 on replay mismatch so CI / scripts can detect a determinism
-// regression without parsing stdout. All other paths exit 0.
+// regression without parsing stdout. Exit 2 is a usage error or a snapshot from
+// outside this build's simVersion window, exit 3 a malformed snapshot; a completed
+// analysis with a matching replay exits 0. (An uncaught exception, e.g. a crash
+// mid-replay or a non-version load error, also exits 1.)
 if (!replayMatches) process.exit(1);

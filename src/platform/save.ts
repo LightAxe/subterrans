@@ -157,42 +157,39 @@ export class FutureSimVersionError extends Error {
   }
 }
 
-// #290 PR 2 (V50) — DELIBERATE save wipe. The located food store replaces the
-// `foodPiles` array and the `foodStored` scalars, and the count-up hunger clock
-// `ants.lastMealTick` replaces `starvationTimer` / `queenStarvationTimer`. Loading a
-// pre-V50 snapshot into the new shape would be a format transform, which ADR-0014
-// forbids, so every pre-V50 save is rejected (owner decision on #290, 2026-09-25).
-// Previous floor: V30 (PR 6-sim's underground-embedding guards).
-export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V50_LOCATED_FOOD;
-
 /**
- * #228 window policy — deliberate-break escape hatch (version-scoped).
+ * The oldest `simVersion` this build loads. A save below it is rejected with
+ * `OldSimVersionError`; there is no migration (ADR-0014).
  *
- * POLICY (ARCHITECTURE.md Principle 7): `MIN_ACCEPTED_SIM_VERSION` stays put while
- * `LATEST_SIM_VERSION` advances, so saves within the window keep loading — each
- * behavior change ships a sticky `simVersion >=` gate instead. Raising MIN wipes
- * real players' localStorage saves and orphans in-flight playtrace uploads (they
- * keep arriving from the previous deploy for days), so it is a deliberate
- * exception, not the default posture.
+ * PRE-1.0 POLICY (owner decision 2026-10-01; AGENTS.md "simVersion and saves",
+ * ARCHITECTURE.md Principle 7): sim behaviour changes are NOT gated behind
+ * `simVersion >=`. A PR that changes sim behaviour bumps `LATEST_SIM_VERSION` AND
+ * sets this to the same value, so MIN === LATEST is the normal state and older
+ * in-progress saves are wiped, which is accepted. Bare constant retunes and
+ * render-only changes bump neither; the AI controller's policy counts as sim
+ * behaviour. MIN never moves backward. `version-policy.test.ts` enforces the MIN/LATEST
+ * rules; "no gates" is a review rule.
  *
- * This records WHICH version a deliberate break was declared at (`null` = no
- * active break), so a stale flag can't ride silently through a later break. The
- * guard in `version-policy.test.ts` enforces:
- *     BREAK_AT === null ? MIN < LATEST : (MIN === LATEST && BREAK_AT === LATEST)
+ * Transition: V69 (#402) and V70 (#405) were written under the earlier gated
+ * policy and leave MIN here. The first sim PR after them sets MIN === LATEST.
+ * Post-1.0 the rolling window returns: MIN stays put while LATEST advances behind
+ * sticky gates, and raising MIN becomes a deliberate, justified exception.
  *
- * THE RITUAL for a deliberate compat break (a change that genuinely cannot be
- * gated — e.g. a stored-field semantics change like V28/V30):
- *   1. In the breaking PR: raise MIN to LATEST AND set this to that new LATEST,
- *      and justify the player-facing save wipe in the PR description.
- *   2. In the NEXT PR that bumps LATEST while leaving MIN behind: set this back to
- *      `null` (the guard test fails until you do). Never leave a stale version here.
+ * Each raise also orphans playtrace uploads still arriving from the previous deploy.
+ * Their snapshots replay only on the build that recorded them; the envelope's
+ * `gameVersion` carries that build's git SHA, and scripts/analyze-snapshot.ts says
+ * so instead of replaying.
  *
- * Now null: #290 PR 2 (the located food store) ran the ritual at V50, raising
- * MIN to V50 = LATEST (see MIN_ACCEPTED_SIM_VERSION); #290 PR 4 (V51, unified
- * hunger) bumped LATEST past it and retired the flag. (The previous break, V30,
- * was retired by #225 at V31.)
+ * Why it is V50 today:
+ *   - V50: #290 PR 2. The located food store replaces the `foodPiles` array and
+ *     the `foodStored` scalars, and the count-up hunger clock `ants.lastMealTick`
+ *     replaces `starvationTimer` / `queenStarvationTimer`. Loading a pre-V50
+ *     snapshot into the new shape would be a format transform, which ADR-0014
+ *     forbids, so every pre-V50 save is rejected (owner decision on #290,
+ *     2026-09-25).
+ *   - Previous floor: V30 (PR 6-sim's underground-embedding guards).
  */
-export const DELIBERATE_WINDOW_BREAK_AT: number | null = null;
+export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V50_LOCATED_FOOD;
 
 export class OldSimVersionError extends Error {
   // #229 — explicit field (see SaveVersionMismatchError): strip-only Node compat.
