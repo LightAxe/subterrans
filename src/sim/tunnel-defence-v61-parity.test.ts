@@ -62,8 +62,7 @@ function spawn(
 
 describe('#371 — pinned V61: the tunnel defenders’ occupancy exemption is unchanged', () => {
   it('six defenders chasing three invaders past a forager move exactly as on main', () => {
-    const world = createScenario(7, 'Normal');
-    world.simVersion = V61;
+    const world = createScenario(7, 'Normal', V61);
     world.spider = null;
     world.aiState = [];
     const colony = world.colonies[PLAYER_COLONY_ID]!;

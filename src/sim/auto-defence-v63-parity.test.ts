@@ -67,8 +67,7 @@ function fnv(s: string): string {
 
 describe('#372 — pinned V63: fighter orders and defence are unchanged below V64', () => {
   it('a garrison, intruders, a partial AI probe and a recall move exactly as before', () => {
-    const world = createScenario(7, 'Normal');
-    world.simVersion = V63;
+    const world = createScenario(7, 'Normal', V63);
     world.spider = null;
     const P = PLAYER_COLONY_ID;
     const E = ENEMY_COLONY_ID;

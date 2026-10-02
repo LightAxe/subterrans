@@ -5,8 +5,10 @@
 //
 // What it does, in order:
 //   1. Loads the JSON debug snapshot envelope.
-//   2. Replays from seed: createScenario(seed) → tick() through the captured
-//      inputLog up to snapshot.tick, then byte-compares serialized state.
+//   2. Replays from seed: createScenario(seed, difficulty, simVersion) at the
+//      snapshot's own simVersion (map generation is version-gated, #395) →
+//      tick() through the captured inputLog up to snapshot.tick, then
+//      byte-compares serialized state.
 //      A divergence here is a SCEN-06 regression. The log is regrouped into the
 //      DRAIN batches the sim actually saw (#296 — `issuedAtTick` is one tick
 //      early for sim self-emits) and the replaying world's own regenerated
@@ -172,22 +174,27 @@ const replayStart = Date.now();
 const snapshotDifficulty = (debug.snapshot as { difficulty?: unknown }).difficulty;
 const replayDifficulty: 'Easy' | 'Normal' | 'Hard' =
   snapshotDifficulty === 'Easy' || snapshotDifficulty === 'Hard' ? snapshotDifficulty : 'Normal';
-const replay = createScenario(debug.seed, replayDifficulty);
 // Restore simVersion from snapshot so version-gated paths (tiebreaks, brood modifier, etc.)
-// match the original session. createScenario always starts at LATEST_SIM_VERSION; without this
-// a pre-V22 snapshot replayed on V22 code would have V22 paths active, causing divergence.
+// match the original session; without this a pre-V22 snapshot replayed on V22 code would
+// have V22 paths active, causing divergence. #395: the version goes INTO createScenario,
+// because map generation is version-gated too (V69 food fairness) — a V68 snapshot must
+// replay from the V68 map.
 const snapshotSimVersion = (debug.snapshot as { simVersion?: unknown }).simVersion;
-if (
+const replaySimVersion =
   typeof snapshotSimVersion === 'number' &&
   Number.isInteger(snapshotSimVersion) &&
   snapshotSimVersion > 0
-) {
-  replay.simVersion = snapshotSimVersion;
-} else {
+    ? snapshotSimVersion
+    : null;
+if (replaySimVersion === null) {
   console.warn(
     `[analyze-snapshot] Could not restore simVersion from snapshot (got ${String(snapshotSimVersion)}); replay runs at LATEST_SIM_VERSION — byte-equality may fail for pre-V22 captures.`,
   );
 }
+const replay =
+  replaySimVersion !== null
+    ? createScenario(debug.seed, replayDifficulty, replaySimVersion)
+    : createScenario(debug.seed, replayDifficulty);
 
 // #296 — regroup by the tick each command was DRAINED on, not the tick it was
 // issued on. For player/AI input the two are the same; for a command the sim

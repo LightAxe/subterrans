@@ -58,6 +58,7 @@ import {
   resolveCursorTool,
   cursorToolChanged,
   computeInterpAlpha,
+  createRetryWorld,
   type CursorTool,
 } from './game-scene-logic.js';
 import {
@@ -279,7 +280,8 @@ interface UIScenePhase9 {
   hideSaveLoadDialogOverlay(): void;
   // Issue #131 — survey overlay. After submit or skip, the overlay shows a
   // confirmation screen with New Game / Retry. onNewGame restarts with a new
-  // seed; onRetry restarts with the same seed. onSkip was removed.
+  // seed; onRetry restarts with the same seed and difficulty, under the newest
+  // rules. onSkip was removed.
   showSurveyOverlay(callbacks: {
     quitFromPauseMenu: boolean;
     outcome?: import('../sim/game-over.js').GameOutcome;
@@ -2322,7 +2324,9 @@ export class GameScene extends Phaser.Scene {
 
   /** Issue #131 — restart the game with the same seed the player just lost on.
    *  Mirrors restartGame() but skips generateFreshSeed, using the captured
-   *  seed instead so the player gets the exact same map to retry. */
+   *  seed instead so the player gets the same map to retry. #395: at LATEST, the
+   *  newest rules (createRetryWorld): a game resumed from a pre-V69 save retries
+   *  with V69's food placement on the same terrain. */
   private retryGame(seed: number): void {
     const wasSuspended = this.autosaveSuspended;
     if (!wasSuspended) {
@@ -2333,7 +2337,7 @@ export class GameScene extends Phaser.Scene {
     this.resetSessionState();
     this.currentSeed = seed;
     // S5: retry preserves the previous game's difficulty (same seed + same difficulty).
-    this.world = createScenario(seed, this.currentDifficulty);
+    this.world = createRetryWorld(seed, this.currentDifficulty);
     this.finishBoot();
     if (wasSuspended) {
       this.autosaveSuspended = true;

@@ -190,6 +190,10 @@ import {
   FOOD_PILE_MIN_COLONY_DISTANCE,
   FOOD_PILE_MIN_SEPARATION,
   FOOD_PILE_MAX_ATTEMPTS,
+  FOOD_FAIRNESS_RADIUS_TILES,
+  FOOD_FAIRNESS_MIN_PICKUPS,
+  FOOD_PILE_INITIAL_PICKUPS_MIN,
+  FOOD_PILE_INITIAL_PICKUPS_MAX,
   DIRT_SCATTER_RATIO_FP,
   CHAMBER_QUEEN_WIDTH,
   CHAMBER_QUEEN_HEIGHT,
@@ -264,6 +268,18 @@ describe('Phase 7 food pile scatter constants (PRD §6a)', () => {
 
   it('FOOD_PILE_MAX_ATTEMPTS === 1000', () => {
     expect(FOOD_PILE_MAX_ATTEMPTS).toBe(1000);
+  });
+
+  it("#395 FOOD_FAIRNESS_RADIUS_TILES === 25 (the first search wave's leash)", () => {
+    expect(FOOD_FAIRNESS_RADIUS_TILES).toBe(25);
+    expect(FOOD_FAIRNESS_RADIUS_TILES).toBe(SEARCH_LEASH_RADII[0]);
+  });
+
+  it('#395 FOOD_FAIRNESS_MIN_PICKUPS === 40, a pile size the scatter can produce', () => {
+    expect(FOOD_FAIRNESS_MIN_PICKUPS).toBe(40);
+    // A donor must exist among scattered piles, and a made pile's size range is non-empty.
+    expect(FOOD_FAIRNESS_MIN_PICKUPS).toBeGreaterThanOrEqual(FOOD_PILE_INITIAL_PICKUPS_MIN);
+    expect(FOOD_FAIRNESS_MIN_PICKUPS).toBeLessThanOrEqual(FOOD_PILE_INITIAL_PICKUPS_MAX);
   });
 });
 

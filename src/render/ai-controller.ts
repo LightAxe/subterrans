@@ -10,6 +10,7 @@ import {
   SIM_VERSION_V61_AI_EARLY_STORAGE,
   SIM_VERSION_V62_AI_NEST_DEFENCE,
   SIM_VERSION_V63_AI_DEEP_QUEEN,
+  SIM_VERSION_V69_FOOD_FAIRNESS,
 } from '../sim/types.js';
 import type { NestEntrance } from '../sim/colony/entrance.js';
 import type { ColonyId, ColonyRecord } from '../sim/colony/colony-store.js';
@@ -1860,7 +1861,8 @@ function isDirtTileUnderground(
 }
 
 /**
- * BFS from the queen's tile outward; returns an anchor tile where a chamber of the
+ * BFS outward from the queen's tile (for a queen still on the surface, from
+ * preferredDepth in her column); returns an anchor tile where a chamber of the
  * given type can be placed without rejection by PlaceChamber's validators. Per plan
  * 09.1-01 Task 2, this function now mirrors the tick.ts PlaceChamber checks so that
  * the issued command actually lands:
@@ -1905,11 +1907,25 @@ function findOpenChamberSpot(
   // (or the valid row closest to it) so the chamber search is anchored on the
   // depth band the AI actually wants to build at. Documented per plan 09.1-01
   // Task 2 pre-audit (commit dee93e5).
+  //
+  // #395 (V69) — "pre-descent" is her zone, not her row. Up to V68 the test was
+  // `rawQueenTileY >= grid.height`, true only while she stands on a surface row
+  // at or below 64. A surface queen pushed north of that (the spider's hunt-reticle
+  // scatter moves the non-Fighting surface ants, the queen among them while she
+  // waits for her chamber) seeded the search at her SURFACE row read as an underground row: from
+  // row 63 the 32-row box never reaches the Queen depth, the depth gate refuses
+  // every candidate, and the AI's opening deadlocked with the queen on the surface
+  // (V69's nearer food made the slow-bootstrap window this needs reachable: 2 of 300
+  // check-ai-economy runs). From V69 a queen on the surface always seeds at
+  // preferredDepth.
   const queenTileX = Math.min(Math.max(rawQueenTileX, 0), grid.width - 1);
-  const queenTileY =
-    rawQueenTileY >= grid.height
-      ? Math.min(Math.max(preferredDepth, 0), grid.height - 1)
-      : Math.min(Math.max(rawQueenTileY, 0), grid.height - 1);
+  const preDescent =
+    world.simVersion >= SIM_VERSION_V69_FOOD_FAIRNESS
+      ? world.ants.zone[colony.queenEntityId] === Zone.Surface
+      : rawQueenTileY >= grid.height;
+  const queenTileY = preDescent
+    ? Math.min(Math.max(preferredDepth, 0), grid.height - 1)
+    : Math.min(Math.max(rawQueenTileY, 0), grid.height - 1);
 
   const RADIUS = 32;
 

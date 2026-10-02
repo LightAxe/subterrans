@@ -87,7 +87,9 @@ const COVERAGE = process.env.BYTE_GATE_COVERAGE === '1';
 const PROJECTION = process.env.BYTE_GATE_PROJECTION === '1';
 // #370 — BYTE_GATE_SIM_VERSION=N pins every scenario world to simVersion N, so a PR
 // that adds a version gate can prove the pre-gate path byte-identical: capture on
-// the base commit (where N is LATEST), verify on the branch with the same N.
+// the base commit (where N is LATEST), verify on the branch with the same N. Since
+// #395 the world is created at N (createScenario's simVersion), not created at
+// LATEST and re-stamped, because map generation is version-gated too.
 const PIN_SIM_VERSION = parsePinnedSimVersion(process.env.BYTE_GATE_SIM_VERSION);
 
 /** A malformed pin must fail loudly: NaN would turn every `simVersion >=` gate off on
@@ -459,8 +461,12 @@ interface ScenarioResult {
 }
 
 function runScenario(scn: Scenario): ScenarioResult {
-  const world = createScenario(scn.seed, scn.difficulty);
-  if (PIN_SIM_VERSION !== null) world.simVersion = PIN_SIM_VERSION;
+  // #395 — the pin goes INTO createScenario: map generation is itself version-gated
+  // (V69 food fairness), so a pinned world must be generated at the pinned version.
+  const world =
+    PIN_SIM_VERSION !== null
+      ? createScenario(scn.seed, scn.difficulty, PIN_SIM_VERSION)
+      : createScenario(scn.seed, scn.difficulty);
   scn.setup?.(world);
   const checkpoints: Array<[number, string]> = [];
   const cov = newCoverage();

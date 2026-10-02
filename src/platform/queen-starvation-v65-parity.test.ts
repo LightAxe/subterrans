@@ -46,8 +46,7 @@ interface Run {
 }
 
 function run(seed: number, setup: (w: WorldState) => void, famineAt: (t: number) => number[]): Run {
-  const world = createScenario(seed, 'Normal');
-  world.simVersion = V65;
+  const world = createScenario(seed, 'Normal', V65);
   setup(world);
   const trace: string[] = [];
   let playerQueenDeath = -1;

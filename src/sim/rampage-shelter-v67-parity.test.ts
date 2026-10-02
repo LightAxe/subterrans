@@ -77,8 +77,7 @@ function fnv(s: string): string {
 
 describe('#377 — pinned V67: idle workers during a spider rampage are unchanged below V68', () => {
   it('the reserve on the surface and below, two doors, the alarm, the fight ratio, a kill', () => {
-    const world = createScenario(7, 'Normal');
-    world.simVersion = V67;
+    const world = createScenario(7, 'Normal', V67);
     world.aiState = [];
     world.tick = SPIDER_GRACE_TICKS + 200;
     const P = PLAYER_COLONY_ID;
