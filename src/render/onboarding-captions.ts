@@ -56,7 +56,8 @@ export function resetCaptions(): void {
  * before the caption reaches the bounded caption queue. If the queue then DROPS
  * that caption on overflow it would never display yet stay marked 'already shown'
  * — losing a first-occurrence onboarding caption forever. UIScene calls this when
- * a dropped caption carries a key so the trigger re-fires on the next occurrence.
+ * a dropped caption carries a key so the trigger re-fires on the next occurrence,
+ * and (#395) for a retryable caption evicted from the pending slot.
  * GameScene also calls it for 'queenDamage' once the queen recovers (#375,
  * queen-danger.ts), so that caption shows once per danger spell, and for
  * 'foodStorageNeeded' once storage covers the egg reserve again (#395,
@@ -67,6 +68,18 @@ export function resetCaptions(): void {
  */
 export function untrigger(key: CaptionKey): void {
   triggered.delete(key);
+}
+
+/**
+ * #395 — true for a one-shot key whose source offers its caption again every frame
+ * until it shows: 'foodStorageNeeded' (storage-hint.ts advanceStorageHint asks
+ * checkAndTrigger each frame while storage blocks the queen). UIScene admits such a
+ * caption as `retryable` (caption-queue.ts), so any event caption that is not
+ * retryable takes the pending slot from it and it simply comes back. Every other
+ * key fires once per trigger, so a caption dropped for it could be lost for good.
+ */
+export function captionKeyRetries(key: CaptionKey): boolean {
+  return key === 'foodStorageNeeded';
 }
 
 /**

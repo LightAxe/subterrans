@@ -323,7 +323,7 @@ import {
   type CaptionQueueState,
   type CaptionRequest,
 } from './caption-queue.js';
-import { untrigger, type CaptionKey } from './onboarding-captions.js';
+import { captionKeyRetries, untrigger, type CaptionKey } from './onboarding-captions.js';
 import {
   markFirstUseHintShown,
   resetFirstUseHints,
@@ -2008,6 +2008,9 @@ export class UIScene extends Phaser.Scene {
       source: 'event',
       captionKey,
       ...(holdMs === undefined ? {} : { holdMs }),
+      // #395 — the storage hint is offered again every frame: it waits only until
+      // another event caption needs the pending slot.
+      ...(captionKey !== undefined && captionKeyRetries(captionKey) ? { retryable: true } : {}),
     });
   }
 
@@ -2063,9 +2066,16 @@ export class UIScene extends Phaser.Scene {
       if (result.begin) this.beginCaption(result.begin, fromAlpha);
     }
     // #372 — an event caption now waits behind a long-hold caption: it gives
-    // way. A first-use hint (the lowest priority) does not shorten it.
-    if (result.queued?.source === 'event') this.yieldLongCaption();
+    // way. A first-use hint (the lowest priority) does not shorten it, nor (#395)
+    // does a retryable caption: the storage hint waits out an army warning.
+    if (result.queued?.source === 'event' && result.queued.retryable !== true) {
+      this.yieldLongCaption();
+    }
     if (result.dropped?.captionKey !== undefined) untrigger(result.dropped.captionKey);
+    // #395 — a retryable caption evicted from the pending slot never displayed:
+    // un-mark its key so its source offers it again (a first-use hint has none).
+    const evicted = result.evictedPending;
+    if (evicted?.captionKey !== undefined) untrigger(evicted.captionKey);
     // #378 — a replaced pending caption never displayed: un-mark a one-shot key,
     // as for a drop.
     const replaced = result.replacedPending;
@@ -2235,11 +2245,11 @@ export class UIScene extends Phaser.Scene {
 
   /**
    * #372 — a long-hold caption (the army warning, the #395 storage hint) gives way
-   * to an event caption (not a first-use hint) waiting behind it: its hold is cut
-   * to what CAPTION_YIELD_FLOOR_MS would have left (yieldedHoldMs), so a one-shot
-   * queued behind it, or an owed recurring caption (the army warning, raid news,
-   * the rampage warning), is not held back the full 4 s. It
-   * still fades out, never cut. No-op for a default caption, once it has yielded,
+   * to an event caption (not a first-use hint, nor a retryable one) waiting behind
+   * it: its hold is cut to what CAPTION_YIELD_FLOOR_MS would have left
+   * (yieldedHoldMs), so a one-shot queued behind it, or an owed recurring caption
+   * (the army warning, raid news, the rampage warning), is not held back the full
+   * 4 s. It still fades out, never cut. No-op for a default caption, once it has yielded,
    * or once it is fading out. GameScene calls this while a recurring caption is
    * owed; enqueueCaption calls it when an event caption is queued.
    */

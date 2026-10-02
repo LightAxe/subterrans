@@ -3,6 +3,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   captionForEvent,
+  captionKeyRetries,
   checkAndTrigger,
   resetCaptions,
   triggered,
@@ -253,5 +254,21 @@ describe('untrigger', () => {
     expect(triggered.has('spiderRampage')).toBe(false);
     // ...and the key still fires normally afterward.
     expect(checkAndTrigger('spiderRampage')).not.toBeNull();
+  });
+});
+
+describe('captionKeyRetries (#395)', () => {
+  it('only the storage hint is offered again every frame (retryable in the queue)', () => {
+    expect(captionKeyRetries('foodStorageNeeded')).toBe(true);
+    for (const key of [
+      'rally',
+      'queenDamage',
+      'queenStarvation',
+      'spiderRampage',
+      'chamber',
+      'autosaveFailed',
+    ] as const) {
+      expect(captionKeyRetries(key)).toBe(false);
+    }
   });
 });

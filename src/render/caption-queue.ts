@@ -28,8 +28,15 @@
 //     have: the newer version then takes over the old one's remaining time on
 //     screen (`keepSchedule`) instead of starting a fresh one, so a burst of order
 //     switches never holds back, say, an invasion warning. With nothing waiting,
-//     or only a first-use hint (events outrank hints), it gets a full lifetime.
+//     or only a first-use hint or a retryable caption (events outrank both), it
+//     gets a full lifetime.
 //     Captions without a key are untouched by this rule.
+//   - #395: a `retryable` event caption (the storage hint, which its source offers
+//     again every frame until it shows) ranks below every other event caption,
+//     as a first-use hint does: waiting in `pending`, it is evicted by an incoming
+//     event that is not retryable (UIScene un-marks its key, and its source
+//     offers it again once there is room). It never makes a long caption give way
+//     and earns no `keepSchedule`. Against a first-use hint it is an event.
 
 import type { CaptionKey } from './onboarding-captions.js';
 
@@ -46,9 +53,10 @@ export interface CaptionRequest {
   hintId?: string;
   /** One-shot caption key — present iff source === 'event' AND the caption was
    *  produced by a one-shot trigger (checkAndTrigger), which marks the key BEFORE
-   *  the request reaches this queue. If the request is dropped on
-   *  overflow, UIScene un-marks this key so the caption can re-fire (it never
-   *  displayed). Absent for recurring captions, which don't dedup on `triggered`. */
+   *  the request reaches this queue. If the request is dropped on overflow, or
+   *  (#395, a retryable one) evicted from `pending`, UIScene un-marks this key so
+   *  the caption can re-fire (it never displayed). Absent for recurring captions,
+   *  which don't dedup on `triggered`. */
   captionKey?: CaptionKey;
   /** #372 — full-opacity hold (ms) between the fade-in and fade-out; absent:
    *  CAPTION_HOLD_MS. For a long caption that must be read (the army warning, the
@@ -58,6 +66,11 @@ export interface CaptionRequest {
    *  older caption with the same key, on screen or pending, instead of queueing
    *  behind it (see the policy above). Absent: an ordinary caption. */
   supersedeKey?: string;
+  /** #395 — an event caption its source offers again every frame until it shows
+   *  (the storage hint): it waits in `pending` only until an event caption that is
+   *  not retryable needs the slot (see the policy above). Absent: an ordinary
+   *  caption. */
+  retryable?: boolean;
 }
 
 /** Default full-opacity hold of a caption (ms), between its 300 ms fade-in and
@@ -80,8 +93,9 @@ export const CAPTION_YIELD_FLOOR_MS = 2000;
 
 /**
  * #372 — a long-hold caption (hold > CAPTION_HOLD_MS) gives way once an event
- * caption (not a first-use hint) waits behind it: it keeps only what CAPTION_YIELD_FLOOR_MS would have
- * left after `heldMs` at full opacity, so what waits (a one-shot, or owed raid
+ * caption (not a first-use hint, nor a #395 retryable one) waits behind it: it
+ * keeps only what CAPTION_YIELD_FLOOR_MS would have left after `heldMs` at full
+ * opacity, so what waits (a one-shot, or owed raid
  * news / the rampage warning, whose owed windows assume short captions) is held
  * back ~1.2 s longer than behind a default caption, not ~3.2 s. Returns that
  * remaining hold (ms, >= 0), or null when `req` is not long-hold (never yields).
@@ -132,10 +146,10 @@ export function recurringCaptionMayEnter(state: CaptionQueueState): boolean {
 
 /**
  * Outcome of admitting a request. Exactly one of begin/queued/coalesced/dropped
- * describes the incoming request; `droppedFirstUse`, when set, is a previously-
- * pending first-use that the incoming event evicted (UIScene clears any
- * mark/marking for it — though since it never began displaying, nothing was
- * marked).
+ * describes the incoming request; `evictedPending`, when set, is a previously-
+ * pending first-use hint or retryable caption that the incoming event evicted.
+ * It never began displaying: a first-use hint was never marked shown, and UIScene
+ * un-marks a retryable caption's key so its source offers it again.
  */
 export interface AdmitResult {
   /** The request should start displaying NOW (UIScene begins its tween, and —
@@ -147,8 +161,9 @@ export interface AdmitResult {
   coalesced?: boolean;
   /** The request was rejected (overflow). */
   dropped?: CaptionRequest;
-  /** A pending first-use evicted by an incoming higher-priority event. */
-  droppedFirstUse?: CaptionRequest;
+  /** A pending first-use hint, or (#395) a pending retryable caption, evicted by
+   *  an incoming higher-priority event. */
+  evictedPending?: CaptionRequest;
   /** #378 — the on-screen caption the incoming one (same supersedeKey) cut short:
    *  `begin` (the newer version) takes its place on screen. */
   replacedActive?: CaptionRequest;
@@ -156,11 +171,20 @@ export interface AdmitResult {
    *  `pending`, so the newer version keeps the old one's remaining time on screen
    *  (UIScene swaps the words on the same Text, its fades and hold running on)
    *  rather than starting a fresh lifetime that would hold that event back longer.
-   *  A waiting first-use hint does not get this: events outrank hints. */
+   *  A waiting first-use hint or retryable caption does not get this: events
+   *  outrank both. */
   keepSchedule?: boolean;
   /** #378 — the pending caption the incoming one (same supersedeKey) replaced in
    *  place (`queued` is the newer version). It never displayed. */
   replacedPending?: CaptionRequest;
+}
+
+/** Does incoming `req` evict `pending` from the pending slot? An event outranks a
+ *  first-use hint; an event that is not retryable outranks a retryable one (#395). */
+function outranksPending(req: CaptionRequest, pending: CaptionRequest): boolean {
+  if (req.source !== 'event') return false;
+  if (pending.source === 'first-use') return true;
+  return pending.retryable === true && req.retryable !== true;
 }
 
 function sameFirstUse(a: CaptionRequest | null, b: CaptionRequest): boolean {
@@ -192,7 +216,9 @@ export function admitCaption(state: CaptionQueueState, req: CaptionRequest): Adm
         result.replacedPending = state.pending;
         state.pending = null;
       }
-      if (state.pending?.source === 'event') result.keepSchedule = true;
+      if (state.pending?.source === 'event' && state.pending.retryable !== true) {
+        result.keepSchedule = true;
+      }
       return result;
     }
     if (state.pending?.supersedeKey === key) {
@@ -217,11 +243,12 @@ export function admitCaption(state: CaptionQueueState, req: CaptionRequest): Adm
     return { queued: req };
   }
 
-  // Pending is occupied. Event outranks a pending first-use: evict it.
-  if (req.source === 'event' && state.pending.source === 'first-use') {
+  // Pending is occupied. An event outranks a pending first-use hint, and (#395) an
+  // event that is not retryable outranks a pending retryable one: evict it.
+  if (outranksPending(req, state.pending)) {
     const evicted = state.pending;
     state.pending = req;
-    return { queued: req, droppedFirstUse: evicted };
+    return { queued: req, evictedPending: evicted };
   }
 
   // Otherwise overflow — drop the incoming request (an incoming first-use loses

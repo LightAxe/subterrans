@@ -12,7 +12,9 @@
 // the player designates a larder (Codex P2), playing or paused, before the
 // designation's own 'chamber' caption needs the slot. And it never shows over the
 // end screen when the queen dies while it waits (Codex P2), nor over the new-game
-// screen after a restart from the pause menu's Save/Load.
+// screen after a restart from the pause menu's Save/Load. Waiting, it gives way to
+// every caption but a first-use hint (Codex P2): an event caption takes its slot and
+// it comes back after, and an owed army warning goes ahead of it with its full hold.
 //
 // Setup, without touching a running sim: the page builds the raid world
 // (raid-test-utils.ts: the player has a completed Queen chamber with the queen in
@@ -129,24 +131,40 @@ async function setPaused(page: Page, on: boolean): Promise<void> {
     .toBe(on);
 }
 
-/** Hold a rally caption on screen (caption clock stopped) before the hint is due,
- *  and wait for the hint to queue behind it. The clock is stopped only once the
+/** Hold a caption on screen (caption clock stopped) before the hint is due — a
+ *  rally caption, or `holder` offered through the dev hook — and wait for the hint
+ *  to queue behind it. The clock is stopped only once the
  *  queue is idle: in the 'starve' save the queen's starvation and danger captions
  *  run back to back from about tick 41 to about tick 101. */
-async function queueHintBehindRally(page: Page): Promise<void> {
+async function queueHintBehindRally(page: Page, holder?: string): Promise<void> {
   await expect.poll(() => simTick(page), { timeout: 40_000 }).toBeGreaterThanOrEqual(100);
   await expect
     .poll(() => captionQueue(page), { timeout: 10_000 })
     .toEqual({ active: null, pending: null });
   await freezeCaptionClock(page, true);
   expect(await simTick(page)).toBeLessThan(DWELL_TICKS);
-  const rallied = await page.evaluate(() =>
-    (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.rallyPlayerAt?.(40, 62),
-  );
-  expect(rallied).toBe(true);
+  const held =
+    holder === undefined
+      ? await page.evaluate(() =>
+          (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.rallyPlayerAt?.(
+            40,
+            62,
+          ),
+        )
+      : await offerCaption(page, holder);
+  expect(held).toBe(true);
   await expect
     .poll(() => captionQueue(page), { timeout: 40_000 })
-    .toEqual({ active: RALLY_TEXT, pending: HINT });
+    .toEqual({ active: holder ?? RALLY_TEXT, pending: HINT });
+}
+
+/** Offer a keyless event caption through UIScene's real showCaption (dev hook). */
+async function offerCaption(page: Page, text: string): Promise<boolean> {
+  return await page.evaluate((t: string) => {
+    const hook = (window as unknown as { __phase9_test?: TestHook }).__phase9_test;
+    if (hook?.offerCaption === undefined) throw new Error('no offerCaption hook');
+    return hook.offerCaption(t);
+  }, text);
 }
 
 /** Designate a larder that would cover the reserve (tick.ts gate i: just below the
@@ -410,8 +428,10 @@ test.describe('#395 — Food Storage hint', () => {
     await bootStorageSave(page, 'plain');
     await queueHintBehindRally(page);
     await designateLarder(page);
-    // The hint is withdrawn before the designation drains, so its own 'chamber'
-    // caption takes the slot.
+    // The hint is out of date (and, retryable, would give the slot to the
+    // designation's own 'chamber' caption anyway): the 'chamber' caption takes the
+    // slot, and the hint is not offered again. (The paused test below is the one
+    // that needs the withdrawal: there nothing drains.)
     await expect
       .poll(() => captionQueue(page), { timeout: 10_000 })
       .toEqual({ active: RALLY_TEXT, pending: CHAMBER_TEXT });
@@ -466,12 +486,7 @@ test.describe('#395 — Food Storage hint', () => {
     expect(await captionQueue(page)).toEqual({ active: null, pending: null });
     expect(await captions(page)).not.toContain(HINT);
     // A late caption source (an autosave failure resolving now) is not admitted either.
-    const offered = await page.evaluate(() => {
-      const t = (window as unknown as { __phase9_test?: TestHook }).__phase9_test;
-      if (t?.offerCaption === undefined) throw new Error('no offerCaption hook');
-      return t.offerCaption('late caption');
-    });
-    expect(offered).toBe(false);
+    expect(await offerCaption(page, 'late caption')).toBe(false);
     expect(await captionQueue(page)).toEqual({ active: null, pending: null });
     expect(await activeOverlay(page)).toBe('game-over');
   });
@@ -504,5 +519,70 @@ test.describe('#395 — Food Storage hint', () => {
     await advanceCaptionClock(page, PAST_RALLY_AND_HINT_MS);
     expect(await captionQueue(page)).toEqual({ active: null, pending: null });
     expect(await captions(page)).not.toContain(HINT);
+  });
+
+  test('a waiting hint gives its slot to an event caption and comes back after it', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await bootStorageSave(page, 'plain');
+    await queueHintBehindRally(page);
+    // A one-shot caption arrives (as the queen's starvation alert would): it is not
+    // dropped for the hint — it takes the slot, and the hint steps out.
+    const URGENT = 'An urgent caption.';
+    expect(await offerCaption(page, URGENT)).toBe(true);
+    expect(await captionQueue(page)).toEqual({ active: RALLY_TEXT, pending: URGENT });
+    // Both play through; the hint, offered again, follows them.
+    await advanceCaptionClock(page, 2 * CAPTION_COURSE_MS + 300);
+    await expect
+      .poll(() => captionQueue(page), { timeout: 10_000 })
+      .toMatchObject({ active: HINT });
+    const shown = await captions(page);
+    expect(shown.slice(-3)).toEqual([RALLY_TEXT, URGENT, HINT]);
+  });
+
+  test('an owed army warning goes ahead of a waiting hint, with its full hold', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await bootStorageSave(page, 'army');
+    const HOLDER = 'A caption on screen.';
+    await queueHintBehindRally(page, HOLDER);
+    // Send the enemy army at the player's door: its march warning becomes owed
+    // while the queue is busy.
+    const rallied = await page.evaluate(
+      (enemy: number) =>
+        (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.rallyColonyAt?.(
+          enemy,
+          37,
+          64,
+        ),
+      ENEMY_COLONY_ID,
+    );
+    expect(rallied).toBe(true);
+    const t0 = await simTick(page);
+    await expect.poll(() => simTick(page), { timeout: 40_000 }).toBeGreaterThan(t0 + 115);
+    // The owed warning withdrew the waiting hint, and holds it back.
+    expect(await captionQueue(page)).toEqual({ active: HOLDER, pending: null });
+    // The caption on screen ends: the army warning comes next, the hint behind it.
+    await advanceCaptionClock(page, CAPTION_COURSE_MS + 300);
+    await expect
+      .poll(async () => {
+        const q = await captionQueue(page);
+        return { warning: q.active?.startsWith(ARMY_WARNING_PREFIX) ?? false, pending: q.pending };
+      })
+      .toEqual({ warning: true, pending: HINT });
+    // The hint waiting behind it does not cut the warning short.
+    await advanceCaptionClock(page, 300 + 4000 + 400 + 300);
+    await expect
+      .poll(() => captionQueue(page), { timeout: 10_000 })
+      .toMatchObject({ active: HINT });
+    const holds = await page.evaluate(
+      () =>
+        (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.getCaptionHolds?.() ??
+        [],
+    );
+    const warningHold = holds.find((h) => h.text.startsWith(ARMY_WARNING_PREFIX));
+    expect(warningHold).toEqual(expect.objectContaining({ holdMs: 4000, yielded: false }));
   });
 });

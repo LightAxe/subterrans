@@ -1874,10 +1874,11 @@ export class GameScene extends Phaser.Scene {
   /**
    * #395 — withdraw a storage hint still waiting behind another caption once it is
    * out of date: storage no longer blocks the queen, judged on the projected world
-   * (queued commands folded in). Called before the game loop drains (so the
-   * designation's own 'chamber' caption finds the slot free), while Playing or
-   * Paused, and again after the hint's own step (a tick can unblock storage with
-   * no command: a worker lost lowers the reserve).
+   * (queued commands folded in). Called before the game loop drains, while Playing
+   * or Paused (the caption clock runs on while paused, and a paused designation
+   * has not drained: no caption of its own would evict the hint), and again after
+   * the hint's own step (a tick can unblock storage with no command: a worker lost
+   * lowers the reserve).
    */
   private withdrawStaleStorageHint(): void {
     if (!this.world) return;
@@ -1964,7 +1965,8 @@ export class GameScene extends Phaser.Scene {
     // entrances. Offered first: an army about to invade outranks the spider and
     // raid news.
     const armyText = nextArmyWarning(this.armyWarning, this.world, PLAYER_COLONY_ID);
-    // #395 — offered and not taken: still owed, so a long-hold caption gives way (below).
+    // #395 — offered and not taken: still owed, so a long-hold caption gives way and
+    // the storage hint waits (below).
     let armyWarningOwed = false;
     if (armyText !== null && uiScene) {
       if (offerRecurringCaption(uiScene, armyText, this.layout.w / 2, 60, GATHER_CAPTION_HOLD_MS)) {
@@ -1980,31 +1982,6 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
-    // #395 (V70) — the queen lays only while stores cover the egg reserve, which the
-    // entrance pool alone never can: tell the player when storage is what stops her
-    // (storage-hint.ts). Advanced only while UIScene is up, so the caption is never
-    // marked shown without reaching the screen. After the army warning, so on a tie
-    // the army's warning goes first and the hint queues behind it (as a one-shot it
-    // takes the pending slot, and the warning gives way to its readable floor).
-    if (uiScene) {
-      // On the projected world: a larder the player has ordered, still queued, counts.
-      const storageText = advanceStorageHint(
-        this.storageHint,
-        this.projection.get(this.world),
-        PLAYER_COLONY_ID,
-      );
-      if (storageText) {
-        uiScene.showCaption(
-          storageText,
-          this.layout.w / 2,
-          60,
-          'foodStorageNeeded',
-          STORAGE_HINT_HOLD_MS,
-        );
-      }
-      this.withdrawStaleStorageHint();
-    }
-
     // #350 — the spider-rampage warning, owed from its spider_rampage_start until
     // it shows or goes stale. Offered after the army warning: it outranks raid
     // news. (Owed news behind the long army warning shortens that warning to
@@ -2018,22 +1995,56 @@ export class GameScene extends Phaser.Scene {
     // The cooldown starts only once the queue has taken the caption; until then it
     // stays owed (up to RAID_CAPTION_OWED_TICKS).
     const raidCaption = nextRaidCaption(this.raidCaptions, this.world, PLAYER_COLONY_ID);
-    if (
+    const raidTaken =
       raidCaption !== null &&
-      uiScene &&
+      uiScene !== null &&
       offerRecurringCaption(
         uiScene,
         raidCaptionText(raidCaption, activeRaidOrder(this.world, PLAYER_COLONY_ID)),
         this.layout.w / 2,
         60,
-      )
-    ) {
-      markRaidCaptionShown(this.raidCaptions, this.world, raidCaption);
-    } else if (recurringCaptionStillOwed(this.rampageCaption, raidCaption, armyWarningOwed)) {
-      // #372 — a recurring caption still owed behind a busy queue: a long-hold
-      // caption (the army warning, the #395 storage hint) gives way, keeping
-      // CAPTION_YIELD_FLOOR_MS to be read.
-      uiScene?.yieldLongCaption?.();
+      );
+    if (raidTaken) markRaidCaptionShown(this.raidCaptions, this.world, raidCaption);
+    // #372 — a recurring caption still owed behind a busy queue (the army warning,
+    // the rampage warning, or raid news not taken): a long-hold caption (the army
+    // warning, the #395 storage hint) gives way, keeping CAPTION_YIELD_FLOOR_MS to
+    // be read; and (#395) the storage hint waits (below).
+    const recurringOwed =
+      !raidTaken && recurringCaptionStillOwed(this.rampageCaption, raidCaption, armyWarningOwed);
+    if (recurringOwed) uiScene?.yieldLongCaption?.();
+
+    // #395 (V70) — the queen lays only while stores cover the egg reserve, which the
+    // entrance pool alone never can: tell the player when storage is what stops her
+    // (storage-hint.ts). Advanced only while UIScene is up, so the caption is never
+    // marked shown without reaching the screen. The hint is retryable (offered again
+    // every frame until it shows), so it gives way to every caption but a first-use
+    // hint: offered after the recurring captions, it queues behind one that took an
+    // idle queue this frame; an event caption takes the pending slot from it; it
+    // makes no long caption give way; and while a recurring caption is owed (the
+    // queue busy) it is held back and a waiting one withdrawn, so that one comes next.
+    if (uiScene) {
+      // On the projected world: a larder the player has ordered, still queued, counts.
+      // Held back rather than offered and withdrawn: offered, it would evict a
+      // first-use hint waiting in the pending slot.
+      const storageText = advanceStorageHint(
+        this.storageHint,
+        this.projection.get(this.world),
+        PLAYER_COLONY_ID,
+        !recurringOwed,
+      );
+      if (storageText) {
+        uiScene.showCaption(
+          storageText,
+          this.layout.w / 2,
+          60,
+          'foodStorageNeeded',
+          STORAGE_HINT_HOLD_MS,
+        );
+      }
+      if (recurringOwed && uiScene.pendingCaptionKey?.() === 'foodStorageNeeded') {
+        uiScene.withdrawPendingCaption?.('foodStorageNeeded');
+      }
+      this.withdrawStaleStorageHint();
     }
   }
 
@@ -2871,8 +2882,9 @@ export class GameScene extends Phaser.Scene {
     }
 
     // #395 — a storage hint still waiting behind another caption is withdrawn once
-    // it is out of date. Before the loop drains, so the designation's own 'chamber'
-    // caption finds the slot free; while Paused too (the caption clock runs on).
+    // it is out of date, judged before the loop drains; while Paused too (the
+    // caption clock runs on, and a larder ordered while paused is still queued).
+    // (While Playing, a designation's own 'chamber' caption would evict it anyway.)
     this.withdrawStaleStorageHint();
 
     // Drive platform accumulator. When paused/GameOver, gameLoop.pause() already

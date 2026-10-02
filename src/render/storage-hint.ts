@@ -114,12 +114,16 @@ export function storageHintStale(world: WorldState, colonyId: ColonyId): boolean
 /**
  * GameScene's per-frame step for the player's colony. Returns the caption text to
  * show now (with the 'foodStorageNeeded' key), or null. Re-arms the caption once
- * storage has covered the reserve for STORAGE_HINT_REARM_TICKS.
+ * storage has covered the reserve for STORAGE_HINT_REARM_TICKS. With `mayOffer`
+ * false (#395: a recurring caption — the army warning, the rampage warning or raid
+ * news — is owed and goes first) the dwell and re-arm clocks run on but no caption
+ * is offered this frame; a due one is offered on the next frame that may.
  */
 export function advanceStorageHint(
   state: StorageHintState,
   world: WorldState,
   colonyId: ColonyId,
+  mayOffer = true,
 ): string | null {
   const condition = storageHintCondition(world, colonyId);
   const tick = world.tick;
@@ -141,6 +145,7 @@ export function advanceStorageHint(
     state.blockedSinceTick = tick;
   }
   if (tick - state.blockedSinceTick < STORAGE_HINT_DWELL_TICKS) return null;
+  if (!mayOffer) return null;
   // null once it has shown (or is showing) since the last re-arm.
   return checkAndTrigger('foodStorageNeeded');
 }

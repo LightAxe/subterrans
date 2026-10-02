@@ -374,6 +374,20 @@ describe('advanceStorageHint', () => {
     return shown;
   }
 
+  it('held back while an army warning is owed (#395): the dwell runs on, the hint waits', () => {
+    const { world } = blockedWorld();
+    const s = createStorageHintState();
+    const due = 1000 + STORAGE_HINT_DWELL_TICKS;
+    // Due, but the frame may not offer it: nothing shown and the key is not marked.
+    for (let t = 1000; t <= due + 5; t++) {
+      // eslint-disable-next-line no-restricted-syntax -- test fixture: stage the world tick
+      world.tick = t;
+      expect(advanceStorageHint(s, world, PLAYER_COLONY_ID, false)).toBeNull();
+    }
+    // The first frame that may offer it shows it at once (no fresh dwell), then not again.
+    expect(run(s, world, due + 6, due + 20)).toEqual([`${due + 6}:${TEXT}`]);
+  });
+
   it('shows once after blocking for the dwell, then not again', () => {
     const { world } = blockedWorld();
     const s = createStorageHintState();

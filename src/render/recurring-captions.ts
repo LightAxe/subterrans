@@ -164,7 +164,8 @@ export function offerOwedRampageCaption(
  * invasion's launch warning is owed until shown). Giving way narrows that to a
  * warning owed in the hint's first ~0.2 s at 4x (see RAMPAGE_CAPTION_OWED_TICKS).
  * The warning being offered is never itself the caption showing: once shown it is
- * no longer owed.
+ * no longer owed. While this is true GameScene also holds the storage hint back,
+ * and withdraws one waiting, so the owed caption comes next.
  */
 export function recurringCaptionStillOwed(
   rampage: RampageCaptionState,
