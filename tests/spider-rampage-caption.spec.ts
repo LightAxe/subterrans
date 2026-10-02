@@ -53,7 +53,9 @@ async function captions(page: Page): Promise<string[]> {
  *   2. the tick applies the spider priority and the spider starts its rampage,
  *      on the player's door;
  *   3. checkQueenStatusForEffects raises the one-shot 'spiderPriority' caption,
- *      then owes the rampage warning (the rampage threatens the player).
+ *      and the rampage warning is owed (the rampage threatens the player: by
+ *      beforeSimTick if the frame ran another tick, else here) and offered only
+ *      after it.
  * The warning only enters an idle queue, so the one-shot keeps the pending slot
  * and the warning shows after it. Shown straight away (as before #350, from the
  * spider_rampage_start event, which GameScene handles before step 3) it would

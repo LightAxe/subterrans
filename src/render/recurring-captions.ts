@@ -42,7 +42,7 @@ import {
   type WorldState,
 } from '../sim/types.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
-import { rampageThreatens } from '../sim/ant/idle-reserve.js';
+import { rampageThreatens } from '../sim/ant/ant-system.js';
 import { spiderOnRampage } from '../sim/spider.js';
 import { RAMPAGE_THREAT_RADIUS_TILES } from '../sim/constants.js';
 import { FP_SHIFT } from '../sim/fixed.js';
@@ -169,7 +169,9 @@ export function rampageThreatensViewer(world: WorldState, viewerColonyId: Colony
 }
 
 /**
- * #397 — called each frame, before offerOwedRampageCaption. While the rampage
+ * #397 — called before every sim tick (sim-tick-hook.ts beforeSimTick: a frame
+ * can run several ticks, and a threat may last only one of them) and each frame
+ * before offerOwedRampageCaption (for the frame's last tick). While the rampage
  * threatens the viewing colony (rampageThreatensViewer) and nothing is owed, it
  * owes the warning — unless it has already been shown this hungry spell. The
  * spell ends when the spider is no longer on a rampage (spiderOnRampage false: a

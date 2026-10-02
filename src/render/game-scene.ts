@@ -2,7 +2,7 @@
 //
 // Owns: createGameLoop wiring, draw dispatch, Tab view-toggle, camera-pan triggers,
 //       GamePhase FSM (Playing|Paused|GameOver|SavePrompt), save boot flow,
-//       AI controller wiring (onBeforeTick → runAIController per AI colony),
+//       AI controller wiring (onBeforeTick → beforeSimTick → runAIController per AI colony),
 //       outcome handling (gameLoop.pause() + UIScene overlay), autosave.
 //
 // Coordinate model (Stage 2 continuous-zoom rework, issue #18):
@@ -43,7 +43,7 @@ import {
 } from '../platform/save.js';
 import { deserializeWorldState } from '../platform/save.js';
 import { loadSettings, saveSettings } from '../platform/settings.js';
-import { runAIController } from './ai-controller.js';
+import { beforeSimTick } from './sim-tick-hook.js';
 import { buildDebugSnapshot } from '../platform/debug-snapshot.js';
 import { downloadDebugSnapshot } from './debug-snapshot-download.js';
 import { submitPlaytrace, type PlaytraceSurvey } from './playtrace-upload.js';
@@ -1832,8 +1832,9 @@ export class GameScene extends Phaser.Scene {
 
   /**
    * Drain world.events from the last-seen index, dispatching each new event
-   * to render-side effects (the invasion screen flash). No event raises a
-   * caption (#394, #397).
+   * to render-side effects (the invasion screen flash) and to the army warning's
+   * invasion fallback (noteArmyWarningEvent). No event shows a caption here
+   * (#394, #397).
    * Called once per render frame while Playing.
    */
   private consumeEventsForRender(): void {
@@ -1865,10 +1866,11 @@ export class GameScene extends Phaser.Scene {
       if (!ev || ev.tick <= this.lastProcessedEventTick) continue;
       if (ev.tick > maxTickSeen) maxTickSeen = ev.tick;
 
-      // (#397: no event drives a caption here. The spider-rampage warning is owed
+      // (#397: the spider-rampage warning is not driven by an event. It is owed
       // from world state — the rampage threatening the player's colony, once per
-      // hungry spell — by checkQueenStatusForEffects, which shows it once the
-      // caption queue is idle, so it never takes a one-shot caption's slot.)
+      // hungry spell — by beforeSimTick and checkQueenStatusForEffects;
+      // checkQueenStatusForEffects shows it once the caption queue is idle, so it
+      // never takes a one-shot caption's slot.)
 
       // #404 review — an invasion launched at the player is noted for the army
       // warning's fallback (enemy-gathering.ts nextArmyWarning).
@@ -2015,9 +2017,12 @@ export class GameScene extends Phaser.Scene {
 
     // #350/#397 — the spider-rampage warning: shown once per hungry spell, owed
     // while the rampage threatens the player's colony (as its idle workers head
-    // underground), until it shows or goes stale. Offered after the army
-    // warning: it outranks raid news. (Owed news behind the long army warning
-    // shortens that warning to a readable floor, below.)
+    // underground), until it shows or goes stale. The threat is checked before
+    // every sim tick (beforeSimTick) and here, for the frame's last tick, so a
+    // threat lasting one tick inside a multi-tick frame (not its last) still
+    // counts. Offered after the army warning: it outranks raid news. (Owed news
+    // behind the long army warning shortens that warning to a readable floor,
+    // below.)
     noteRampageThreat(this.rampageCaption, this.world, PLAYER_COLONY_ID);
     if (uiScene) {
       const cx = this.layout.w / 2;
@@ -2305,14 +2310,10 @@ export class GameScene extends Phaser.Scene {
     this.aiColonyIds = deriveAIColonyIds(this.world, PLAYER_COLONY_ID);
 
     this.gameLoop = createGameLoop(tick, this.world, {
-      onBeforeTick: (w) => {
-        // Run AI for all AI colonies FIRST (AI commands enqueued before drain)
-        for (const aiCid of this.aiColonyIds) {
-          runAIController(w, aiCid);
-        }
-        // Then snapshot prevState for render interpolation
-        copyWorldState(w, this.prevState);
-      },
+      // AI controllers (commands enqueued before the drain), the #397 per-tick
+      // rampage-threat check, then the prevState snapshot for interpolation.
+      onBeforeTick: (w) =>
+        beforeSimTick(w, this.aiColonyIds, this.rampageCaption, PLAYER_COLONY_ID, this.prevState),
       onAfterDrain: (cmds) => {
         // SCEN-06 replay truth: never truncate — appendInputLog handles all commands
         appendInputLog(this.inputLog, cmds);
