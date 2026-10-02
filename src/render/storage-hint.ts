@@ -53,7 +53,7 @@ export const STORAGE_HINT_DWELL_TICKS = 200;
 /** Ticks (30 s) storage must cover the no-brood reserve before the caption re-arms. */
 export const STORAGE_HINT_REARM_TICKS = 600;
 
-/** The caption's full-opacity hold (ms), as long as the gathering warning's
+/** The caption's full-opacity hold (ms), as long as the army warning's
  *  (GATHER_CAPTION_HOLD_MS): long enough to read. Like it, the caption gives way to
  *  an event caption queued behind it (caption-queue.ts CAPTION_YIELD_FLOOR_MS). */
 export const STORAGE_HINT_HOLD_MS = 4000;

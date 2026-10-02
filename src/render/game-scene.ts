@@ -510,6 +510,12 @@ declare global {
        *  a real click. Lets a spec rally on an enemy entrance without driving the
        *  camera to it. Returns false if the command was dropped (paused cap). */
       rallyPlayerAt?(tileX: number, tileY: number): boolean;
+      /** #395 — rally colony `colonyId`'s fighters on (tileX, tileY): a real
+       *  SetRallyPoint through enqueueCommand, so the sim applies it on the next
+       *  drain. Lets a spec send an enemy army out at a moment of its choosing (the
+       *  raid fixture has no AI state, so no AI operation launches one). True means
+       *  enqueued; false: dropped (cap). */
+      rallyColonyAt?(colonyId: number, tileX: number, tileY: number): boolean;
       /** #395 — designate a player chamber of `chamberType` at anchor (tileX, tileY)
        *  through the input layer's enqueueCommand (the enqueue the chamber menu's
        *  command takes, minus its feedforward check): a command, not a state write,
@@ -877,6 +883,13 @@ export class GameScene extends Phaser.Scene {
           tileX,
           tileY,
           PLAYER_COLONY_ID,
+          isPausedByAny(this.pauseReasons),
+        ),
+      rallyColonyAt: (colonyId: number, tileX: number, tileY: number): boolean =>
+        this.world !== undefined &&
+        enqueueCommand(
+          this.world,
+          { type: 'SetRallyPoint', colonyId, tileX, tileY, issuedAtTick: this.world.tick },
           isPausedByAny(this.pauseReasons),
         ),
       offerCaption: (text: string): boolean =>
@@ -1939,6 +1952,7 @@ export class GameScene extends Phaser.Scene {
         uiScene.showCaption(captionText, this.layout.w / 2, 60, 'spiderPriority');
       }
     }
+
     // Recurring captions (no one-shot key) enter only while the caption queue is
     // fully idle (offerRecurringCaption, fail-closed). Taking the pending slot
     // behind an active caption would make an arriving one-shot caption (rallyRaid,
@@ -1951,11 +1965,9 @@ export class GameScene extends Phaser.Scene {
     // raid news.
     const armyText = nextArmyWarning(this.armyWarning, this.world, PLAYER_COLONY_ID);
     // #395 — offered and not taken: still owed, so a long-hold caption gives way (below).
-    let gatheringOwed = false;
+    let armyWarningOwed = false;
     if (armyText !== null && uiScene) {
-      if (
-        offerRecurringCaption(uiScene, armyText, this.layout.w / 2, 60, GATHER_CAPTION_HOLD_MS)
-      ) {
+      if (offerRecurringCaption(uiScene, armyText, this.layout.w / 2, 60, GATHER_CAPTION_HOLD_MS)) {
         const owedTick = this.armyWarning.owedSinceTick;
         markArmyWarningShown(this.armyWarning);
         if (import.meta.env.DEV) {
@@ -1964,16 +1976,16 @@ export class GameScene extends Phaser.Scene {
           );
         }
       } else {
-        gatheringOwed = true;
+        armyWarningOwed = true;
       }
     }
 
     // #395 (V70) — the queen lays only while stores cover the egg reserve, which the
     // entrance pool alone never can: tell the player when storage is what stops her
     // (storage-hint.ts). Advanced only while UIScene is up, so the caption is never
-    // marked shown without reaching the screen. After the gathering warning, so on a
-    // tie the army's warning goes first and the hint queues behind it (as a one-shot
-    // it takes the pending slot, and the warning gives way to its readable floor).
+    // marked shown without reaching the screen. After the army warning, so on a tie
+    // the army's warning goes first and the hint queues behind it (as a one-shot it
+    // takes the pending slot, and the warning gives way to its readable floor).
     if (uiScene) {
       // On the projected world: a larder the player has ordered, still queued, counts.
       const storageText = advanceStorageHint(
@@ -2017,7 +2029,7 @@ export class GameScene extends Phaser.Scene {
       )
     ) {
       markRaidCaptionShown(this.raidCaptions, this.world, raidCaption);
-    } else if (recurringCaptionStillOwed(this.rampageCaption, raidCaption, gatheringOwed)) {
+    } else if (recurringCaptionStillOwed(this.rampageCaption, raidCaption, armyWarningOwed)) {
       // #372 — a recurring caption still owed behind a busy queue: a long-hold
       // caption (the army warning, the #395 storage hint) gives way, keeping
       // CAPTION_YIELD_FLOOR_MS to be read.
@@ -2088,7 +2100,7 @@ export class GameScene extends Phaser.Scene {
     this.currentOutcome = outcome;
     this.gamePhase = GamePhase.GameOver;
     // #395 (Codex P2) — the end screen owns the display: no caption stays over it,
-    // and none waiting behind one (a storage hint, an army warning) is promoted.
+    // and none waiting behind one (a storage hint, a one-shot event caption) is promoted.
     this.getUIScene()?.closeCaptions?.();
     // W2: first-class pause via Plan 06 Task 1 API — no setMsPerTick(Infinity)
     this.gameLoop.pause();

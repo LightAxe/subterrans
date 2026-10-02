@@ -72,7 +72,7 @@ describe('recurringCaptionStillOwed (#372)', () => {
     expect(recurringCaptionStillOwed(r, null, false)).toBe(true);
   });
 
-  it('true while an untaken gathering warning is owed (#395: behind the storage hint)', () => {
+  it('true while an untaken army warning is owed (#395: behind the storage hint)', () => {
     const r = createRampageCaptionState();
     expect(recurringCaptionStillOwed(r, null, true)).toBe(true);
     expect(recurringCaptionStillOwed(r, 'raided', true)).toBe(true);

@@ -2,8 +2,8 @@
 // eggs." reaches the player in a real browser when storage is what stops the queen
 // laying (the V70 egg reserve tops storage capacity), and stays quiet once the
 // player has designated a Food Storage chamber that would cover it. Its 4 s hold
-// gives way to an enemy-army gathering warning owed behind it, as the gathering
-// warning's own long hold gives way to news owed behind it.
+// gives way to an army warning (#394) owed behind it, as the army warning's own
+// long hold gives way to news owed behind it.
 //
 // The condition, the dwell, the re-arm and the pending-chamber rule are pinned in
 // src/render/storage-hint.test.ts. What only a browser proves is the GameScene
@@ -25,6 +25,7 @@
 // through Continue.
 
 import { test, expect, type Page } from '@playwright/test';
+import { ENEMY_COLONY_ID } from '../src/sim/constants.js';
 import { clickCanvasRect, settleToPlaying, waitForUiHook } from './helpers/boot.js';
 import {
   DIALOG_NEW_GAME_RECT,
@@ -45,7 +46,8 @@ const CAPTION_COURSE_MS = 300 + 800 + 400;
 /** Scene time past a rally caption's whole course and then a hint promoted behind
  *  it (fade-in, its 4 s hold, fade-out), with a margin. */
 const PAST_RALLY_AND_HINT_MS = CAPTION_COURSE_MS + 300 + HOLD_MS + 400 + 1_000;
-const GATHERING_PREFIX = 'An enemy army is gathering near your';
+/** Every army warning (a march, a gathering, an invasion: enemy-gathering.ts). */
+const ARMY_WARNING_PREFIX = 'An enemy army is';
 const RALLY_TEXT = 'Fighters will converge here.';
 const CHAMBER_TEXT = 'Chambers give workers and brood a purpose. This one is a Food Storage.';
 /** ChamberType.FoodStorage. */
@@ -54,11 +56,13 @@ const FOOD_STORAGE = 2;
 interface TestHook {
   getCaptionsShown?: () => string[];
   getCaptionHolds?: () => { text: string; holdMs: number; yielded: boolean }[];
+  getArmyWarningLog?: () => { tick: number; owedTick: number; text: string }[];
   getTick?: () => number;
   freezeCaptionClock?: (frozen: boolean) => void;
   advanceCaptionClock?: (ms: number) => void;
   getCaptionQueue?: () => { active: string | null; pending: string | null };
   rallyPlayerAt?: (tileX: number, tileY: number) => boolean;
+  rallyColonyAt?: (colonyId: number, tileX: number, tileY: number) => boolean;
   isPaused?: () => boolean;
   placePlayerChamberAt?: (chamberType: number, tileX: number, tileY: number) => boolean;
   offerCaption?: (text: string) => boolean;
@@ -182,10 +186,12 @@ type Variant = 'plain' | 'designate' | 'army' | 'starve';
  *    every tick before), after the hint is due.
  *  - 'designate': the player has designated a Food Storage chamber: a real
  *    PlaceChamber applied by one sim tick before the save (checked there).
- *  - 'army': eight enemy fighters stand in the far north-east corner, rallied 13
- *    tiles east of the player's door. They march there and, headless, gather near
- *    it from tick 180, so the gathering warning is owed from tick 220: after the
- *    hint has shown (tick 200 or later, after its dwell). */
+ *  - 'army': eight enemy fighters stand far down the map to the south-east (where
+ *    army-warning.spec.ts starts its army: all eight read as marching the whole
+ *    way), rallied where they stand, so they hold there until the spec rallies
+ *    them 13 tiles east of the player's door (rallyColonyAt). The march warning
+ *    (#394) is owed about 75 ticks after the rally; the army then stands near the
+ *    door without going in, so the warning stays owed (GATHER_CAPTION_OWED_TICKS). */
 async function seedStorageSave(page: Page, variant: Variant): Promise<void> {
   await page.evaluate(async (variant: Variant) => {
     // Paths are served by the Vite dev server (Playwright always runs it).
@@ -273,9 +279,11 @@ async function seedStorageSave(page: Page, variant: Variant): Promise<void> {
     }
     if (variant === 'army') {
       for (let i = 0; i < 8; i++) {
-        utils.addFighter(r.world, k.ENEMY_COLONY_ID, 122 + (i % 4), Math.floor(i / 4), null);
+        utils.addFighter(r.world, k.ENEMY_COLONY_ID, 80 + (i % 4), 108 + (i >> 2), null);
       }
-      r.enemy.rallyPoint = { tileX: 37, tileY: 64 };
+      // Rallied where it stands, the army holds there (with no rally it would drift
+      // home and later read as at home, not marching).
+      r.enemy.rallyPoint = { tileX: 81, tileY: 108 };
     }
     if (variant === 'designate') {
       sim.tick(r.world, [
@@ -344,22 +352,33 @@ test.describe('#395 — Food Storage hint', () => {
     expect(await captions(page)).not.toContain(HINT);
   });
 
-  test('its long hold gives way to a gathering warning owed behind it', async ({ page }) => {
+  test('its long hold gives way to an army warning owed behind it', async ({ page }) => {
     test.setTimeout(90_000);
     await bootStorageSave(page, 'army');
     await expect.poll(() => captions(page), { timeout: 40_000, intervals: [50] }).toContain(HINT);
-    // Keep the hint up, however slow the machine, while the army gathers: the
+    // Keep the hint up, however slow the machine, while the army marches: the
     // caption clock stops, the sim runs on.
     await freezeCaptionClock(page, true);
-    const shownBy = await simTick(page);
-    // The hint showed first and the army is not yet owed its warning (from tick 220).
-    expect(shownBy).toBeLessThan(220);
-    expect((await captions(page)).some((c) => c.startsWith(GATHERING_PREFIX))).toBe(false);
-    // The warning is owed behind the hint for a while; the hint is asked to give way.
-    await expect.poll(() => simTick(page), { timeout: 40_000 }).toBeGreaterThan(260);
+    expect((await captions(page)).some((c) => c.startsWith(ARMY_WARNING_PREFIX))).toBe(false);
+    // Send the enemy army at the player's door now, behind the hint.
+    const rallied = await page.evaluate(
+      (enemy: number) =>
+        (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.rallyColonyAt?.(
+          enemy,
+          37,
+          64,
+        ),
+      ENEMY_COLONY_ID,
+    );
+    expect(rallied).toBe(true);
+    const t0 = await simTick(page);
+    // The march warning is owed behind the hint for a while (from about t0 + 75; a
+    // march warning stays owed for 200 ticks); the hint is asked to give way.
+    await expect.poll(() => simTick(page), { timeout: 40_000 }).toBeGreaterThan(t0 + 115);
     // Nothing queued behind the hint (an event caption would make it give way too):
-    // the owed gathering warning is what asks it to.
+    // the owed army warning is what asks it to.
     expect(await captionQueue(page)).toEqual({ active: HINT, pending: null });
+    const unfrozenAt = await simTick(page);
     await freezeCaptionClock(page, false);
     // It held only the floor, and the warning followed it.
     await expect
@@ -369,10 +388,19 @@ test.describe('#395 — Food Storage hint', () => {
         yielded: true,
       });
     await expect
-      .poll(async () => (await captions(page)).some((c) => c.startsWith(GATHERING_PREFIX)), {
+      .poll(async () => (await captions(page)).some((c) => c.startsWith(ARMY_WARNING_PREFIX)), {
         timeout: 15_000,
       })
       .toBe(true);
+    // It was owed by the march the spec started, while the hint held the queue.
+    const log = await page.evaluate(
+      () =>
+        (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.getArmyWarningLog?.() ??
+        [],
+    );
+    expect(log).toHaveLength(1);
+    expect(log[0]!.owedTick).toBeGreaterThan(t0);
+    expect(log[0]!.owedTick).toBeLessThan(unfrozenAt);
   });
 
   test('a hint waiting behind another caption is withdrawn once Food Storage is designated', async ({

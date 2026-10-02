@@ -2378,11 +2378,13 @@ export class UIScene extends Phaser.Scene {
    * screen). Captions draw at depth 30, above the GameOver overlay (20–22) and the
    * new-game screen, and the caption clock runs on after the loop pauses, so the
    * caption on screen would stay over that screen and one waiting behind it (a
-   * storage hint, an army warning, rampage news) would be promoted over it. Drop
-   * both, without promoting anything, and admit no caption until the next round
-   * (resetCaptionsForRound). GameScene's per-frame caption sources stop with the
-   * round, and a late async one (an autosave failure resolving) is refused, so no
-   * caption is meant for these screens. Idempotent. The dev logs are kept.
+   * storage hint, a one-shot event caption) would be promoted over it. Drop both,
+   * without promoting anything, and admit no caption until the next round
+   * (resetCaptionsForRound). GameScene's per-frame caption sources (the army
+   * warning and rampage news among them, which never wait in the pending slot)
+   * run only while Playing, and a late async one (an autosave failure resolving)
+   * is refused, so no caption is meant for these screens. Idempotent. The dev
+   * logs are kept.
    */
   public closeCaptions(): void {
     this.clearCaptionQueue();
