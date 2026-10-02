@@ -12,13 +12,14 @@
 //
 //   - raid news (raid-captions.ts) stays owed for RAID_CAPTION_OWED_TICKS;
 //   - the spider-rampage warning (#397) is shown ONCE per hungry spell: owed
-//     while the rampage threatens the viewing colony — the V68 rampage
-//     shelter's rampageThreatens, so it comes as that colony's idle workers head
-//     underground — and, once shown, not owed again until the spider has fed
-//     (spiderOnRampage false: it has eaten, or is gone). Every chase divert
-//     restarts the sim's rampage (88-144 starts in a long match), so keying the
-//     warning on spider_rampage_start, as #350 did, showed it again and again;
-//     and a rampage at another colony's door does not concern the viewer at all.
+//     while the rampage threatens the viewing colony — by the V68 rampage
+//     shelter's own threat rule (rampageThreatRule), so it comes as that
+//     colony's idle workers head underground — and, once shown, not owed again
+//     until the spider has fed (spiderOnRampage false: it has eaten, or is
+//     gone). Every chase divert restarts the sim's rampage (88-144 starts in a
+//     long match), so keying the warning on spider_rampage_start, as #350 did,
+//     showed it again and again; and a rampage at another colony's door does
+//     not concern the viewer at all.
 //     Once owed it stays owed while the spider is still out hunting hungry,
 //     whether or not it still threatens the colony (it was at the door a moment
 //     ago), for up to RAMPAGE_CAPTION_OWED_TICKS; if that runs out unshown, a
@@ -36,17 +37,11 @@
 //
 // Pure + Phaser-free: GameScene owns the state and passes its UIScene in.
 
-import {
-  SIM_VERSION_V68_RAMPAGE_SHELTER,
-  type SpiderBehaviorState,
-  type WorldState,
-} from '../sim/types.js';
+import type { SpiderBehaviorState, WorldState } from '../sim/types.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
-import { rampageThreatens } from '../sim/ant/ant-system.js';
+import { rampageThreatRule } from '../sim/ant/ant-system.js';
 import { spiderOnRampage } from '../sim/spider.js';
-import { RAMPAGE_THREAT_RADIUS_TILES } from '../sim/constants.js';
-import { FP_SHIFT } from '../sim/fixed.js';
-import { captionForEvent } from './onboarding-captions.js';
+import { captionText } from './onboarding-captions.js';
 
 /** The part of UIScene a recurring caption needs. */
 export interface RecurringCaptionSink {
@@ -140,32 +135,19 @@ export function oweRampageCaption(
 }
 
 /**
- * #397 — the spider on a rampage threatens colony `viewerColonyId`: from V68 the
- * rampage shelter's own rampageThreatens (idle-reserve.ts), so the warning comes
- * exactly as that colony's idle workers head underground. Below V68 (an older
- * save, which has no shelter rule and whose rampageThreatens is always false) the
- * same test without the version gate: on a rampage (spiderOnRampage) and camping,
- * or on its way to camp, one of the colony's entrances, or within
- * RAMPAGE_THREAT_RADIUS_TILES (Manhattan) of one of its open entrances. Reads
- * only; any colony may be the viewer (CLNY-08).
+ * #397 — the spider on a rampage (spiderOnRampage) threatens colony
+ * `viewerColonyId` by the rampage shelter's own threat rule (idle-reserve.ts
+ * rampageThreatRule: camping, or on its way to camp, one of the colony's entrances,
+ * or within RAMPAGE_THREAT_RADIUS_TILES of an open one). From V68 that is exactly
+ * the sim's rampageThreatens, so the warning comes as that colony's idle workers
+ * head underground. Below V68 (an older save, with no shelter rule, whose
+ * rampageThreatens is always false) the same rule still warns. Reads only; any
+ * colony may be the viewer (CLNY-08).
  */
 export function rampageThreatensViewer(world: WorldState, viewerColonyId: ColonyId): boolean {
   const colony = world.colonies[viewerColonyId];
   if (colony === undefined) return false;
-  if (world.simVersion >= SIM_VERSION_V68_RAMPAGE_SHELTER) return rampageThreatens(world, colony);
-  if (!spiderOnRampage(world)) return false;
-  const spider = world.spider!; // spiderOnRampage: there is a spider
-  if (spider.state === 'Rampaging' && spider.rampageTargetColonyId === colony.colonyId) {
-    return true;
-  }
-  const sx = spider.posX >> FP_SHIFT;
-  const sy = spider.posY >> FP_SHIFT;
-  for (const e of colony.entrances ?? []) {
-    if (!e.isOpen) continue;
-    const d = Math.abs(e.surfaceTileX - sx) + Math.abs(e.surfaceTileY - sy);
-    if (d <= RAMPAGE_THREAT_RADIUS_TILES) return true;
-  }
-  return false;
+  return spiderOnRampage(world) && rampageThreatRule(world, colony);
 }
 
 /**
@@ -207,18 +189,16 @@ export function offerOwedRampageCaption(
   screenY: number,
 ): boolean {
   if (state.owedSinceTick === -Infinity) return false;
-  const text = captionForEvent('spider_rampage_start');
   if (
     world.spider === null ||
     RAMPAGE_OVER_STATES.has(world.spider.state) ||
     world.spider.hungerTicks < state.owedHungerTicks || // it has eaten since
-    world.tick - state.owedSinceTick > RAMPAGE_CAPTION_OWED_TICKS ||
-    text === null
+    world.tick - state.owedSinceTick > RAMPAGE_CAPTION_OWED_TICKS
   ) {
     state.owedSinceTick = -Infinity; // stale: drop it
     return false;
   }
-  if (!offerRecurringCaption(ui, text, screenX, screenY)) return false;
+  if (!offerRecurringCaption(ui, captionText('spiderRampage'), screenX, screenY)) return false;
   state.owedSinceTick = -Infinity;
   state.announced = true;
   return true;
