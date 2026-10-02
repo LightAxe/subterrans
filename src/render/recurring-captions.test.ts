@@ -33,7 +33,7 @@ import {
   type WorldState,
 } from '../sim/types.js';
 import { createScenario } from '../sim/scenario.js';
-import { rampageThreatens } from '../sim/ant/idle-reserve.js';
+import { rampageThreatens } from '../sim/ant/ant-system.js';
 import { spiderOnRampage } from '../sim/spider.js';
 import { FP_ONE, FP_SHIFT } from '../sim/fixed.js';
 import {
