@@ -1841,9 +1841,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * Check per-frame world state for queen damage pulse and starvation onset.
-   * Also fires world-state-based captions (spider visible, spiderPriority, etc.).
-   * Called once per render frame while Playing.
+   * #395 — withdraw a storage hint still waiting behind another caption once it is
+   * out of date: storage no longer blocks the queen, judged on the projected world
+   * (queued commands folded in). Called before the game loop drains (so the
+   * designation's own 'chamber' caption finds the slot free), while Playing or
+   * Paused, and again after the hint's own step (a tick can unblock storage with
+   * no command: a worker lost lowers the reserve).
    */
   private withdrawStaleStorageHint(): void {
     if (!this.world) return;
@@ -1857,6 +1860,11 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  /**
+   * Check per-frame world state for queen damage pulse and starvation onset.
+   * Also fires world-state-based captions (spider visible, spiderPriority, etc.).
+   * Called once per render frame while Playing.
+   */
   private checkQueenStatusForEffects(): void {
     if (!this.world) return;
     const playerColony = this.world.colonies[PLAYER_COLONY_ID];
@@ -1964,6 +1972,7 @@ export class GameScene extends Phaser.Scene {
           STORAGE_HINT_HOLD_MS,
         );
       }
+      this.withdrawStaleStorageHint();
     }
 
     // #350 — the spider-rampage warning, owed from its spider_rampage_start until

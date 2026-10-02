@@ -31,8 +31,9 @@
 // A hint waiting behind another caption is withdrawn, never to show, on the first
 // frame storage stops blocking the queen (covered, or enough Food Storage
 // designated; judged on the projected world, so a queued designation counts, paused
-// or not; storageHintStale). Its key is un-marked, so it comes back after a fresh
-// dwell if storage blocks the queen again.
+// or not; storageHintStale). Its key is un-marked, so it comes back if storage
+// blocks the queen again (after a fresh dwell, unless the blocking spell it was due
+// in never broke while the game played on).
 //
 // Render-side session state only: reads world state, writes nothing, saves nothing.
 // Pure and Phaser-free; GameScene owns the state and calls advanceStorageHint each
@@ -101,10 +102,10 @@ export function storageHintCondition(world: WorldState, colonyId: ColonyId): Sto
 /**
  * True when storage no longer blocks colony `colonyId`'s queen (covered, or enough
  * Food Storage designated; also no colony or queen), so a storage hint still
- * waiting behind another caption is out of date. GameScene asks this of the
- * projected world (queued commands folded in), every frame while Playing or
- * Paused and before the loop drains, and withdraws the waiting hint
- * (UIScene.withdrawPendingCaption). Read-only.
+ * waiting behind another caption is out of date. Whenever the hint is the caption
+ * waiting, GameScene asks this of the projected world (queued commands folded in)
+ * before the loop drains (Playing or Paused) and again after the hint's step, and
+ * withdraws the waiting hint (UIScene.withdrawPendingCaption). Read-only.
  */
 export function storageHintStale(world: WorldState, colonyId: ColonyId): boolean {
   return storageHintCondition(world, colonyId) !== 'blocked';
