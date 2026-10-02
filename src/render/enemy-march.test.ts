@@ -7,6 +7,7 @@ import {
   MARCH_CHASE_HOME_RADIUS_TILES,
   MARCH_CHASE_TILES,
   MARCH_HOME_RADIUS_TILES,
+  MARCH_LEG_MIN_HEADING,
   MARCH_MAX_LOOKBACK_TICKS,
   MARCH_MIN_FIGHTERS,
   MARCH_MIN_HEADING,
@@ -170,6 +171,40 @@ describe('measureEnemyMarch — which fighters march', () => {
     const pace = MARCH_MIN_STEP_TILES / MARCH_WINDOW_TICKS;
     expect(run(-(pace + 0.01))?.fighters).toBe(1);
     expect(run(-(pace - 0.01))).toBeNull();
+  });
+
+  it('a fighter that has turned off the door since the last sample is not marching (#404 review)', () => {
+    // West at the door at 0.5 tile a tick for 35 ticks, then `deg` off west (to the
+    // north) for the last `leg` ticks — its whole latest leg, since the newest
+    // sample at least MARCH_SAMPLE_TICKS old. Over the window its heading still
+    // points at the door, and it is still making ground along it: the leg decides.
+    const run = (deg: number, leg: number) => {
+      const { world: w, h } = setup();
+      const id = addFighter(w, E, 70, 64, null);
+      const walk = (dx: number, dy: number, ticks: number) => {
+        for (let t = 0; t < ticks; t++) {
+          observeMarchHistory(h, w);
+          advance(w, 1);
+          const [x, y] = pos(w, id);
+          place(w, id, x + dx, y + dy);
+        }
+      };
+      walk(-0.5, 0, 35);
+      const r = (deg * Math.PI) / 180;
+      walk(-0.5 * Math.cos(r), -0.5 * Math.sin(r), leg);
+      observeMarchHistory(h, w);
+      return measureEnemyMarch(w, P, h);
+    };
+    for (let leg = MARCH_SAMPLE_TICKS; leg < 2 * MARCH_SAMPLE_TICKS; leg++) {
+      expect(run(0, leg)?.fighters).toBe(1);
+      expect(run(30, leg)?.fighters).toBe(1); // a bend that still aims at the door
+      // A diagonal step round a rock: off the door's row, it reads about 46-52°
+      // off the line to the door — within MARCH_LEG_MIN_HEADING, still marching.
+      expect(run(45, leg)?.fighters).toBe(1);
+      expect(run(60, leg)).toBeNull(); // turned off it, at every sample phase
+      expect(run(90, leg)).toBeNull();
+    }
+    expect(MARCH_LEG_MIN_HEADING).toBe(0.5);
   });
 
   it('standing or milling is not marching: under MARCH_MIN_STEP_TILES moved', () => {
@@ -389,16 +424,19 @@ describe('measureEnemyMarch — which fighters march', () => {
   });
 
   it('a runner that has stopped or turned is no longer being chased: those behind it march (#404 review)', () => {
-    // Six enemy fighters walk west at the door, half a tile a tick, ending 36-39
-    // tiles from their own door (inside MARCH_CHASE_HOME_RADIUS_TILES). One player
-    // fighter runs ahead of them at their pace, 6 tiles in front of the lead; for
-    // the last `late` ticks it instead moves `turn` a tick (stops, by default),
-    // staying in front of them.
-    const go = (late: number, turn: [number, number] = [0, 0]) => {
+    // Six enemy fighters walk west at the door, half a tile a tick, ending 30-37
+    // tiles from their own door (inside MARCH_CHASE_HOME_RADIUS_TILES, however
+    // long it runs). One player fighter runs ahead of them at their pace, 6 tiles
+    // in front of the lead; for the last `late` ticks it instead moves `turn` a
+    // tick (stops, by default), staying in front of them.
+    const go = (
+      late: number,
+      turn: [number, number] = [0, 0],
+      total = MARCH_WINDOW_TICKS + 2 * MARCH_SAMPLE_TICKS,
+    ) => {
       const { world: w, h } = setup();
-      const ids = army(w, MARCH_MIN_FIGHTERS, 80, 64);
-      const own = addFighter(w, P, 74, 65, null);
-      const total = MARCH_WINDOW_TICKS + 2 * MARCH_SAMPLE_TICKS;
+      const ids = army(w, MARCH_MIN_FIGHTERS, 84, 64);
+      const own = addFighter(w, P, 78, 65, null);
       for (let t = 0; t < total; t++) {
         observeMarchHistory(h, w);
         for (const id of ids) {
@@ -424,6 +462,26 @@ describe('measureEnemyMarch — which fighters march', () => {
     // still west-north-west (their way), but it is not running that way now.
     const turned = go(6, [0.35, -0.35]);
     expect([turned.fighters, turned.chasing]).toEqual([MARCH_MIN_FIGHTERS, 0]);
+    // Turned 60° (north-west) for its whole latest leg, at every sample phase: its
+    // window heading is still theirs, and it is still making ground along it, but
+    // it runs its new way now — they are not chasing it.
+    const r60 = Math.PI / 3;
+    const v60: [number, number] = [-0.5 * Math.cos(r60), -0.5 * Math.sin(r60)];
+    for (let leg = MARCH_SAMPLE_TICKS; leg < 2 * MARCH_SAMPLE_TICKS; leg++) {
+      const veered = go(leg, v60, MARCH_WINDOW_TICKS + MARCH_SAMPLE_TICKS + leg);
+      expect([veered.fighters, veered.chasing]).toEqual([MARCH_MIN_FIGHTERS, 0]);
+    }
+    // Crawling on below the window's pace (0.05 tile a tick): not running.
+    const crawling = go(2 * MARCH_SAMPLE_TICKS, [-0.05, 0]);
+    expect([crawling.fighters, crawling.chasing]).toEqual([MARCH_MIN_FIGHTERS, 0]);
+    // A 45° bend in its path (a diagonal step round a rock, the whole latest leg)
+    // is still their way: it still leads them, at every sample phase.
+    const r45 = Math.PI / 4;
+    const v45: [number, number] = [-0.5 * Math.cos(r45), -0.5 * Math.sin(r45)];
+    for (let leg = MARCH_SAMPLE_TICKS; leg < 2 * MARCH_SAMPLE_TICKS; leg++) {
+      const bent = go(leg, v45, MARCH_WINDOW_TICKS + MARCH_SAMPLE_TICKS + leg);
+      expect([bent.fighters, bent.chasing]).toEqual([0, MARCH_MIN_FIGHTERS]);
+    }
   });
 
   it('a chase spares only a fighter within MARCH_CHASE_HOME_RADIUS_TILES of its own door', () => {

@@ -491,15 +491,18 @@ the viewing colony's open entrances: each has moved at least `MARCH_MIN_STEP_TIL
 over the last `MARCH_WINDOW_TICKS` along a line within `MARCH_MIN_HEADING`
 (cosine) of the line to one of those entrances, is still advancing along it at that
 pace (since the newest sample at least `MARCH_SAMPLE_TICKS` old — one that stops or
-turns back drops out), and is more than `MARCH_HOME_RADIUS_TILES` from its own open
+turns back drops out) with that latest leg still pointing at the entrance (within
+`MARCH_LEG_MIN_HEADING` — one that turns off it drops out), and is more than
+`MARCH_HOME_RADIUS_TILES` from its own open
 entrances (nearer home it is defending or chasing, not marching), with no other
 colony's open entrance ahead of it nearer than the viewer's (it is heading there). One still near its own home
 (`MARCH_CHASE_HOME_RADIUS_TILES`) with a viewing colony's fighter close in front of
-it (`MARCH_CHASE_TILES`), running the same way, is chasing that fighter — a sally
+it (`MARCH_CHASE_TILES`), running the same way (judged by where that fighter runs
+now: its latest leg), is chasing that fighter — a sally
 after raiders running home — and does not make an army or hold a **wave** open,
 though (outside an invasion) it keeps a march warning already owed from going
-stale. (Defenders standing, or an army coming the other way, are not being
-chased; further from home, an army on the heels of the viewer's is following it
+stale. (Defenders standing, a fighter that has stopped or turned off, or an army
+coming the other way, are not being chased; further from home, an army on the heels of the viewer's is following it
 home, a march.) The entrance it names is the one most of them aim at.
 Read from world state in `src/render/enemy-march.ts`, which keeps a render-side
 history of fighter positions to get headings — not from the AI state. Since V64 the

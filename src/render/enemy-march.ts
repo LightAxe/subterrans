@@ -46,9 +46,17 @@ export const MARCH_MAX_LOOKBACK_TICKS = 2 * MARCH_WINDOW_TICKS;
 export const MARCH_MIN_STEP_TILES = 3;
 
 /** A fighter marches on an entrance when the cosine of the angle between its
- *  heading and the line to the entrance is at least this (about 45°): a detour
- *  round a rock still counts, a fighter walking past does not. */
+ *  heading (over the window) and the line to the entrance is at least this (about
+ *  45°): a detour round a rock still counts, a fighter walking past does not. An
+ *  enemy runs the same way as a viewer's fighter it chases within this too. */
 export const MARCH_MIN_HEADING = 0.7;
+
+/** #404 review — and its latest leg (since the newest sample at least
+ *  MARCH_SAMPLE_TICKS old) must point at that entrance with at least this cosine
+ *  (60°): looser than MARCH_MIN_HEADING, since a short leg swings further — a
+ *  diagonal step round a rock, off the line, reads up to about 52° — while a
+ *  fighter that has turned off the door does not. */
+export const MARCH_LEG_MIN_HEADING = 0.5;
 
 /**
  * An enemy fighter this close (tiles, straight-line) to one of its own colony's
@@ -70,22 +78,22 @@ export const MARCH_AIM_TIE_TILES = 2;
 /**
  * An enemy fighter with one of the viewer's own surface fighters within this many
  * tiles (straight-line) in front of it, running the same way (its heading within
- * MARCH_MIN_HEADING of the enemy's) and still running now (#404 review: the
- * marchers' own progress test), is chasing that fighter, not marching on the
- * nest: it does not make an army or hold a wave open, but (outside an invasion)
- * keeps a march warning already owed for its army from going stale
- * (EnemyMarch.chasing).
+ * MARCH_MIN_HEADING of the enemy's — its heading being its latest leg, at no less
+ * than the window's pace, #404 review: where it runs now), is chasing that
+ * fighter, not marching on the nest: it does not make an army or hold a wave
+ * open, but (outside an invasion) keeps a march warning already owed for its army
+ * from going stale (EnemyMarch.chasing).
  * Measured on hit-and-run raids (#394): an AI sallying after a player's raiders as
  * they ran home stayed 3-7 tiles behind them, out to 38 tiles from its own door —
  * past MARCH_HOME_RADIUS_TILES, and heading straight for the player's door. A
  * viewer's fighter coming the other way (the player's own army out to attack,
  * meeting an invasion head-on — measured, a chase rule without the heading test
  * lost those invasions' warnings) is not being chased; nor is one standing still,
- * or one that has stopped or turned, so a charge at the player's fighters standing
- * in the field near the attacker's home still reads as a march on the door it
- * faces (accepted: not seen in the measured raids, where the AI drove off raiders
- * that ran; raiders that halt or turn on a sally 30-38 tiles from its door can
- * draw such a warning, with or without the still-running test).
+ * or one that has stopped or turned off, so a charge at the player's fighters
+ * standing in the field near the attacker's home still reads as a march on the
+ * door it faces (accepted: not seen in the measured raids, where the AI drove off
+ * raiders that ran; raiders that halt or turn on a sally 30-38 tiles from its door
+ * can draw such a warning, with or without the latest-leg heading).
  */
 export const MARCH_CHASE_TILES = 10;
 
@@ -401,16 +409,18 @@ function runnerAhead(own: OwnRunners, x: number, y: number, hx: number, hy: numb
  * entrances, was on the surface in the heading sample too, has moved at least
  * MARCH_MIN_STEP_TILES since — and is still going that way at that pace since the
  * newest sample at least MARCH_SAMPLE_TICKS old — and its heading points at one
- * of the viewer's open
- * entrances (cosine at least MARCH_MIN_HEADING) — unless another colony's open
- * entrance lies ahead of it, nearer along that heading than the one it aims at
- * (it is heading there). It counts once however many entrances it points at, so
+ * of the viewer's open entrances (cosine at least MARCH_MIN_HEADING), its latest
+ * leg (since that sample) still pointing at the one it aims at (cosine at least
+ * MARCH_LEG_MIN_HEADING) — unless another colony's open entrance lies ahead of
+ * it, nearer along that heading than the one it aims at (it is heading there). It counts once however many entrances it points at, so
  * an army heading between two doors is not split. One still within
  * MARCH_CHASE_HOME_RADIUS_TILES of its own open entrances with a viewer's fighter on
  * the surface within MARCH_CHASE_TILES in front of it (ahead of its side-line),
- * running the same way (headings within MARCH_MIN_HEADING, each over the same
- * window) and still running now (the marchers' own progress test), counts as
- * `chasing`, not in `fighters`.
+ * running the same way, counts as `chasing`, not in `fighters`. Running: the
+ * viewer's fighter moved at least MARCH_MIN_STEP_TILES over the window and is
+ * still moving at no less than the window's pace; its heading is its latest leg
+ * (where it runs now). The same way: that heading within MARCH_MIN_HEADING of the
+ * enemy's heading over the window.
  *
  * The entrance returned is the one most of the army (`fighters`; with none, the
  * chasers) aims at, and the box is of those of them aiming at it. A fighter aims
@@ -449,10 +459,11 @@ export function measureEnemyMarch(
   let chasing = 0;
   const ants = world.ants;
   // The viewer's own surface fighters on the move, with their headings: an enemy
-  // close behind one, going the same way, is chasing it. On the move now, as a
-  // marcher must be (#404 review): one that has stopped or turned since the newest
-  // sample at least MARCH_SAMPLE_TICKS old is no longer running, and those behind
-  // it are not chasing it, though its heading over the window still points away.
+  // close behind one, going the same way, is chasing it. The heading is where it
+  // runs now (#404 review): its latest leg, since the newest sample at least
+  // MARCH_SAMPLE_TICKS old, at no less than the window's pace. One that has
+  // stopped since is no longer running, and one that has turned off runs its new
+  // way — those behind it, still going the old way, are not chasing it.
   const own = sc.own;
   own.x.length = 0;
   own.y.length = 0;
@@ -467,17 +478,19 @@ export function measureEnemyMarch(
     if (k < 0) continue;
     const x = ants.posX[id]! / FP_ONE;
     const y = ants.posY[id]! / FP_ONE;
-    const step = Math.hypot(x - old.x[k]!, y - old.y[k]!);
-    if (step < MARCH_MIN_STEP_TILES) continue;
-    const hx = (x - old.x[k]!) / step;
-    const hy = (y - old.y[k]!) / step;
+    if (Math.hypot(x - old.x[k]!, y - old.y[k]!) < MARCH_MIN_STEP_TILES) continue;
+    // Its heading is its latest leg (since `recent`), at no less than the
+    // window's pace: where it is running now.
     const r = sampleIndexOf(recent, id);
     if (r < 0) continue;
-    if ((x - recent.x[r]!) * hx + (y - recent.y[r]!) * hy < minProgress) continue;
+    const rx = x - recent.x[r]!;
+    const ry = y - recent.y[r]!;
+    const leg = Math.hypot(rx, ry);
+    if (leg < minProgress) continue;
     own.x.push(x);
     own.y.push(y);
-    own.hx.push(hx);
-    own.hy.push(hy);
+    own.hx.push(rx / leg);
+    own.hy.push(ry / leg);
   }
   const end = Math.min(world.nextEntityId, ants.alive.length);
   let j = 0; // merge-walk cursor into old.ids (both ascending)
@@ -498,12 +511,15 @@ export function measureEnemyMarch(
     if (step < MARCH_MIN_STEP_TILES) continue;
     const hx = sx / step;
     const hy = sy / step;
-    // Still going that way now: a fighter that has stopped or turned since the
-    // last sample (a sally giving up the chase) is no longer marching, though its
-    // heading over the window still points at the door.
+    // Still going that way now: a fighter that has stopped or turned back since
+    // the last sample (a sally giving up the chase) is no longer marching, though
+    // its heading over the window still points at the door.
     const r = sampleIndexOf(recent, id);
     if (r < 0) continue;
-    if ((x - recent.x[r]!) * hx + (y - recent.y[r]!) * hy < minProgress) continue;
+    const rx = x - recent.x[r]!;
+    const ry = y - recent.y[r]!;
+    const progress = rx * hx + ry * hy;
+    if (progress < minProgress) continue;
     // Pass 1: the least miss among the doors it heads for (none: not marching).
     let bestMiss = Infinity;
     for (let d = 0; d < n; d++) {
@@ -527,6 +543,15 @@ export function measureEnemyMarch(
         bestAlong = along;
       }
     }
+    // ...and still heading for that entrance now (#404 review): its latest leg
+    // within MARCH_LEG_MIN_HEADING of the line to it (or on it, within a tile). A
+    // bend in its path that still aims at the door marches on; a fighter that has
+    // turned off — still making ground along its stale window heading — does not.
+    const tx = doors[best]!.surfaceTileX + 0.5 - x;
+    const ty = doors[best]!.surfaceTileY + 0.5 - y;
+    const toDoor = Math.hypot(tx, ty);
+    const leg = Math.hypot(rx, ry); // >= progress > 0
+    if (toDoor > 1 && rx * tx + ry * ty < MARCH_LEG_MIN_HEADING * leg * toDoor) continue;
     if (otherDoorNearerAhead(world, viewerColonyId, x, y, hx, hy, bestAlong)) continue;
     const bestDist = Math.hypot(
       doors[best]!.surfaceTileX + 0.5 - x,
