@@ -504,8 +504,9 @@ home, a march.) The entrance it names is the one most of them aim at.
 Read from world state in `src/render/enemy-march.ts`, which keeps a render-side
 history of fighter positions to get headings — not from the AI state. Since V64 the
 AI marches its army straight from home instead of gathering it near the player's
-nest, so this is how its invasions are seen coming. The minimap ring follows a
-march; a march and a gathering at the same entrance share one ring when one ring can
+nest, so this is how its invasions are seen coming on the minimap (the caption for
+an AI invasion comes earlier, at its launch — see **Army warning**). The minimap
+ring follows a march; a march and a gathering at the same entrance share one ring when one ring can
 enclose both (else each gets its own).
 _Avoid_: "invasion" for the march (an invasion is the AI operation, or fighters
 inside the nest), "attack" alone.
@@ -520,11 +521,24 @@ has held `MARCH_DWELL_TICKS` (a quarter-second), or "…is gathering near…" on
 the colony's open entrances (no name with one entrance, or when the direction would
 not single it out). An **invasion** — at least `INVASION_NEST_MIN_FIGHTERS` enemy
 fighters in the colony's tunnels — raises no warning of a gathering (the army at the
-door is the invasion itself) but does not use the wave up: an army still marching
-behind a vanguard that slipped in is warned of. The warning re-arms for the next
-wave once at most `GATHER_REARM_MAX_FIGHTERS` are near any entrance, at most that
-many are marching and no invasion is under way, continuously for
+door is the invasion itself) but, when the fallback has not warned of it, does not
+use the wave up: an army still marching behind a vanguard that slipped in is warned
+of. The warning re-arms for the next wave once at most `GATHER_REARM_MAX_FIGHTERS`
+are near any entrance, at most that many are marching and no invasion is under way
+(in the tunnels, or launched and not yet ended), continuously for
 `GATHER_REARM_QUIET_TICKS`.
+An invasion the AI launches is warned of at its launch (#404 review): an invasion
+launched at the colony (its `invasion_start`) while the warning is armed, and not yet
+warned of by a reading, is warned of ("…is marching on…", naming the entrance it
+targets) at once, as its army sets out. The AI's army does not move before that, so
+in play against the AI this is how nearly every invasion is warned of; the readings
+warn of an army with no launch event (a human opponent's, a save loaded
+mid-invasion) and keep the minimap ring on the army as it marches. (They alone would
+miss some: an army marching on a door within `MARCH_HOME_RADIUS_TILES` of its own
+nest counts as at home all the way there.) With three or more doors where the
+direction would not single the target out, the launch warning names none and points
+to no ring (the army may still read as at home). While a launched invasion is under
+way (until its `invasion_end`) the wave does not end.
 It replaced the one-time "The enemy is attacking your hive." invasion caption.
 _Avoid_: "gathering warning" for a warning that may be about a march; "invasion
 caption".

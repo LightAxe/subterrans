@@ -600,6 +600,9 @@ export function measureEnemyMarchThisTick(
 export interface ArmyWarningLogEntry {
   /** world.tick the queue took the warning. */
   tick: number;
+  /** world.tick it became owed (#404 review: when the fallback fired, say, apart
+   *  from how long it then waited for the queue). */
+  owedTick: number;
   text: string;
   /** Enemy fighters marching on the viewer's entrances then (0: none). */
   marching: number;
@@ -609,20 +612,24 @@ export interface ArmyWarningLogEntry {
   marchDistanceTiles: number | null;
 }
 
-/** The log entry for an army warning `text` the queue took now (see ArmyWarningLogEntry). */
+/** The log entry for an army warning `text`, owed since `owedTick`, that the queue
+ *  took now (see ArmyWarningLogEntry). */
 export function armyWarningLogEntry(
   world: WorldState,
   viewerColonyId: ColonyId,
   text: string,
+  owedTick: number,
 ): ArmyWarningLogEntry {
   const m = measureEnemyMarchThisTick(world, viewerColonyId);
+  const tick = world.tick;
   // Chasers only (a warning they kept owed) is no march to measure.
   if (m === null || m.fighters === 0) {
-    return { tick: world.tick, text, marching: 0, marchDistanceTiles: null };
+    return { tick, owedTick, text, marching: 0, marchDistanceTiles: null };
   }
   const ex = m.entrance.surfaceTileX + 0.5;
   const ey = m.entrance.surfaceTileY + 0.5;
   const dx = Math.max(m.minTileX - ex, 0, ex - m.maxTileX);
   const dy = Math.max(m.minTileY - ey, 0, ey - m.maxTileY);
-  return { tick: world.tick, text, marching: m.fighters, marchDistanceTiles: Math.hypot(dx, dy) };
+  const marchDistanceTiles = Math.hypot(dx, dy);
+  return { tick, owedTick, text, marching: m.fighters, marchDistanceTiles };
 }

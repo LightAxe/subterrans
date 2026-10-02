@@ -219,6 +219,7 @@ import {
   GATHER_CAPTION_HOLD_MS,
   markArmyWarningShown,
   nextArmyWarning,
+  noteArmyWarningEvent,
   resetArmyWarningState,
 } from './enemy-gathering.js';
 import {
@@ -1770,6 +1771,10 @@ export class GameScene extends Phaser.Scene {
       // takes a one-shot caption's slot.
       routeEventCaption(ev, this.rampageCaption);
 
+      // #404 review — an invasion launched at the player is noted for the army
+      // warning's fallback (enemy-gathering.ts nextArmyWarning).
+      noteArmyWarningEvent(this.armyWarning, ev, PLAYER_COLONY_ID);
+
       if (ev.type === 'invasion_start') {
         // Screen-edge flash in the direction of the invasion entrance.
         const playerColony = this.world.colonies[PLAYER_COLONY_ID];
@@ -1790,7 +1795,8 @@ export class GameScene extends Phaser.Scene {
           uiScene?.triggerScreenEdgeFlash('right');
         }
         // #394 — no caption here: the army warning (checkQueenStatusForEffects)
-        // announces every invasion wave as it marches, naming the entrance.
+        // announces every invasion wave, naming the entrance — as its army is seen
+        // marching or gathering, or (#404 review, noted above) as it sets out.
       }
     }
 
@@ -1875,9 +1881,12 @@ export class GameScene extends Phaser.Scene {
       uiScene &&
       offerRecurringCaption(uiScene, armyText, this.layout.w / 2, 60, GATHER_CAPTION_HOLD_MS)
     ) {
+      const owedTick = this.armyWarning.owedSinceTick;
       markArmyWarningShown(this.armyWarning);
       if (import.meta.env.DEV) {
-        this.armyWarningLog.push(armyWarningLogEntry(this.world, PLAYER_COLONY_ID, armyText));
+        this.armyWarningLog.push(
+          armyWarningLogEntry(this.world, PLAYER_COLONY_ID, armyText, owedTick),
+        );
       }
     }
 

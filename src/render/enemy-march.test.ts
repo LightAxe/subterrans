@@ -856,8 +856,9 @@ describe('measureEnemyMarchThisTick — shared history, one measurement per worl
 describe('armyWarningLogEntry — what the dev log records of a warning', () => {
   it('the tick, the text, the march size and its nearest distance from the door', () => {
     const quiet = raidWorld().world;
-    expect(armyWarningLogEntry(quiet, P, 'x')).toEqual({
+    expect(armyWarningLogEntry(quiet, P, 'x', quiet.tick - 3)).toEqual({
       tick: quiet.tick,
+      owedTick: quiet.tick - 3,
       text: 'x',
       marching: 0,
       marchDistanceTiles: null,
@@ -874,8 +875,9 @@ describe('armyWarningLogEntry — what the dev log records of a warning', () => 
     }
     // Box x 50.5..53.5, rows 63.5..64.5; the door centre (24.5, 64.5) is 26 tiles
     // west of its near edge, inside its rows.
-    const e = armyWarningLogEntry(w, P, 'march');
+    const e = armyWarningLogEntry(w, P, 'march', w.tick - 7);
     expect(e.tick).toBe(w.tick);
+    expect(e.owedTick).toBe(w.tick - 7);
     expect(e.marching).toBe(MARCH_MIN_FIGHTERS);
     expect(e.marchDistanceTiles).toBeCloseTo(26, 5);
   });
@@ -897,7 +899,7 @@ describe('armyWarningLogEntry — what the dev log records of a warning', () => 
       fighters: 0,
       chasing: MARCH_MIN_FIGHTERS,
     });
-    expect(armyWarningLogEntry(w, P, 'march')).toMatchObject({
+    expect(armyWarningLogEntry(w, P, 'march', w.tick)).toMatchObject({
       marching: 0,
       marchDistanceTiles: null,
     });

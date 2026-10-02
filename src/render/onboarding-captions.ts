@@ -97,8 +97,8 @@ export function checkAndTrigger(key: CaptionKey, textOverride?: string): string 
 // #394 — every event caption is now recurring. The one-shot invasion caption
 // ('The enemy is attacking your hive.', on the first invasion_start only) is
 // gone: the army warning (enemy-gathering.ts) announces every invasion wave
-// instead, naming the threatened entrance, from world state rather than the AI's
-// event.
+// instead, naming the threatened entrance — read from world state, with the AI's
+// invasion_start only as its fallback.
 
 // Recurring alerts re-fire their caption on EVERY occurrence of the event
 // (e.g. every spider rampage, not just the first). These never consult the

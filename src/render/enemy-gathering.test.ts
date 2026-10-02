@@ -12,19 +12,23 @@ import {
   GATHER_REARM_MAX_FIGHTERS,
   GATHER_REARM_QUIET_TICKS,
   INVASION_NEST_MIN_FIGHTERS,
+  INVASION_WATCH_TICKS,
   createArmyWarningState,
   enemyFightersInNest,
   entranceDirectionName,
   gatheringWarningText,
+  invasionWarningText,
   isEnemyGathering,
   marchWarningText,
   markArmyWarningShown,
   measureEnemyGathering,
   measureEnemyGatheringThisTick,
   nextArmyWarning,
+  noteArmyWarningEvent,
   resetArmyWarningState,
   type ArmyWarningState,
 } from './enemy-gathering.js';
+import type { SimEvent } from '../sim/telemetry.js';
 import { AI_PROBE_FIGHTER_COUNT, ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
 import { allocateEntityId, type WorldState } from '../sim/types.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
@@ -939,5 +943,233 @@ describe('nextArmyWarning — an army marching (#394)', () => {
       advance(w, 1);
     }
     expect(out).toEqual([ONE_DOOR]);
+  });
+});
+
+describe('nextArmyWarning — the invasion fallback (#404 review)', () => {
+  const HINT = 'Train fighters and rally there.';
+  const ONE_DOOR = `An enemy army is marching on your entrance. ${HINT}`;
+  const EAST = `An enemy army is marching on your east entrance. ${HINT}`;
+  // raidWorld's enemy door is (104, 64). A player door opened 8 tiles from it.
+  const NEAR = { x: 96, y: 64 };
+
+  const start = (w: WorldState, rally: { x: number; y: number }, from = E, at = P): SimEvent =>
+    ({
+      tick: w.tick,
+      type: 'invasion_start',
+      payload: {
+        colonyId: from,
+        rallyTile: { x: rally.x, y: rally.y, grid: 'surface' },
+        fighterCount: 12,
+        targetGrid: at,
+      },
+    }) satisfies SimEvent;
+  const end = (w: WorldState, from = E): SimEvent =>
+    ({
+      tick: w.tick,
+      type: 'invasion_end',
+      payload: { colonyId: from, outcome: 'fighter_rout', attackerLosses: 0, defenderLosses: 0 },
+    }) satisfies SimEvent;
+
+  /** Put INVASION_NEST_MIN_FIGHTERS enemy fighters in the player's tunnels. */
+  function breach(w: WorldState): number[] {
+    const ids: number[] = [];
+    for (let i = 0; i < INVASION_NEST_MIN_FIGHTERS; i++) ids.push(addFighter(w, E, 30 + i, 5, P));
+    return ids;
+  }
+
+  /** Move every ant in `ids` (dx, 0) tiles a tick for `frames` frames, running the
+   *  warning each frame; the texts it offered. */
+  function marchFrames(s: ArmyWarningState, w: WorldState, ids: readonly number[], frames: number) {
+    const out: string[] = [];
+    for (let i = 0; i < frames; i++) {
+      for (const id of ids) w.ants.posX[id] = w.ants.posX[id]! - FP_ONE / 2;
+      out.push(...run(s, w, 1));
+    }
+    return out;
+  }
+
+  /** A world with the player's door by the enemy nest as well as its own (24, 64),
+   *  and the enemy's army standing at home: neither reading sees it, ever. */
+  function nearDoorWorld() {
+    const r = raidWorld();
+    const near = addEntrance(r.world, r.player, NEAR.x, NEAR.y);
+    const host = army(r.world, 12, 100, 60);
+    return { ...r, near, host };
+  }
+
+  it('an invasion of a door by the enemy nest is warned of as it sets out, naming it — once', () => {
+    const { world: w, player, near, host } = nearDoorWorld();
+    const s = createArmyWarningState();
+    expect(run(s, w, 60)).toEqual([]); // the army at home: neither reading sees it
+    expect(entranceDirectionName(player, near)).toBe('east');
+    noteArmyWarningEvent(s, start(w, NEAR), P);
+    expect(run(s, w, 1)).toEqual([EAST]);
+    // It walks over and gets in, and stands about: no second warning for it.
+    for (const id of host) place(w, id, NEAR.x + 1.5, NEAR.y + 0.5);
+    const inside = breach(w);
+    expect(run(s, w, 300)).toEqual([]);
+    kill(w, inside);
+    expect(run(s, w, GATHER_REARM_QUIET_TICKS + 50)).toEqual([]);
+  });
+
+  it('why: without it that invasion gets no warning at all', () => {
+    const { world: w, host } = nearDoorWorld();
+    const s = createArmyWarningState();
+    for (const id of host) place(w, id, NEAR.x + 1.5, NEAR.y + 0.5);
+    breach(w);
+    expect(run(s, w, 300)).toEqual([]);
+  });
+
+  it('any invasion is warned of as it sets out, before the march can be read — and not again', () => {
+    const { world: w } = raidWorld();
+    const s = createArmyWarningState();
+    const ids = army(w, MARCH_MIN_FIGHTERS, 70, 62);
+    noteArmyWarningEvent(s, start(w, { x: 25, y: 64 }), P);
+    expect(run(s, w, 1)).toEqual([ONE_DOOR]);
+    // The march it then reads, and the breach, are that same wave.
+    expect(marchFrames(s, w, ids, MARCH_WINDOW_TICKS + MARCH_DWELL_TICKS + 20)).toEqual([]);
+    breach(w);
+    expect(run(s, w, 50)).toEqual([]);
+  });
+
+  it('a reading that warned of the wave first: no fallback when the invasion launches', () => {
+    const { world: w } = raidWorld();
+    const s = createArmyWarningState();
+    army(w, GATHER_MIN_FIGHTERS, 36, 62); // gathering by the door
+    expect(run(s, w, GATHER_DWELL_TICKS + 1)).toHaveLength(1);
+    noteArmyWarningEvent(s, start(w, { x: 25, y: 64 }), P);
+    expect(s.invasionUnwarned).toBe(false);
+    expect(run(s, w, 50)).toEqual([]);
+  });
+
+  it('a reading due on the launch frame warns instead (one warning, the reading’s)', () => {
+    const { world: w } = raidWorld();
+    const s = createArmyWarningState();
+    army(w, GATHER_MIN_FIGHTERS, 36, 62);
+    expect(run(s, w, GATHER_DWELL_TICKS)).toEqual([]);
+    noteArmyWarningEvent(s, start(w, { x: 25, y: 64 }), P);
+    expect(run(s, w, 50)).toEqual([`An enemy army is gathering near your entrance. ${HINT}`]);
+    expect(s.invasionUnwarned).toBe(false); // nothing left due: the wave is warned of
+  });
+
+  it('only an invasion of the viewer by another colony counts', () => {
+    const { world: w } = nearDoorWorld();
+    const s = createArmyWarningState();
+    noteArmyWarningEvent(s, start(w, NEAR, E, E), P); // at another colony
+    noteArmyWarningEvent(s, start(w, NEAR, P, P), P); // by the viewer itself
+    expect(s.invasionAttacker).toBe(-1);
+    expect(run(s, w, 5)).toEqual([]);
+  });
+
+  it('while its invasion runs the wave does not end: no re-arming, so no second warning', () => {
+    const { world: w, host } = nearDoorWorld();
+    const s = createArmyWarningState();
+    noteArmyWarningEvent(s, start(w, NEAR), P);
+    expect(run(s, w, 1)).toEqual([EAST]);
+    // Its army stands at home, unseen (quiet to the readings), for a long while...
+    expect(run(s, w, GATHER_REARM_QUIET_TICKS * 3)).toEqual([]);
+    expect(s.armed).toBe(false);
+    // ...then the fight drifts out by the door and lingers: still that wave.
+    for (const id of host) place(w, id, 84, 62);
+    expect(run(s, w, GATHER_DWELL_TICKS * 3)).toEqual([]);
+    // Over: things go quiet, it re-arms, and the next invasion is warned of.
+    kill(w, host);
+    noteArmyWarningEvent(s, end(w), P);
+    run(s, w, GATHER_REARM_QUIET_TICKS + 1);
+    expect(s.armed).toBe(true);
+    noteArmyWarningEvent(s, start(w, NEAR), P);
+    expect(run(s, w, 1)).toEqual([EAST]);
+  });
+
+  it('an invasion with no end in sight stops holding the wave after INVASION_WATCH_TICKS', () => {
+    const { world: w } = nearDoorWorld();
+    const s = createArmyWarningState();
+    noteArmyWarningEvent(s, start(w, NEAR), P);
+    run(s, w, INVASION_WATCH_TICKS);
+    expect(s.armed).toBe(false);
+    run(s, w, GATHER_REARM_QUIET_TICKS + 2);
+    expect(s.armed).toBe(true);
+    expect(s.invasionAttacker).toBe(-1);
+  });
+
+  it('launched while disarmed (an earlier wave not yet over): noted, but no fallback', () => {
+    const { world: w } = raidWorld();
+    const s = createArmyWarningState();
+    s.armed = false;
+    noteArmyWarningEvent(s, start(w, { x: 25, y: 64 }), P);
+    expect([s.invasionAttacker, s.invasionUnwarned]).toEqual([E, false]);
+    expect(run(s, w, 50)).toEqual([]);
+  });
+
+  it('its invasion_end forgets it; another attacker’s does not', () => {
+    const { world: w } = raidWorld();
+    const s = createArmyWarningState();
+    s.armed = false;
+    noteArmyWarningEvent(s, start(w, { x: 25, y: 64 }), P);
+    noteArmyWarningEvent(s, end(w, 7 as typeof E), P);
+    expect(s.invasionAttacker).toBe(E);
+    noteArmyWarningEvent(s, end(w), P);
+    expect(s.invasionAttacker).toBe(-1);
+  });
+
+  it('an owed fallback is offered until taken; stale once its invasion ends, or after the window', () => {
+    const owe = () => {
+      const r = nearDoorWorld();
+      const s = createArmyWarningState();
+      noteArmyWarningEvent(s, start(r.world, NEAR), P);
+      return { w: r.world, s };
+    };
+    const a = owe();
+    expect(run(a.s, a.w, 3, false)).toEqual([EAST, EAST, EAST]);
+    noteArmyWarningEvent(a.s, end(a.w), P);
+    expect(run(a.s, a.w, 3, false)).toEqual([]);
+    const b = owe();
+    expect(run(b.s, b.w, GATHER_CAPTION_OWED_TICKS + 1, false)).toHaveLength(
+      GATHER_CAPTION_OWED_TICKS + 1,
+    );
+    expect(run(b.s, b.w, 1, false)).toEqual([]);
+    // Dropped unshown, it is not owed again that wave.
+    breach(b.w);
+    expect(run(b.s, b.w, 50)).toEqual([]);
+  });
+
+  it('names the viewer’s open entrance nearest the rally tile, and points to no minimap ring', () => {
+    const { world: w, player } = raidWorld();
+    addEntrance(w, player, 24, 30);
+    const s = createArmyWarningState();
+    noteArmyWarningEvent(s, start(w, { x: 25, y: 31 }), P);
+    expect(run(s, w, 1)).toEqual([`An enemy army is marching on your north entrance. ${HINT}`]);
+    // Three doors, two sharing a name: no name, and no "ringed on the minimap"
+    // (as it sets out the army may read as at home, with no ring).
+    const r = raidWorld();
+    const a = addEntrance(r.world, r.player, 90, 64);
+    addEntrance(r.world, r.player, 96, 64);
+    expect(entranceDirectionName(r.player, a)).toBeNull();
+    const unnamed = `An enemy army is marching on one of your entrances. ${HINT}`;
+    expect(invasionWarningText(r.player, a)).toBe(unnamed);
+    expect(marchWarningText(r.player, a)).toContain('ringed on the minimap');
+    const s3 = createArmyWarningState();
+    noteArmyWarningEvent(s3, start(r.world, { x: 91, y: 64 }), P);
+    expect(run(s3, r.world, 1)).toEqual([unnamed]);
+  });
+
+  it('CLNY-08: the enemy as viewer is warned of the player’s invasion of its door', () => {
+    const r = raidWorld();
+    addEntrance(r.world, r.enemy, 32, 64); // the enemy's door 8 tiles from the player's
+    const s = createArmyWarningState();
+    noteArmyWarningEvent(s, start(r.world, { x: 32, y: 64 }, P, E), E);
+    expect(nextArmyWarning(s, r.world, E)).toBe(
+      `An enemy army is marching on your west entrance. ${HINT}`,
+    );
+  });
+
+  it('reset forgets a launched invasion', () => {
+    const { world: w } = nearDoorWorld();
+    const s = createArmyWarningState();
+    noteArmyWarningEvent(s, start(w, NEAR), P);
+    resetArmyWarningState(s);
+    expect([s.invasionAttacker, s.invasionUnwarned]).toEqual([-1, false]);
+    expect(run(s, w, 5)).toEqual([]);
   });
 });

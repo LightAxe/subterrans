@@ -20,11 +20,18 @@
 // route that stays clear of their own door: all eight read as marching the whole
 // way) — rallies the enemy just short of the door so they march at it,
 // and saves through the real save path (manualSave). A reload boots it through
-// Continue.
+// Continue. No AI operation launches them (no invasion_start): this is the march
+// reading's own path, as for a human opponent's army — an invasion the AI
+// launches is warned of at its launch (the fallback case below).
 //
 // No wall-clock assertions: how early the warning came is read from the dev-only
 // army warning log (the march's distance from the door on the tick the caption
 // queue took it), and how long it held from UIScene's caption hold log.
+//
+// The fallback case (#404 review, seedNearDoorSave): an invasion of a player door
+// opened by the enemy nest, which neither reading can see (its army counts as at
+// home all the way there), is warned of as the AI launches it — the GameScene
+// event wiring (invasion_start → noteArmyWarningEvent) that only a browser runs.
 //
 // Screenshots (for a human eye; not compared): test-results/army-warning-*.png.
 
@@ -33,6 +40,7 @@ import { clickCanvasRect, settleToPlaying, waitForUiHook } from './helpers/boot.
 import { MINIMAP_RECT, SAVE_PROMPT_CONTINUE_RECT } from './helpers/geometry.js';
 import { GATHER_CAPTION_HOLD_MS, GATHER_RADIUS_TILES } from '../src/render/enemy-gathering.js';
 import { MINIMAP_RING_MAX_R, MINIMAP_RING_MIN_R } from '../src/render/minimap.js';
+import { MAX_CATCHUP_TICKS } from '../src/platform/game-loop.js';
 
 const WARNING = 'An enemy army is marching on your east entrance. Train fighters and rally there.';
 
@@ -58,6 +66,7 @@ interface TestHook {
   getCaptionHolds?: () => { text: string; holdMs: number; yielded: boolean }[];
   getArmyWarningLog?: () => {
     tick: number;
+    owedTick: number;
     text: string;
     marching: number;
     marchDistanceTiles: number | null;
@@ -204,10 +213,94 @@ async function seedMarchSave(page: Page): Promise<void> {
 }
 
 async function bootMarchSave(page: Page): Promise<void> {
+  await bootSave(page, seedMarchSave);
+}
+
+/** The player's door opened 8 tiles from the enemy's door (104, 64). */
+const NEAR = { tileX: 96, tileY: 64 };
+const NEAR_WARNING =
+  'An enemy army is marching on your east entrance. Train fighters and rally there.';
+
+/**
+ * #404 review — the raid fixture with a second player door at NEAR, by the enemy
+ * nest, and the enemy AI set to invade it: its AI state is Invading with no cohort
+ * committed yet and NEAR as the last probe's target, and 12 of its fighters stand at
+ * home (within GATHER_HOME_RADIUS_TILES of their door). On its first tick the AI
+ * controller commits them against NEAR (StartAIOperation → invasion_start); they
+ * are inside within a few seconds, read neither as a march nor as a gathering.
+ */
+async function seedNearDoorSave(page: Page): Promise<number> {
+  return await page.evaluate(
+    async ({ near }) => {
+      const utilsPath = '/src/sim/raid-test-utils.ts';
+      const savePath = '/src/platform/save.ts';
+      const constantsPath = '/src/sim/constants.ts';
+      const typesPath = '/src/sim/types.ts';
+      const terrainPath = '/src/sim/terrain.ts';
+      const aiPath = '/src/sim/ai-state.ts';
+      type Colony = {
+        entrances: {
+          entranceId: number;
+          surfaceTileX: number;
+          surfaceTileY: number;
+          isOpen: boolean;
+        }[];
+      };
+      type World = { tick: number; aiState: unknown[]; undergroundGrids: Record<number, unknown> };
+      const utils = (await import(/* @vite-ignore */ utilsPath)) as {
+        raidWorld: (fp: number) => { world: World; player: Colony; enemy: Colony };
+        addFighter: (w: unknown, c: number, x: number, y: number, g: number | null) => number;
+      };
+      const save = (await import(/* @vite-ignore */ savePath)) as {
+        manualSave: (seed: number, log: unknown[], w: unknown) => Promise<boolean>;
+      };
+      const k = (await import(/* @vite-ignore */ constantsPath)) as {
+        PLAYER_COLONY_ID: number;
+        ENEMY_COLONY_ID: number;
+      };
+      const types = (await import(/* @vite-ignore */ typesPath)) as {
+        allocateEntityId: (w: unknown) => number;
+      };
+      const terrain = (await import(/* @vite-ignore */ terrainPath)) as {
+        ugSet: (g: unknown, x: number, y: number, s: number) => void;
+        UndergroundTileState: { Open: number };
+      };
+      const ai = (await import(/* @vite-ignore */ aiPath)) as {
+        createDefaultAIStateRecord: (cid: number) => Record<string, unknown>;
+      };
+      const r = utils.raidWorld(3000);
+      const grid = r.world.undergroundGrids[k.PLAYER_COLONY_ID];
+      terrain.ugSet(grid, near.tileX, 0, terrain.UndergroundTileState.Open);
+      terrain.ugSet(grid, near.tileX, 1, terrain.UndergroundTileState.Open);
+      r.player.entrances.push({
+        entranceId: types.allocateEntityId(r.world),
+        surfaceTileX: near.tileX,
+        surfaceTileY: near.tileY,
+        isOpen: true,
+      });
+      const state = ai.createDefaultAIStateRecord(k.ENEMY_COLONY_ID);
+      state.state = 'Invading';
+      state.enteredTick = r.world.tick;
+      state.invasionStartTick = r.world.tick;
+      state.operationTargetTileX = near.tileX;
+      state.operationTargetTileY = near.tileY;
+      r.world.aiState.push(state);
+      for (let i = 0; i < 12; i++) {
+        utils.addFighter(r.world, k.ENEMY_COLONY_ID, 100 + (i % 4), 58 + (i >> 2), null);
+      }
+      if (!(await save.manualSave(7, [], r.world))) throw new Error('manualSave failed');
+      return r.world.tick;
+    },
+    { near: NEAR },
+  );
+}
+
+/** Seed a save with `seed`, reload, and Continue into it. Returns what `seed` did. */
+async function bootSave<T>(page: Page, seed: (page: Page) => Promise<T>): Promise<T> {
   await page.goto('/');
   await waitForUiHook(page);
   await page.evaluate(() => localStorage.clear());
-  await seedMarchSave(page);
+  const seeded = await seed(page);
   await page.reload();
   await waitForUiHook(page);
   await expect
@@ -220,6 +313,7 @@ async function bootMarchSave(page: Page): Promise<void> {
     .toBe('save-prompt');
   await clickCanvasRect(page, SAVE_PROMPT_CONTINUE_RECT);
   await settleToPlaying(page);
+  return seeded;
 }
 
 test.describe('#394 — an enemy army marching on an entrance', () => {
@@ -300,6 +394,30 @@ test.describe('#394 — an enemy army marching on an entrance', () => {
     await expect.poll(() => tick(page), { timeout: 30_000 }).toBeGreaterThan(t0 + 200);
     const shown = await captions(page);
     expect(shown.filter((c) => c.startsWith('An enemy army'))).toEqual([WARNING]);
+    expect(await warningLog(page)).toHaveLength(1);
+  });
+
+  test('an invasion of a door by the enemy nest, which no reading sees, is warned of as it launches', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    const saveTick = await bootSave(page, seedNearDoorSave);
+    await expect.poll(() => warningLog(page), { timeout: 20_000, intervals: [50] }).toHaveLength(1);
+    const [entry] = await warningLog(page);
+    // The fallback: no march behind it (the army counts as at home all the way)...
+    expect(entry).toMatchObject({ text: NEAR_WARNING, marching: 0, marchDistanceTiles: null });
+    // ...owed as the AI launched the invasion on the save's first tick: on the first
+    // frame, which may run up to MAX_CATCHUP_TICKS ticks — not at the breach, which
+    // its army, 6+ tiles from the door at half a tile a tick, takes over a dozen.
+    expect(entry!.owedTick).toBeGreaterThanOrEqual(saveTick);
+    expect(entry!.owedTick).toBeLessThanOrEqual(saveTick + MAX_CATCHUP_TICKS + 1);
+    // Once per wave: the army walks in and the invasion runs on, 10 s of game time
+    // later, with no second warning.
+    const t0 = await tick(page);
+    await expect.poll(() => tick(page), { timeout: 30_000 }).toBeGreaterThan(t0 + 200);
+    expect((await captions(page)).filter((c) => c.startsWith('An enemy army'))).toEqual([
+      NEAR_WARNING,
+    ]);
     expect(await warningLog(page)).toHaveLength(1);
   });
 });
