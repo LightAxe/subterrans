@@ -32,6 +32,8 @@
 // opened by the enemy nest, which neither reading can see (its army counts as at
 // home all the way there), is warned of as the AI launches it — the GameScene
 // event wiring (invasion_start → noteArmyWarningEvent) that only a browser runs.
+// And the same invasion saved after its launch is warned of as the save loads —
+// the boot wiring (finishBoot → noteInvasionUnderWay), since saves keep no events.
 //
 // Screenshots (for a human eye; not compared): test-results/army-warning-*.png.
 
@@ -229,9 +231,9 @@ const NEAR_WARNING =
  * controller commits them against NEAR (StartAIOperation → invasion_start); they
  * are inside within a few seconds, read neither as a march nor as a gathering.
  */
-async function seedNearDoorSave(page: Page): Promise<number> {
+async function seedNearDoorSave(page: Page, launched = false): Promise<number> {
   return await page.evaluate(
-    async ({ near }) => {
+    async ({ near, launched }) => {
       const utilsPath = '/src/sim/raid-test-utils.ts';
       const savePath = '/src/platform/save.ts';
       const constantsPath = '/src/sim/constants.ts';
@@ -285,13 +287,26 @@ async function seedNearDoorSave(page: Page): Promise<number> {
       state.operationTargetTileX = near.tileX;
       state.operationTargetTileY = near.tileY;
       r.world.aiState.push(state);
+      const ids: number[] = [];
       for (let i = 0; i < 12; i++) {
-        utils.addFighter(r.world, k.ENEMY_COLONY_ID, 100 + (i % 4), 58 + (i >> 2), null);
+        ids.push(utils.addFighter(r.world, k.ENEMY_COLONY_ID, 100 + (i % 4), 58 + (i >> 2), null));
+      }
+      if (launched) {
+        // Taken after the launch: the cohort committed on the save's tick (the save
+        // keeps the operation, not the invasion_start event).
+        state.operationKind = 'Invasion';
+        state.operationStartTick = r.world.tick;
+        state.invasionRallyTileX = near.tileX;
+        state.invasionRallyTileY = near.tileY;
+        const cohort = state.operationFighterIds as Int32Array;
+        ids.forEach((id, i) => (cohort[i] = id));
+        state.operationFighterCount = ids.length;
+        state.operationStartFighterCount = ids.length;
       }
       if (!(await save.manualSave(7, [], r.world))) throw new Error('manualSave failed');
       return r.world.tick;
     },
-    { near: NEAR },
+    { near: NEAR, launched },
   );
 }
 
@@ -418,6 +433,24 @@ test.describe('#394 — an enemy army marching on an entrance', () => {
     expect((await captions(page)).filter((c) => c.startsWith('An enemy army'))).toEqual([
       NEAR_WARNING,
     ]);
+    expect(await warningLog(page)).toHaveLength(1);
+  });
+
+  test('an invasion a save was taken in the middle of is warned of as the save loads', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    // The same invasion, saved 30 ticks after its launch: a save keeps no events, so
+    // no invasion_start reaches the warning — GameScene's boot notes the operation.
+    const saveTick = await bootSave(page, (p) => seedNearDoorSave(p, true));
+    await expect.poll(() => warningLog(page), { timeout: 20_000, intervals: [50] }).toHaveLength(1);
+    const [entry] = await warningLog(page);
+    expect(entry).toMatchObject({ text: NEAR_WARNING, marching: 0, marchDistanceTiles: null });
+    expect(entry!.owedTick).toBeGreaterThanOrEqual(saveTick);
+    expect(entry!.owedTick).toBeLessThanOrEqual(saveTick + MAX_CATCHUP_TICKS + 1);
+    // Once: 10 s of game time on, with the invasion running, no second warning.
+    const t0 = await tick(page);
+    await expect.poll(() => tick(page), { timeout: 30_000 }).toBeGreaterThan(t0 + 200);
     expect(await warningLog(page)).toHaveLength(1);
   });
 });

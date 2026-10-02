@@ -10,11 +10,13 @@
 // is not the viewer, never a fixed id). Since V64 the AI no longer stages: it
 // marches its army straight from home, which enemy-march.ts reads instead.
 // The one exception (#404 review): the warning also keys on the AI's
-// invasion_start event — read-only telemetry, never AI state — and warns of an
-// invasion the AI launches as it sets out, before either reading can see its army
-// (and even where neither ever could). In play against the AI that is how nearly
-// every invasion is warned of; the readings warn of an army with no such event (a
-// human attacker's) and keep the minimap ring on the army.
+// invasion_start event — read-only telemetry — and warns of an invasion the AI
+// launches as it sets out, before either reading can see its army (and even where
+// neither ever could); at boot it reads the AI's operation record the same way,
+// for an invasion a loaded save was taken in the middle of (events are not
+// saved). In play against the AI that is how nearly every invasion is warned of;
+// the readings warn of an army with no such launch (a human attacker's) and keep
+// the minimap ring on the army.
 //
 // Two layers:
 //   - measureEnemyGathering / isEnemyGathering: the geometry, no memory; and
@@ -36,6 +38,7 @@ import { AntTask } from '../sim/enums.js';
 import { FP_ONE } from '../sim/fixed.js';
 import { Zone } from '../sim/terrain.js';
 import { AI_INVADING_TIMEOUT_TICKS } from '../sim/constants.js';
+import { opponentColonyId } from '../sim/ai-state.js';
 import {
   MARCH_DWELL_TICKS,
   isEnemyMarching,
@@ -88,7 +91,8 @@ export const GATHER_REARM_QUIET_TICKS = 200;
 export const INVASION_NEST_MIN_FIGHTERS = 3;
 
 /** How long (ticks, 10 s) a warning the busy caption queue could not take yet is
- *  still offered, the same window as the other recurring captions. */
+ *  still offered, the same window as the other recurring captions. (Not a launch
+ *  warning, #404 review: that is owed until shown or its invasion ends.) */
 export const GATHER_CAPTION_OWED_TICKS = 200;
 
 /** Full-opacity hold (ms) of the army warning (#394: marching or gathering). The
@@ -335,8 +339,8 @@ export interface ArmyWarningState {
   armed: boolean;
   /** Armed only: an invasion (INVASION_NEST_MIN_FIGHTERS enemy fighters in the
    *  viewer's tunnels) has begun in this wave before any warning — one the
-   *  fallback could not warn of (no invasion_start for it while armed: a human
-   *  attacker, a save loaded mid-invasion). Its own army at the door, or its
+   *  fallback could not warn of (no launch noted for it while armed: a human
+   *  attacker's). Its own army at the door, or its
    *  survivors, then raise no gathering warning; an army still marching on the
    *  entrances does raise a march warning. Cleared once things are quiet. */
   invadedUnwarned: boolean;
@@ -352,7 +356,8 @@ export interface ArmyWarningState {
   /** What the owed warning reports (meaningful only while one is owed). */
   owedKind: ArmyWarningKind;
   /** #404 review — the invasion launched at the viewer that is under way (its
-   *  invasion_start, noteArmyWarningEvent): the attacking colony (-1: none), the
+   *  invasion_start, noteArmyWarningEvent; or, after a load, its operation,
+   *  noteInvasionUnderWay): the attacking colony (-1: none), the
    *  tile it rallies on (at the entrance it targets) and the tick it was launched.
    *  Kept until that attacker's invasion_end — or INVASION_WATCH_TICKS, should that
    *  never come — and while kept the wave cannot end. One at a time: a two-colony
@@ -421,14 +426,55 @@ export function noteArmyWarningEvent(
   if (ev.type === 'invasion_start') {
     const p = ev.payload;
     if (p.targetGrid !== viewerColonyId || p.colonyId === viewerColonyId) return;
-    state.invasionAttacker = p.colonyId;
-    state.invasionRallyX = p.rallyTile.x;
-    state.invasionRallyY = p.rallyTile.y;
-    state.invasionSinceTick = ev.tick;
-    state.invasionUnwarned = state.armed;
+    noteLaunch(state, p.colonyId, p.rallyTile.x, p.rallyTile.y, ev.tick);
   } else if (ev.type === 'invasion_end' && ev.payload.colonyId === state.invasionAttacker) {
     forgetInvasion(state);
   }
+}
+
+/**
+ * #404 review — at boot, after resetArmyWarningState: an invasion of
+ * `viewerColonyId` already under way in the world (a save taken after its
+ * launch) is noted as its invasion_start would have been. A save keeps no
+ * events, so that launch never reaches noteArmyWarningEvent, and without this a
+ * resumed invasion of a door the readings cannot see would go unwarned. Reads the
+ * attacker's AI operation record — the same facts its invasion_start carried: the
+ * attacker, the tile it rallies on, its launch tick, and its target (the
+ * attacker's opponent, as invasion_start's targetGrid) — and nothing else.
+ */
+export function noteInvasionUnderWay(
+  state: ArmyWarningState,
+  world: WorldState,
+  viewerColonyId: ColonyId,
+): void {
+  for (const ai of world.aiState) {
+    // Its target is its opponent (never itself, so never the viewer's own AI).
+    if (ai.operationKind !== 'Invasion') continue;
+    if (opponentColonyId(world, ai.colonyId) !== viewerColonyId) continue;
+    noteLaunch(
+      state,
+      ai.colonyId,
+      ai.operationTargetTileX,
+      ai.operationTargetTileY,
+      ai.operationStartTick,
+    );
+  }
+}
+
+/** Note an invasion launched at the viewer: under way from `tick`, rallying on
+ *  (x, y); its warning due if the warning is armed. */
+function noteLaunch(
+  state: ArmyWarningState,
+  attacker: number,
+  x: number,
+  y: number,
+  tick: number,
+): void {
+  state.invasionAttacker = attacker;
+  state.invasionRallyX = x;
+  state.invasionRallyY = y;
+  state.invasionSinceTick = tick;
+  state.invasionUnwarned = state.armed;
 }
 
 /** The viewer's open entrance nearest the noted invasion's rally tile (the one it
@@ -517,9 +563,11 @@ function quietLongEnough(state: ArmyWarningState, quiet: boolean, tick: number):
  *     (the readings alone would miss some: an army marching on a door within
  *     MARCH_HOME_RADIUS_TILES of its own nest counts as at home all the way
  *     there). It names the viewer's open entrance nearest the invasion's rally
- *     tile, and goes stale when that invasion ends (invasion_end) or after
- *     GATHER_CAPTION_OWED_TICKS. While an invasion is under way the wave does not
- *     end (no re-arming), so it gets one warning however its army comes and goes.
+ *     tile, and stays owed until the queue takes it or that invasion ends. An
+ *     invasion already under way when a save loads is noted at boot
+ *     (noteInvasionUnderWay) and warned of then. While an invasion is under way
+ *     the wave does not end (no re-arming), so it gets one warning however its
+ *     army comes and goes.
  *   - Disarmed, it re-arms once things are quiet — at most
  *     GATHER_REARM_MAX_FIGHTERS enemy fighters near any entrance, at most that
  *     many marching (EnemyMarch.fighters: a sally chasing raiders does not count),
@@ -533,7 +581,8 @@ function quietLongEnough(state: ArmyWarningState, quiet: boolean, tick: number):
  *     GATHER_REARM_MAX_FIGHTERS still marching (for a march warning outside an
  *     invasion, marching or chasing: a battle on the move is the army still out)
  *     and, outside an invasion, at most that many near (a warning for an army
- *     already inside is too late) — or GATHER_CAPTION_OWED_TICKS passed. A
+ *     already inside is too late) — or GATHER_CAPTION_OWED_TICKS passed. (A
+ *     launch warning is never dropped so: only when its invasion ends.) A
  *     dropped warning does not re-arm; the next one needs a new wave.
  *
  * Text: the owed kind while it still holds (else the other: a march that has
@@ -606,15 +655,13 @@ export function nextArmyWarning(
 
   if (state.owedSinceTick === -Infinity) return null;
   if (state.owedKind === 'invasion') {
-    // Stale once the invasion has ended (or the viewer has no open entrance) — but
-    // not at the breach, as a march or gathering warning is: the invasion gets its
-    // one warning even if a busy caption queue held it until the army got in.
+    // Owed until the queue takes it or the invasion ends (or the viewer has no
+    // open entrance) — not dropped after GATHER_CAPTION_OWED_TICKS, nor at the
+    // breach, as a march or gathering warning is: the warning is disarmed, so no
+    // reading could make up for it, and the invasion gets its one warning however
+    // long a busy queue (at 4x, 200 ticks is 2.5 s) holds it.
     const target = invasionTarget(state, viewer);
-    if (
-      target === null ||
-      state.owedSinceTick > tick ||
-      tick - state.owedSinceTick > GATHER_CAPTION_OWED_TICKS
-    ) {
+    if (target === null || state.owedSinceTick > tick) {
       state.owedSinceTick = -Infinity;
       return null;
     }

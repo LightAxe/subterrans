@@ -25,13 +25,15 @@ import {
   measureEnemyGatheringThisTick,
   nextArmyWarning,
   noteArmyWarningEvent,
+  noteInvasionUnderWay,
   resetArmyWarningState,
   type ArmyWarningState,
 } from './enemy-gathering.js';
+import { createDefaultAIStateRecord } from '../sim/ai-state.js';
 import type { SimEvent } from '../sim/telemetry.js';
 import { AI_PROBE_FIGHTER_COUNT, ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
 import { allocateEntityId, type WorldState } from '../sim/types.js';
-import type { ColonyRecord } from '../sim/colony/colony-store.js';
+import type { ColonyId, ColonyRecord } from '../sim/colony/colony-store.js';
 import type { NestEntrance } from '../sim/colony/entrance.js';
 import { AntTask } from '../sim/enums.js';
 import { FP_ONE } from '../sim/fixed.js';
@@ -1113,7 +1115,7 @@ describe('nextArmyWarning — the invasion fallback (#404 review)', () => {
     expect(s.invasionAttacker).toBe(-1);
   });
 
-  it('an owed fallback is offered until taken; stale once its invasion ends, or after the window', () => {
+  it('an owed fallback is offered until taken, however long; stale once its invasion ends', () => {
     const owe = () => {
       const r = nearDoorWorld();
       const s = createArmyWarningState();
@@ -1124,14 +1126,21 @@ describe('nextArmyWarning — the invasion fallback (#404 review)', () => {
     expect(run(a.s, a.w, 3, false)).toEqual([EAST, EAST, EAST]);
     noteArmyWarningEvent(a.s, end(a.w), P);
     expect(run(a.s, a.w, 3, false)).toEqual([]);
+    // A busy queue (at 4x, the other warnings' 200-tick window is 2.5 s): still
+    // owed long after GATHER_CAPTION_OWED_TICKS, the army inside or not.
     const b = owe();
-    expect(run(b.s, b.w, GATHER_CAPTION_OWED_TICKS + 1, false)).toHaveLength(
-      GATHER_CAPTION_OWED_TICKS + 1,
-    );
-    expect(run(b.s, b.w, 1, false)).toEqual([]);
-    // Dropped unshown, it is not owed again that wave.
+    const frames = GATHER_CAPTION_OWED_TICKS * 3;
+    expect(run(b.s, b.w, frames, false)).toHaveLength(frames);
     breach(b.w);
+    expect(run(b.s, b.w, 50, false)).toHaveLength(50);
+    // Its invasion over unshown, it is dropped — and not owed again that wave.
+    noteArmyWarningEvent(b.s, end(b.w), P);
     expect(run(b.s, b.w, 50)).toEqual([]);
+    // With no invasion_end, it is dropped once the watch runs out.
+    const c = owe();
+    const watched = INVASION_WATCH_TICKS + 1; // launch tick to launch + the watch
+    expect(run(c.s, c.w, watched, false)).toHaveLength(watched);
+    expect(run(c.s, c.w, 1, false)).toEqual([]);
   });
 
   it('names the viewer’s open entrance nearest the rally tile, and points to no minimap ring', () => {
@@ -1171,5 +1180,89 @@ describe('nextArmyWarning — the invasion fallback (#404 review)', () => {
     resetArmyWarningState(s);
     expect([s.invasionAttacker, s.invasionUnwarned]).toEqual([-1, false]);
     expect(run(s, w, 5)).toEqual([]);
+  });
+
+  /** Give colony `ai` an AI record with an operation of `kind` launched `ago`
+   *  ticks back, rallying on `rally` — as a save taken mid-operation holds it. */
+  function operation(
+    w: WorldState,
+    ai: ColonyId,
+    kind: 'None' | 'Probe' | 'Invasion',
+    rally: { x: number; y: number },
+    ago = 30,
+  ) {
+    advance(w, ago); // launched `ago` ticks into the match
+    const rec = createDefaultAIStateRecord(ai);
+    rec.state = kind === 'Invasion' ? 'Invading' : kind === 'Probe' ? 'Probing' : 'WarFooting';
+    rec.operationKind = kind;
+    rec.operationStartTick = w.tick - ago;
+    rec.operationTargetTileX = rally.x;
+    rec.operationTargetTileY = rally.y;
+    w.aiState.push(rec);
+    return rec;
+  }
+
+  it('after a load, an invasion already under way is noted from its AI operation and warned of', () => {
+    const { world: w } = nearDoorWorld();
+    operation(w, E, 'Invasion', NEAR, 30);
+    const s = createArmyWarningState();
+    noteInvasionUnderWay(s, w, P);
+    expect([s.invasionAttacker, s.invasionSinceTick, s.invasionUnwarned]).toEqual([
+      E,
+      w.tick - 30,
+      true,
+    ]);
+    expect(run(s, w, 1)).toEqual([EAST]);
+    // Once: then its invasion_end, as for one whose launch was seen.
+    expect(run(s, w, 50)).toEqual([]);
+    noteArmyWarningEvent(s, end(w), P);
+    expect(s.invasionAttacker).toBe(-1);
+  });
+
+  it('why: a save keeps no events — without it that invasion is never warned of', () => {
+    const { world: w, host } = nearDoorWorld();
+    operation(w, E, 'Invasion', NEAR);
+    const s = createArmyWarningState();
+    for (const id of host) place(w, id, NEAR.x + 1.5, NEAR.y + 0.5);
+    breach(w);
+    expect(run(s, w, 300)).toEqual([]);
+  });
+
+  it('a saved invasion already past its watch is forgotten at once, unwarned', () => {
+    const { world: w } = nearDoorWorld();
+    operation(w, E, 'Invasion', NEAR, INVASION_WATCH_TICKS + 1);
+    const s = createArmyWarningState();
+    noteInvasionUnderWay(s, w, P);
+    expect(s.invasionAttacker).toBe(E);
+    expect(run(s, w, 5)).toEqual([]);
+    expect(s.invasionAttacker).toBe(-1);
+  });
+
+  it('a probe, no operation, or the viewer’s own invasion is no invasion of the viewer', () => {
+    for (const kind of ['None', 'Probe'] as const) {
+      const { world: w } = nearDoorWorld();
+      operation(w, E, kind, NEAR);
+      const s = createArmyWarningState();
+      noteInvasionUnderWay(s, w, P);
+      expect(s.invasionAttacker).toBe(-1);
+    }
+    const { world: w } = nearDoorWorld();
+    operation(w, P, 'Invasion', { x: 104, y: 64 }); // the player's AI invading the enemy
+    const s = createArmyWarningState();
+    noteInvasionUnderWay(s, w, P);
+    expect(s.invasionAttacker).toBe(-1);
+    expect(run(s, w, 5)).toEqual([]);
+  });
+
+  it('CLNY-08: with the enemy as viewer, the player colony’s invasion under way is noted', () => {
+    const r = raidWorld();
+    addEntrance(r.world, r.enemy, 32, 64);
+    operation(r.world, P, 'Invasion', { x: 32, y: 64 });
+    const s = createArmyWarningState();
+    noteInvasionUnderWay(s, r.world, E);
+    expect(s.invasionAttacker).toBe(P);
+    expect(nextArmyWarning(s, r.world, E)).toBe(
+      `An enemy army is marching on your west entrance. ${HINT}`,
+    );
   });
 });

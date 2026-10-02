@@ -532,13 +532,15 @@ launched at the colony (its `invasion_start`) while the warning is armed, and no
 warned of by a reading, is warned of ("…is marching on…", naming the entrance it
 targets) at once, as its army sets out. The AI's army does not move before that, so
 in play against the AI this is how nearly every invasion is warned of; the readings
-warn of an army with no launch event (a human opponent's, a save loaded
-mid-invasion) and keep the minimap ring on the army as it marches. (They alone would
-miss some: an army marching on a door within `MARCH_HOME_RADIUS_TILES` of its own
-nest counts as at home all the way there.) With three or more doors where the
-direction would not single the target out, the launch warning names none and points
-to no ring (the army may still read as at home). While a launched invasion is under
-way (until its `invasion_end`) the wave does not end.
+warn of an army with no launch event (a human opponent's) and keep the minimap ring
+on the army as it marches. (They alone would miss some: an army marching on a door
+within `MARCH_HOME_RADIUS_TILES` of its own nest counts as at home all the way
+there.) A save keeps no events, so an invasion a loaded save was taken in the middle
+of is noted at boot from the attacker's AI operation, and warned of then. The launch
+warning stays owed until it is shown or its invasion ends. With three or more doors
+where the direction would not single the target out, it names none and points to no
+ring (the army may still read as at home). While a launched invasion is under way
+(until its `invasion_end`) the wave does not end.
 It replaced the one-time "The enemy is attacking your hive." invasion caption.
 _Avoid_: "gathering warning" for a warning that may be about a march; "invasion
 caption".

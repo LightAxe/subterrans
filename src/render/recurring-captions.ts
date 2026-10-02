@@ -78,8 +78,10 @@ export function offerRecurringCaption(
  * at high game speed behind a busy queue. The #372 army warning holds
  * longer; while news is owed it shortens to a 2 s readable floor (2.7 s in all,
  * UIScene.yieldLongCaption), so at 4x (a 2.5 s real-time window) news owed from
- * the same moment the warning began can still expire behind it — a known cost
- * of a once-per-wave warning being readable.
+ * the same moment the warning began can still expire behind it — or news owed
+ * while an invasion's launch warning (owed until shown, #404 review) waited out
+ * the same busy queue, which it then enters first — a known cost of a
+ * once-per-wave warning being readable, and of an army outranking news.
  */
 export const RAMPAGE_CAPTION_OWED_TICKS = 200;
 

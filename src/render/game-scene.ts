@@ -220,6 +220,7 @@ import {
   markArmyWarningShown,
   nextArmyWarning,
   noteArmyWarningEvent,
+  noteInvasionUnderWay,
   resetArmyWarningState,
 } from './enemy-gathering.js';
 import {
@@ -2120,8 +2121,11 @@ export class GameScene extends Phaser.Scene {
     resetRaidCaptionState(this.raidCaptions, this.world, PLAYER_COLONY_ID);
     // #350 — a prior round's owed rampage warning must not carry over.
     resetRampageCaptionState(this.rampageCaption);
-    // #372 — a new round or loaded save starts armed with nothing owed.
+    // #372 — a new round or loaded save starts armed with nothing owed; and (#404
+    // review) an invasion a loaded save was taken in the middle of is warned of,
+    // since its launch event was not saved.
     resetArmyWarningState(this.armyWarning);
+    noteInvasionUnderWay(this.armyWarning, this.world, PLAYER_COLONY_ID);
     // Stage 2 §B: a fresh/loaded world must rebake every allocated terrain RT (the prior
     // session's RTs are stale). Optional chaining — finishBoot can run before create() has
     // instantiated the cache in some boot orderings; the first frame then lazily bakes.
