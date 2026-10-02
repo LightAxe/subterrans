@@ -70,7 +70,8 @@ export const MARCH_AIM_TIE_TILES = 2;
 /**
  * An enemy fighter with one of the viewer's own surface fighters within this many
  * tiles (straight-line) in front of it, running the same way (its heading within
- * MARCH_MIN_HEADING of the enemy's), is chasing that fighter, not marching on the
+ * MARCH_MIN_HEADING of the enemy's) and still running now (#404 review: the
+ * marchers' own progress test), is chasing that fighter, not marching on the
  * nest: it does not make an army or hold a wave open, but (outside an invasion)
  * keeps a march warning already owed for its army from going stale
  * (EnemyMarch.chasing).
@@ -80,9 +81,11 @@ export const MARCH_AIM_TIE_TILES = 2;
  * viewer's fighter coming the other way (the player's own army out to attack,
  * meeting an invasion head-on — measured, a chase rule without the heading test
  * lost those invasions' warnings) is not being chased; nor is one standing still,
- * so a charge at the player's fighters standing in the field near the attacker's
- * home still reads as a march on the door it faces (accepted: not seen in the
- * measured raids, where the AI drove off raiders that ran).
+ * or one that has stopped or turned, so a charge at the player's fighters standing
+ * in the field near the attacker's home still reads as a march on the door it
+ * faces (accepted: not seen in the measured raids, where the AI drove off raiders
+ * that ran; raiders that halt or turn on a sally 30-38 tiles from its door can
+ * draw such a warning, with or without the still-running test).
  */
 export const MARCH_CHASE_TILES = 10;
 
@@ -406,7 +409,8 @@ function runnerAhead(own: OwnRunners, x: number, y: number, hx: number, hy: numb
  * MARCH_CHASE_HOME_RADIUS_TILES of its own open entrances with a viewer's fighter on
  * the surface within MARCH_CHASE_TILES in front of it (ahead of its side-line),
  * running the same way (headings within MARCH_MIN_HEADING, each over the same
- * window), counts as `chasing`, not in `fighters`.
+ * window) and still running now (the marchers' own progress test), counts as
+ * `chasing`, not in `fighters`.
  *
  * The entrance returned is the one most of the army (`fighters`; with none, the
  * chasers) aims at, and the box is of those of them aiming at it. A fighter aims
@@ -445,7 +449,10 @@ export function measureEnemyMarch(
   let chasing = 0;
   const ants = world.ants;
   // The viewer's own surface fighters on the move, with their headings: an enemy
-  // close behind one, going the same way, is chasing it.
+  // close behind one, going the same way, is chasing it. On the move now, as a
+  // marcher must be (#404 review): one that has stopped or turned since the newest
+  // sample at least MARCH_SAMPLE_TICKS old is no longer running, and those behind
+  // it are not chasing it, though its heading over the window still points away.
   const own = sc.own;
   own.x.length = 0;
   own.y.length = 0;
@@ -462,10 +469,15 @@ export function measureEnemyMarch(
     const y = ants.posY[id]! / FP_ONE;
     const step = Math.hypot(x - old.x[k]!, y - old.y[k]!);
     if (step < MARCH_MIN_STEP_TILES) continue;
+    const hx = (x - old.x[k]!) / step;
+    const hy = (y - old.y[k]!) / step;
+    const r = sampleIndexOf(recent, id);
+    if (r < 0) continue;
+    if ((x - recent.x[r]!) * hx + (y - recent.y[r]!) * hy < minProgress) continue;
     own.x.push(x);
     own.y.push(y);
-    own.hx.push((x - old.x[k]!) / step);
-    own.hy.push((y - old.y[k]!) / step);
+    own.hx.push(hx);
+    own.hy.push(hy);
   }
   const end = Math.min(world.nextEntityId, ants.alive.length);
   let j = 0; // merge-walk cursor into old.ids (both ascending)

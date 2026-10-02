@@ -388,6 +388,44 @@ describe('measureEnemyMarch — which fighters march', () => {
     expect(other).toMatchObject({ fighters: MARCH_MIN_FIGHTERS + 1, chasing: 0 });
   });
 
+  it('a runner that has stopped or turned is no longer being chased: those behind it march (#404 review)', () => {
+    // Six enemy fighters walk west at the door, half a tile a tick, ending 36-39
+    // tiles from their own door (inside MARCH_CHASE_HOME_RADIUS_TILES). One player
+    // fighter runs ahead of them at their pace, 6 tiles in front of the lead; for
+    // the last `late` ticks it instead moves `turn` a tick (stops, by default),
+    // staying in front of them.
+    const go = (late: number, turn: [number, number] = [0, 0]) => {
+      const { world: w, h } = setup();
+      const ids = army(w, MARCH_MIN_FIGHTERS, 80, 64);
+      const own = addFighter(w, P, 74, 65, null);
+      const total = MARCH_WINDOW_TICKS + 2 * MARCH_SAMPLE_TICKS;
+      for (let t = 0; t < total; t++) {
+        observeMarchHistory(h, w);
+        for (const id of ids) {
+          const [x, y] = pos(w, id);
+          place(w, id, x - 0.5, y);
+        }
+        const [x, y] = pos(w, own);
+        if (t < total - late) place(w, own, x - 0.5, y);
+        else place(w, own, x + turn[0], y + turn[1]);
+        advance(w, 1);
+      }
+      observeMarchHistory(h, w);
+      return measureEnemyMarch(w, P, h)!;
+    };
+    const running = go(0);
+    expect([running.fighters, running.chasing]).toEqual([0, MARCH_MIN_FIGHTERS]);
+    // Stopped two sample intervals ago: over the window it still ran 5 tiles west,
+    // but it is not running now — the army behind it marches.
+    const stopped = go(2 * MARCH_SAMPLE_TICKS);
+    expect([stopped.fighters, stopped.chasing]).toEqual([MARCH_MIN_FIGHTERS, 0]);
+    expect(isEnemyMarching(stopped)).toBe(true);
+    // Turned back north-east for the last 6 ticks: its heading over the window is
+    // still west-north-west (their way), but it is not running that way now.
+    const turned = go(6, [0.35, -0.35]);
+    expect([turned.fighters, turned.chasing]).toEqual([MARCH_MIN_FIGHTERS, 0]);
+  });
+
   it('a chase spares only a fighter within MARCH_CHASE_HOME_RADIUS_TILES of its own door', () => {
     // The AI's sally holds raiders within AI_DEFENCE_HOLD_RADIUS_TILES (Manhattan)
     // of its door; the chase radius must reach past it.
