@@ -75,13 +75,14 @@ export function offerRecurringCaption(
  * How long an owed rampage warning is still offered (10 s of game time), the
  * same window as owed raid news. The queue drains within about 3 s of wall-clock
  * time behind an active and a pending default caption, so this only runs out
- * at high game speed behind a busy queue. The #372 army warning holds
- * longer; while news is owed it shortens to a 2 s readable floor (2.7 s in all,
- * UIScene.yieldLongCaption), so at 4x (a 2.5 s real-time window) news owed from
- * the same moment the warning began can still expire behind it — or news owed
- * while an invasion's launch warning (owed until shown, #404 review) waited out
- * the same busy queue, which it then enters first — a known cost of a
- * once-per-wave warning being readable, and of an army outranking news.
+ * at high game speed behind a busy queue. The long-hold captions (the #372/#394
+ * army warning, the #395 storage hint) hold longer; while news is owed they
+ * shorten to a 2 s readable floor (2.7 s in all, UIScene.yieldLongCaption), so at
+ * 4x (a 2.5 s real-time window) news owed from the same moment one began can still
+ * expire behind it. So can news owed while an invasion's launch warning (owed
+ * until shown, #404 review) waited out the same busy queue, which it then enters
+ * first. That is a known cost of a once-per-spell caption being readable, and of
+ * an army outranking news.
  */
 export const RAMPAGE_CAPTION_OWED_TICKS = 200;
 
@@ -150,15 +151,21 @@ export function offerOwedRampageCaption(
 }
 
 /**
- * #372 — after this frame's offers, is recurring news (the rampage warning, or
- * the raid caption `raidCaption` that was not taken) still owed? GameScene then
- * asks a long-hold caption to give way (UIScene.yieldLongCaption).
+ * #372 — after this frame's offers, is a recurring caption still owed: the
+ * gathering warning (`gatheringOwed`: offered this frame and not taken), the
+ * rampage warning, or the raid caption `raidCaption` that was not taken? GameScene
+ * then asks a long-hold caption to give way (UIScene.yieldLongCaption).
+ * `gatheringOwed` (#395): the storage hint is a long-hold caption too, and a
+ * gathering warning owed behind it would otherwise wait its full 4 s and, at 4x,
+ * go stale (GATHER_CAPTION_OWED_TICKS) unshown. An owed gathering warning is never
+ * itself the caption showing: once shown it is no longer owed.
  */
 export function recurringCaptionStillOwed(
   rampage: RampageCaptionState,
   raidCaption: string | null,
+  gatheringOwed: boolean,
 ): boolean {
-  return rampage.owedSinceTick !== -Infinity || raidCaption !== null;
+  return gatheringOwed || rampage.owedSinceTick !== -Infinity || raidCaption !== null;
 }
 
 /**

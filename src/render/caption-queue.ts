@@ -51,7 +51,8 @@ export interface CaptionRequest {
    *  displayed). Absent for recurring captions, which don't dedup on `triggered`. */
   captionKey?: CaptionKey;
   /** #372 — full-opacity hold (ms) between the fade-in and fade-out; absent:
-   *  CAPTION_HOLD_MS. For a long caption that must be read (the army warning). */
+   *  CAPTION_HOLD_MS. For a long caption that must be read (the army warning, the
+   *  #395 storage hint). */
   holdMs?: number;
   /** #378 — a caption that is the latest version of a message: it replaces an
    *  older caption with the same key, on screen or pending, instead of queueing

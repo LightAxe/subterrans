@@ -350,8 +350,9 @@ interface UIScenePhase9 {
   // recurring captions (raid news, the spider-rampage warning) may enter without
   // taking the slot a one-shot caption would need.
   captionQueueIdle?(): boolean;
-  /** #372 — a long-hold caption (the army warning) shortens its hold so an
-   *  event caption waiting behind it is not held back (UIScene.yieldLongCaption). */
+  /** #372 — a long-hold caption (the army warning, the #395 storage hint)
+   *  shortens its hold so a caption waiting behind it is not held back
+   *  (UIScene.yieldLongCaption). */
   yieldLongCaption?(): void;
   /** #372 — Dev/E2E-only: each caption's final hold (ms) and whether it gave way. */
   captionHolds?(): { text: string; holdMs: number; yielded: boolean }[];
@@ -1903,17 +1904,21 @@ export class GameScene extends Phaser.Scene {
     // entrances. Offered first: an army about to invade outranks the spider and
     // raid news.
     const armyText = nextArmyWarning(this.armyWarning, this.world, PLAYER_COLONY_ID);
-    if (
-      armyText !== null &&
-      uiScene &&
-      offerRecurringCaption(uiScene, armyText, this.layout.w / 2, 60, GATHER_CAPTION_HOLD_MS)
-    ) {
-      const owedTick = this.armyWarning.owedSinceTick;
-      markArmyWarningShown(this.armyWarning);
-      if (import.meta.env.DEV) {
-        this.armyWarningLog.push(
-          armyWarningLogEntry(this.world, PLAYER_COLONY_ID, armyText, owedTick),
-        );
+    // #395 — offered and not taken: still owed, so a long-hold caption gives way (below).
+    let gatheringOwed = false;
+    if (armyText !== null && uiScene) {
+      if (
+        offerRecurringCaption(uiScene, armyText, this.layout.w / 2, 60, GATHER_CAPTION_HOLD_MS)
+      ) {
+        const owedTick = this.armyWarning.owedSinceTick;
+        markArmyWarningShown(this.armyWarning);
+        if (import.meta.env.DEV) {
+          this.armyWarningLog.push(
+            armyWarningLogEntry(this.world, PLAYER_COLONY_ID, armyText, owedTick),
+          );
+        }
+      } else {
+        gatheringOwed = true;
       }
     }
 
@@ -1941,9 +1946,10 @@ export class GameScene extends Phaser.Scene {
       )
     ) {
       markRaidCaptionShown(this.raidCaptions, this.world, raidCaption);
-    } else if (recurringCaptionStillOwed(this.rampageCaption, raidCaption)) {
-      // #372 — news still owed behind a busy queue: a long-hold caption (the
-      // army warning) gives way, keeping CAPTION_YIELD_FLOOR_MS to be read.
+    } else if (recurringCaptionStillOwed(this.rampageCaption, raidCaption, gatheringOwed)) {
+      // #372 — a recurring caption still owed behind a busy queue: a long-hold
+      // caption (the army warning, the #395 storage hint) gives way, keeping
+      // CAPTION_YIELD_FLOOR_MS to be read.
       uiScene?.yieldLongCaption?.();
     }
   }

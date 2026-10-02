@@ -1,7 +1,9 @@
 // storage-hint.spec.ts — #395: "Build a Food Storage chamber so your queen can lay
 // eggs." reaches the player in a real browser when storage is what stops the queen
 // laying (the V70 egg reserve tops storage capacity), and stays quiet once the
-// player has designated a Food Storage chamber that would cover it.
+// player has designated a Food Storage chamber that would cover it. Its 4 s hold
+// gives way to an enemy-army gathering warning owed behind it, as the gathering
+// warning's own long hold gives way to news owed behind it.
 //
 // The condition, the dwell, the re-arm and the pending-chamber rule are pinned in
 // src/render/storage-hint.test.ts. What only a browser proves is the GameScene
@@ -27,11 +29,23 @@ const HINT = 'Build a Food Storage chamber so your queen can lay eggs.';
 const DWELL_TICKS = 200;
 /** storage-hint.ts STORAGE_HINT_HOLD_MS. */
 const HOLD_MS = 4000;
+/** caption-queue.ts CAPTION_YIELD_FLOOR_MS: what a long hold keeps once it gives way. */
+const YIELD_FLOOR_MS = 2000;
+const GATHERING_PREFIX = 'An enemy army is gathering near your';
 
 interface TestHook {
   getCaptionsShown?: () => string[];
   getCaptionHolds?: () => { text: string; holdMs: number; yielded: boolean }[];
   getTick?: () => number;
+  freezeCaptionClock?: (frozen: boolean) => void;
+}
+
+async function freezeCaptionClock(page: Page, frozen: boolean): Promise<void> {
+  await page.evaluate((f: boolean) => {
+    const t = (window as unknown as { __phase9_test?: TestHook }).__phase9_test;
+    if (t?.freezeCaptionClock === undefined) throw new Error('no freezeCaptionClock hook');
+    t.freezeCaptionClock(f);
+  }, frozen);
 }
 
 async function captions(page: Page): Promise<string[]> {
@@ -56,10 +70,17 @@ async function simTick(page: Page): Promise<number> {
   );
 }
 
-/** Seed the save. With `designate`, the player has designated a Food Storage chamber:
- *  a real PlaceChamber applied by one sim tick before the save (checked there). */
-async function seedStorageSave(page: Page, designate: boolean): Promise<void> {
-  await page.evaluate(async (designate: boolean) => {
+type Variant = 'plain' | 'designate' | 'army';
+
+/** Seed the save.
+ *  - 'designate': the player has designated a Food Storage chamber: a real
+ *    PlaceChamber applied by one sim tick before the save (checked there).
+ *  - 'army': eight enemy fighters stand in the far north-east corner, rallied 13
+ *    tiles east of the player's door. They march there and, headless, gather near
+ *    it from tick 180, so the gathering warning is owed from tick 220: after the
+ *    hint has shown (tick 200 or later, after its dwell). */
+async function seedStorageSave(page: Page, variant: Variant): Promise<void> {
+  await page.evaluate(async (variant: Variant) => {
     // Paths are served by the Vite dev server (Playwright always runs it).
     const utilsPath = '/src/sim/raid-test-utils.ts';
     const foodUtilsPath = '/src/sim/food/food-test-utils.ts';
@@ -70,13 +91,22 @@ async function seedStorageSave(page: Page, designate: boolean): Promise<void> {
     const enumsPath = '/src/sim/enums.ts';
     const fixedPath = '/src/sim/fixed.ts';
     const tickPath = '/src/sim/tick.ts';
-    type Colony = { chambers: unknown[]; colonyId: number };
+    type Colony = {
+      chambers: unknown[];
+      colonyId: number;
+      rallyPoint: { tileX: number; tileY: number } | null;
+    };
     type World = {
       undergroundGrids: Record<number, unknown>;
       pendingChambers: Record<string, unknown>;
     };
     const utils = (await import(/* @vite-ignore */ utilsPath)) as {
-      raidWorld: (fp: number) => { world: World; player: Colony; playerLarder: unknown };
+      raidWorld: (fp: number) => {
+        world: World;
+        player: Colony;
+        enemy: Colony;
+        playerLarder: unknown;
+      };
       addFighter: (w: unknown, c: number, x: number, y: number, g: number | null) => number;
       carve: (g: unknown, x0: number, y0: number, x1: number, y1: number) => void;
     };
@@ -91,6 +121,7 @@ async function seedStorageSave(page: Page, designate: boolean): Promise<void> {
     };
     const k = (await import(/* @vite-ignore */ constantsPath)) as {
       PLAYER_COLONY_ID: number;
+      ENEMY_COLONY_ID: number;
       FOOD_CHAMBER_CAPACITY: number;
     };
     const types = (await import(/* @vite-ignore */ typesPath)) as {
@@ -126,7 +157,13 @@ async function seedStorageSave(page: Page, designate: boolean): Promise<void> {
     if (shortfall <= 0 || shortfall > k.FOOD_CHAMBER_CAPACITY) {
       throw new Error(`unexpected storage shortfall ${shortfall}`);
     }
-    if (designate) {
+    if (variant === 'army') {
+      for (let i = 0; i < 8; i++) {
+        utils.addFighter(r.world, k.ENEMY_COLONY_ID, 122 + (i % 4), Math.floor(i / 4), null);
+      }
+      r.enemy.rallyPoint = { tileX: 37, tileY: 64 };
+    }
+    if (variant === 'designate') {
       sim.tick(r.world, [
         {
           type: 'PlaceChamber',
@@ -143,14 +180,14 @@ async function seedStorageSave(page: Page, designate: boolean): Promise<void> {
       }
     }
     if (!(await save.manualSave(7, [], r.world))) throw new Error('manualSave failed');
-  }, designate);
+  }, variant);
 }
 
-async function bootStorageSave(page: Page, designate: boolean): Promise<void> {
+async function bootStorageSave(page: Page, variant: Variant): Promise<void> {
   await page.goto('/');
   await waitForUiHook(page);
   await page.evaluate(() => localStorage.clear());
-  await seedStorageSave(page, designate);
+  await seedStorageSave(page, variant);
   await page.reload();
   await waitForUiHook(page);
   await expect
@@ -168,7 +205,7 @@ async function bootStorageSave(page: Page, designate: boolean): Promise<void> {
 test.describe('#395 — Food Storage hint', () => {
   test('storage short of the reserve shows the hint once, after the dwell', async ({ page }) => {
     test.setTimeout(90_000);
-    await bootStorageSave(page, false);
+    await bootStorageSave(page, 'plain');
     await expect.poll(() => captions(page), { timeout: 40_000, intervals: [50] }).toContain(HINT);
     // The save starts at tick 0, so the dwell puts the caption at tick 200 or later.
     const shownBy = await simTick(page);
@@ -188,8 +225,36 @@ test.describe('#395 — Food Storage hint', () => {
 
   test('a designated Food Storage chamber that would cover it keeps it quiet', async ({ page }) => {
     test.setTimeout(90_000);
-    await bootStorageSave(page, true);
+    await bootStorageSave(page, 'designate');
     await expect.poll(() => simTick(page), { timeout: 60_000 }).toBeGreaterThan(3 * DWELL_TICKS);
     expect(await captions(page)).not.toContain(HINT);
+  });
+
+  test('its long hold gives way to a gathering warning owed behind it', async ({ page }) => {
+    test.setTimeout(90_000);
+    await bootStorageSave(page, 'army');
+    await expect.poll(() => captions(page), { timeout: 40_000, intervals: [50] }).toContain(HINT);
+    // Keep the hint up, however slow the machine, while the army gathers: the
+    // caption clock stops, the sim runs on.
+    await freezeCaptionClock(page, true);
+    const shownBy = await simTick(page);
+    // The hint showed first and the army is not yet owed its warning (from tick 220).
+    expect(shownBy).toBeLessThan(215);
+    expect((await captions(page)).some((c) => c.startsWith(GATHERING_PREFIX))).toBe(false);
+    // The warning is owed behind the hint for a while; the hint is asked to give way.
+    await expect.poll(() => simTick(page), { timeout: 40_000 }).toBeGreaterThan(260);
+    await freezeCaptionClock(page, false);
+    // It held only the floor, and the warning followed it.
+    await expect
+      .poll(() => hintHold(page), { timeout: 10_000 })
+      .toEqual({
+        holdMs: YIELD_FLOOR_MS,
+        yielded: true,
+      });
+    await expect
+      .poll(async () => (await captions(page)).some((c) => c.startsWith(GATHERING_PREFIX)), {
+        timeout: 15_000,
+      })
+      .toBe(true);
   });
 });
