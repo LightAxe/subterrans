@@ -964,7 +964,8 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // Step 5: Death cleanup (swap-remove dead entities; sets colony.defeated if queen dead)
     tickDeathCleanup(world, colony);
 
-    // Step 6: Queen egg production (tick-modulo + food threshold gate)
+    // Step 6: Queen egg production (tick-modulo + food gate: the 3-food threshold before
+    // V70, the egg reserve from V70 — #395)
     tickQueenEggProduction(world, colony);
 
     // Step 7: Lifecycle transitions (egg→larva→worker aging + promotion)

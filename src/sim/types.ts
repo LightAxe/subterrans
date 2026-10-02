@@ -1639,7 +1639,32 @@ export const SIM_VERSION_V68_RAMPAGE_SHELTER = 68 as const;
  * MIN_ACCEPTED is UNCHANGED (V50).
  */
 export const SIM_VERSION_V69_FOOD_FAIRNESS = 69 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V69_FOOD_FAIRNESS;
+
+/**
+ * #395 part 2 (V70) — the egg reserve. Up to V69 the queen laid whenever the colony's
+ * stores held QUEEN_EGG_FOOD_THRESHOLD (3 food), so a new Nursery set off a brood
+ * boom the player could not stop (the standard opening: a median 16 brood at 3:00)
+ * that ate the larder and starved the colony in the opening. From V70 that threshold
+ * is gone, at every stage of the match: the queen lays an egg only while the colony's
+ * stored food (colonyFoodTotal — the stores meals are drawn from: the entrance pool and
+ * every FoodStorage chamber; carried loads are not counted) is at least the egg reserve
+ * (lifecycle-system.ts eggReserveFp):
+ * every meal the whole colony would eat over QUEEN_EGG_RESERVE_RUNWAY_TICKS with no
+ * food coming in, by the hunger profiles (hunger.ts runwayFoodFp) — the queen, each
+ * living worker and fighter (workerHungerProfile), each larva, and each egg plus the
+ * one about to be laid counted as the larvae they become. Any number of colonies and
+ * storage chambers; no player/enemy branching (CLNY-08). The surplus-scaled egg
+ * interval and the other gates are unchanged. A consequence of the numbers, not a
+ * separate rule: the smallest reserve (3600 fp at the 60 s runway) is more than the
+ * entrance pool holds, so a colony needs a FoodStorage chamber before its first egg,
+ * and its storage capacity caps its brood (QUEEN_EGG_RESERVE_RUNWAY_TICKS).
+ * Read from saved state only (the colony's stores, brood counts, worker roster and
+ * tasks); no new serialized field, command, world.rngState draw, entity-ID advance
+ * or tick-order change. A V69 save replays byte-identically. MIN_ACCEPTED is
+ * UNCHANGED (V50).
+ */
+export const SIM_VERSION_V70_EGG_RESERVE = 70 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V70_EGG_RESERVE;
 
 /**
  * S2 — AI colony state machine states.

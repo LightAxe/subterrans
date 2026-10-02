@@ -25,6 +25,7 @@ import {
   PHEROMONE_DECAY_FP,
   PHEROMONE_FLOOR,
   QUEEN_EGG_FOOD_THRESHOLD,
+  QUEEN_EGG_RESERVE_RUNWAY_TICKS,
   QUEEN_EGG_INTERVAL_TICKS,
   QUEEN_FOOD_PER_TICK,
   RECONCILE_INTERVAL_TICKS,
@@ -57,6 +58,10 @@ describe('PRD §9c lifecycle tick constants', () => {
 
   it('QUEEN_EGG_FOOD_THRESHOLD === 768', () => {
     expect(QUEEN_EGG_FOOD_THRESHOLD).toBe(768);
+  });
+
+  it('#395 QUEEN_EGG_RESERVE_RUNWAY_TICKS === 1200 (60 s, chosen by measurement)', () => {
+    expect(QUEEN_EGG_RESERVE_RUNWAY_TICKS).toBe(1200);
   });
 
   it('STARVATION_GRACE_TICKS === 300 (Phase 8.5 stabilization bump from PRD target 100)', () => {

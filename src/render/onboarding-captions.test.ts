@@ -3,6 +3,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   captionForEvent,
+  captionKeyRetries,
   checkAndTrigger,
   resetCaptions,
   triggered,
@@ -32,6 +33,7 @@ describe('checkAndTrigger — first occurrence', () => {
       'spiderRampage',
       'queenDamage',
       'queenStarvation',
+      'foodStorageNeeded',
       'autosaveFailed',
     ] as const;
     for (const key of keys) {
@@ -61,6 +63,12 @@ describe('checkAndTrigger — first occurrence', () => {
 
   it('returns the expected text for "queenDamage"', () => {
     expect(checkAndTrigger('queenDamage')).toBe('Your queen is in danger.');
+  });
+
+  it('returns the expected text for "foodStorageNeeded" (#395)', () => {
+    expect(checkAndTrigger('foodStorageNeeded')).toBe(
+      'Build a Food Storage chamber so your queen can lay eggs.',
+    );
   });
 
   it('returns the expected text for "autosaveFailed" (#234 PR2)', () => {
@@ -246,5 +254,21 @@ describe('untrigger', () => {
     expect(triggered.has('spiderRampage')).toBe(false);
     // ...and the key still fires normally afterward.
     expect(checkAndTrigger('spiderRampage')).not.toBeNull();
+  });
+});
+
+describe('captionKeyRetries (#395)', () => {
+  it('only the storage hint is offered again every frame (retryable in the queue)', () => {
+    expect(captionKeyRetries('foodStorageNeeded')).toBe(true);
+    for (const key of [
+      'rally',
+      'queenDamage',
+      'queenStarvation',
+      'spiderRampage',
+      'chamber',
+      'autosaveFailed',
+    ] as const) {
+      expect(captionKeyRetries(key)).toBe(false);
+    }
   });
 });

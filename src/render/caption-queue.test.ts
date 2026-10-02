@@ -94,7 +94,7 @@ describe('admitCaption', () => {
     admitCaption(s, fu('pan')); // pending first-use
     const r = admitCaption(s, evt('b'));
     expect(r.queued?.text).toBe('b');
-    expect(r.droppedFirstUse?.hintId).toBe('pan');
+    expect(r.evictedPending?.hintId).toBe('pan');
     expect(s.pending?.text).toBe('b');
   });
 
@@ -305,7 +305,7 @@ describe('#378 — a newer version of a caption replaces the older one', () => {
     const raid = order('Raiding: Loot.');
     admitCaption(s, hint);
     admitCaption(s, hint2);
-    expect(admitCaption(s, raid)).toEqual({ queued: raid, droppedFirstUse: hint2 });
+    expect(admitCaption(s, raid)).toEqual({ queued: raid, evictedPending: hint2 });
     expect(s.active).toBe(hint);
   });
 });
@@ -317,5 +317,62 @@ describe('#378 — captionFadeInMs', () => {
     expect(captionFadeInMs(1)).toBe(1);
     expect(captionFadeInMs(-3)).toBe(CAPTION_FADE_IN_MS); // clamped
     expect(captionFadeInMs(7)).toBe(1);
+  });
+});
+
+describe('#395 — a retryable caption (the storage hint) ranks below other events', () => {
+  const hint: CaptionRequest = {
+    ...evt('Build a Food Storage chamber so your queen can lay eggs.'),
+    captionKey: 'foodStorageNeeded',
+    holdMs: 4000,
+    retryable: true,
+  };
+  const starving: CaptionRequest = {
+    ...evt('Your queen is growing hungry.'),
+    captionKey: 'queenStarvation',
+  };
+  const danger: CaptionRequest = { ...evt('Your queen is in danger.'), captionKey: 'queenDamage' };
+
+  it('a danger caption takes the slot from a waiting hint, and the hint queues again later', () => {
+    const s = createCaptionQueueState();
+    admitCaption(s, evt('Fighters will converge here.')); // active
+    expect(admitCaption(s, hint)).toEqual({ queued: hint }); // waits behind it
+    // The queen starts starving: the one-shot alert is not dropped — it evicts the hint.
+    expect(admitCaption(s, starving)).toEqual({ queued: starving, evictedPending: hint });
+    expect(s.pending).toBe(starving);
+    // Offered again while the slot is taken, the hint is dropped (its source retries).
+    expect(admitCaption(s, hint)).toEqual({ dropped: hint });
+    // The rally ends and the starvation alert shows; the hint finds room behind it.
+    expect(completeCaption(s)).toEqual({ begin: starving });
+    expect(admitCaption(s, hint)).toEqual({ queued: hint });
+    // The next danger caption evicts it again.
+    expect(admitCaption(s, danger)).toEqual({ queued: danger, evictedPending: hint });
+  });
+
+  it('only a caption that is not retryable evicts it; it still outranks a first-use hint', () => {
+    const s = createCaptionQueueState();
+    admitCaption(s, evt('a'));
+    admitCaption(s, hint);
+    // Another retryable caption, or a first-use hint, does not evict it.
+    const other: CaptionRequest = { ...evt('b'), retryable: true };
+    expect(admitCaption(s, other)).toEqual({ dropped: other });
+    expect(admitCaption(s, fu('pan'))).toEqual({ dropped: fu('pan') });
+    expect(s.pending).toBe(hint);
+    // Against a pending first-use hint, the retryable caption is an event.
+    const t = createCaptionQueueState();
+    admitCaption(t, evt('a'));
+    const pan = fu('pan');
+    admitCaption(t, pan);
+    expect(admitCaption(t, hint)).toEqual({ queued: hint, evictedPending: pan });
+  });
+
+  it('a waiting hint earns a newer raid-order version no keepSchedule (events outrank it)', () => {
+    const s = createCaptionQueueState();
+    const order1: CaptionRequest = { ...evt('Raiding: Loot.'), supersedeKey: 'raidOrder' };
+    const order2: CaptionRequest = { ...evt('Raiding: Deny.'), supersedeKey: 'raidOrder' };
+    admitCaption(s, order1); // active
+    admitCaption(s, hint); // pending
+    expect(admitCaption(s, order2)).toEqual({ begin: order2, replacedActive: order1 });
+    expect(s.pending).toBe(hint);
   });
 });

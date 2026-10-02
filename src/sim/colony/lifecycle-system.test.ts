@@ -7,8 +7,12 @@
 //   Integration: full queen→egg→larva→worker pipeline over 3700 ticks
 
 import { describe, it, expect } from 'vitest';
-import { tickQueenEggProduction, tickLifecycleTransitions } from './lifecycle-system.js';
-import { createWorldState } from '../types.js';
+import {
+  eggReserveFp,
+  tickQueenEggProduction,
+  tickLifecycleTransitions,
+} from './lifecycle-system.js';
+import { createWorldState, SIM_VERSION_V69_FOOD_FAIRNESS } from '../types.js';
 import { createColonyRecord } from './colony-store.js';
 import { setPoolFoodForTest } from '../food/food-test-utils.js';
 import { initAnt } from '../ant/ant-store.js';
@@ -35,7 +39,8 @@ const MAX_TEST_ENTITIES = 512;
 /**
  * Create a fresh world + colony with a live queen at position (queenX, queenY).
  * The queen entity is allocated as entity 0; the colony record references it.
- * foodStored defaults to 10_000 (well above QUEEN_EGG_FOOD_THRESHOLD).
+ * foodStored defaults to 10_000 (well above QUEEN_EGG_FOOD_THRESHOLD, and above a lone
+ * queen's V70 egg reserve, 3600 fp).
  *
  * By default, both a Queen chamber and a Nursery chamber are pushed to
  * colony.chambers as "completed" so the 09 reproduction-gate memo unlocks
@@ -97,7 +102,10 @@ function setupWorldWithQueen(
 
 describe('tickQueenEggProduction — CLNY-01', () => {
   it('1. produces one egg at tick 0 when all gates pass', () => {
-    const { world, colony } = setupWorldWithQueen(QUEEN_EGG_FOOD_THRESHOLD);
+    const { world, colony } = setupWorldWithQueen();
+    // #395 (V70): the stores hold exactly the egg reserve (egg-reserve.test.ts covers
+    // its boundary; the pre-V70 3-food boundary is pinned there too).
+    setPoolFoodForTest(world, colony, eggReserveFp(world, colony));
     world.tick = 0; // 0 % 300 === 0
 
     tickQueenEggProduction(world, colony);
@@ -112,6 +120,8 @@ describe('tickQueenEggProduction — CLNY-01', () => {
 
   it('2. does NOT produce an egg when foodStored is below threshold', () => {
     const { world, colony } = setupWorldWithQueen(QUEEN_EGG_FOOD_THRESHOLD - 1);
+    // The 3-food boundary is a pre-V70 rule (#395): pin the world to V69.
+    world.simVersion = SIM_VERSION_V69_FOOD_FAIRNESS;
     world.tick = 0;
 
     tickQueenEggProduction(world, colony);

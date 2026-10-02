@@ -213,6 +213,11 @@ describe('chamber-flow gating (#235) — gated ≡ force-recompute-every-tick', 
         // trigger of that flag in the real sim = a deposit crossing full↔not-full).
         // This exercises PR3's food-decouple: G rebuilds ONLY the food field, F (all
         // flags forced) rebuilds every field — the food field must still match.
+        // Keep the colony fed in both worlds: reconcile clamps the entrance pool to
+        // BASE_FOOD_STORAGE_CAPACITY, and from V70 (#395) the queen lays only while
+        // the stores cover the egg reserve, which a churning brood soon outgrows.
+        setPoolFoodForTest(g, gc, 500_000);
+        setPoolFoodForTest(f, fc, 500_000);
         if (t % 40 === 0) {
           foodFull = !foodFull;
           const fv = foodFull ? FOOD_CHAMBER_CAPACITY : 0;

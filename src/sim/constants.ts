@@ -41,14 +41,37 @@ export const WORKER_LIFESPAN_TICKS = 0x7fffffff;
 /** PRD §9c — Ticks between queen egg-laying events (pre-V21 static value). */
 export const QUEEN_EGG_INTERVAL_TICKS = 300;
 
-/** PRD §9c — Minimum food units (fp) the colony must hold for queen to lay. */
+/**
+ * PRD §9c — Minimum food units (fp) the colony must hold for queen to lay — before
+ * V70 only. From V70 (#395) the egg reserve (QUEEN_EGG_RESERVE_RUNWAY_TICKS) replaces
+ * it; the AI's survival-mode larder bound still counts in multiples of it.
+ */
 export const QUEEN_EGG_FOOD_THRESHOLD = 768; // 3 × FP_ONE
+
+/**
+ * #395 (V70) — the egg reserve's runway: the queen lays an egg only while the colony's
+ * stored food would feed every mouth for this many ticks with no food coming in — the
+ * queen, every worker and fighter, every larva, and every egg plus the new one counted
+ * as the larvae they become (lifecycle-system.ts eggReserveFp). 1200 ticks = 60 s.
+ * Chosen by measurement from 600 / 1200 / 2400 (#395 part 2): the shortest that
+ * removed opening famine; 2400 failed the AI-economy WarFooting gate.
+ * At 1200 the reserve is 3600 fp for a lone queen (2400 for her, 1200 for the new
+ * egg's larva), plus 1200 per brood and 64 per worker. That is more than the entrance
+ * pool can hold (BASE_FOOD_STORAGE_CAPACITY, 2048), so a colony needs a FoodStorage
+ * chamber (FOOD_CHAMBER_CAPACITY, 5120 each) before its first egg, and its storage
+ * capacity caps its brood: with one chamber and 3 workers she lays only while there
+ * are at most 2 brood; with two chambers she never lays past about 135 workers.
+ */
+export const QUEEN_EGG_RESERVE_RUNWAY_TICKS = 1200;
 
 // ---------------------------------------------------------------------------
 // S4 (V21) — Reproduction lever: surplus-scaled egg interval
 // ---------------------------------------------------------------------------
 
-/** S4 — Sentinel returned by eggIntervalForColony when food is below the surplus gate. */
+/**
+ * S4 — Sentinel returned by eggIntervalForColony when food is below the 3-food gate —
+ * before V70 only (from V70, #395, the egg reserve decides alone and it is never returned).
+ */
 // structural — must not drift; -1 sentinel, not a balance knob.
 export const QUEEN_EGG_INTERVAL_DISABLED = -1;
 /** S4 — Egg interval at < 3× surplus (matches pre-V21 static value). */
@@ -650,9 +673,11 @@ export const ENEMY_START_Y = 64;
  * Current value 1280 (≈5.0 food units). Raised from an early 500 estimate
  * (2026-04-19) so the queen starts above QUEEN_EGG_FOOD_THRESHOLD (768 FP =
  * 3.0) and can lay her first egg immediately rather than stalling until workers
- * return food. Like STARVATION_GRACE_TICKS, this is a normal balance knob — our
- * current best guess, not tech debt (the 500 was an early estimate, since
- * superseded by playtest).
+ * return food. That holds before V70 only: from V70 (#395) her first egg waits for
+ * the egg reserve (at least 3600 fp, more than the entrance pool holds), so it waits
+ * for foraging and a FoodStorage chamber. Like STARVATION_GRACE_TICKS, this is a
+ * normal balance knob — our current best guess, not tech debt (the 500 was an early
+ * estimate, since superseded by playtest).
  */
 export const STARTING_FOOD = 1280;
 

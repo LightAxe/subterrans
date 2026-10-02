@@ -231,6 +231,12 @@ import {
 } from './enemy-march.js';
 import { checkAndTrigger, resetCaptions, type CaptionKey } from './onboarding-captions.js';
 import { advanceQueenDanger, createQueenDangerState } from './queen-danger.js';
+import {
+  advanceStorageHint,
+  createStorageHintState,
+  storageHintStale,
+  STORAGE_HINT_HOLD_MS,
+} from './storage-hint.js';
 // Stage 3b controls rework (issue #18, #3) — first-use navigation hints.
 import {
   triggerReactiveHint,
@@ -304,7 +310,7 @@ interface UIScenePhase9 {
   hideDifficultySelectOverlay(): void;
   // S6 — first-occurrence caption overlay (light onboarding). Optional captionKey
   // (Stage 3b #3) lets a dropped one-shot caption un-mark its trigger so it re-fires.
-  /** Returns false iff the caption queue dropped the caption (overflow). */
+  /** Returns false iff the caption was not admitted (overflow, or captions closed). */
   showCaption(
     text: string,
     screenX: number,
@@ -314,7 +320,7 @@ interface UIScenePhase9 {
   ): boolean;
   // #378 — a caption that replaces an older one with the same supersedeKey (on
   // screen or pending) instead of queueing behind it: the raid-order caption.
-  /** Returns false iff the caption queue dropped the caption (overflow). */
+  /** Returns false iff the caption was not admitted (overflow, or captions closed). */
   showSupersedingCaption(
     text: string,
     screenX: number,
@@ -345,8 +351,16 @@ interface UIScenePhase9 {
   // recurring captions (raid news, the spider-rampage warning) may enter without
   // taking the slot a one-shot caption would need.
   captionQueueIdle?(): boolean;
-  /** #372 — a long-hold caption (the army warning) shortens its hold so an
-   *  event caption waiting behind it is not held back (UIScene.yieldLongCaption). */
+  /** #395 (Codex P2) — the round is over: drop the caption on screen and the one
+   *  waiting, and admit none until the next round (UIScene.closeCaptions). */
+  closeCaptions?(): void;
+  /** #395 — withdraw the pending caption keyed `key` (UIScene.withdrawPendingCaption). */
+  withdrawPendingCaption?(key: CaptionKey): void;
+  /** #395 — the one-shot key of the caption waiting in the pending slot, or null. */
+  pendingCaptionKey?(): CaptionKey | null;
+  /** #372 — a long-hold caption (the army warning, the #395 storage hint)
+   *  shortens its hold so a caption waiting behind it is not held back
+   *  (UIScene.yieldLongCaption). */
   yieldLongCaption?(): void;
   /** #372 — Dev/E2E-only: each caption's final hold (ms) and whether it gave way. */
   captionHolds?(): { text: string; holdMs: number; yielded: boolean }[];
@@ -366,6 +380,8 @@ interface UIScenePhase9 {
   };
   /** #378 — Dev/E2E-only: stop/restart UIScene's clock (caption fades and holds). */
   freezeCaptionClock?(frozen: boolean): void;
+  /** #395 — Dev/E2E-only: run UIScene's stopped clock forward `ms` (UIScene.advanceCaptionClock). */
+  advanceCaptionClock?(ms: number): void;
 }
 
 // Re-export GamePhase for Plan 07 and other consumers
@@ -484,12 +500,32 @@ declare global {
        *  the next command on a machine of any speed. The sim is not touched.
        *  Dev-build only. */
       freezeCaptionClock?(frozen: boolean): void;
+      /** #395 — with UIScene's clock stopped, run it forward `ms` of scene time in
+       *  fixed steps (timers and tweens, as on a frame); it stays stopped after.
+       *  Dev-build only. */
+      advanceCaptionClock?(ms: number): void;
       /** #290 PR 6 — issue a player rally on (tileX, tileY) through the exact
        *  enqueue the surface Command tap uses (handleSetRallyPoint): a command, not
        *  a state write, so the drain, the caption hook and the sim all run as for
        *  a real click. Lets a spec rally on an enemy entrance without driving the
        *  camera to it. Returns false if the command was dropped (paused cap). */
       rallyPlayerAt?(tileX: number, tileY: number): boolean;
+      /** #395 — rally colony `colonyId`'s fighters on (tileX, tileY): a real
+       *  SetRallyPoint through enqueueCommand, so the sim applies it on the next
+       *  drain. Lets a spec send an enemy army out at a moment of its choosing (the
+       *  raid fixture has no AI state, so no AI operation launches one). True means
+       *  enqueued; false: dropped (cap). */
+      rallyColonyAt?(colonyId: number, tileX: number, tileY: number): boolean;
+      /** #395 — designate a player chamber of `chamberType` at anchor (tileX, tileY)
+       *  through the input layer's enqueueCommand (the enqueue the chamber menu's
+       *  command takes, minus its feedforward check): a command, not a state write,
+       *  so the drain, the caption hook and the sim all run as for a real placement.
+       *  True means enqueued, not accepted by the sim; false: dropped (queue cap). */
+      placePlayerChamberAt?(chamberType: number, tileX: number, tileY: number): boolean;
+      /** #395 (Codex P2) — offer a keyless caption through UIScene's real showCaption
+       *  (top centre), as a late caption source would (an autosave failure resolving
+       *  after game over). Returns what showCaption returns: false if not admitted. */
+      offerCaption?(text: string): boolean;
       /** #290 PR 6 — the player colony's raid counters (food in fp: stolen by it,
        *  stolen from it; completed raid hauls) and its food total, read-only, so a
        *  spec can prove a raid moved food. Null before the first boot. */
@@ -837,6 +873,9 @@ export class GameScene extends Phaser.Scene {
       freezeCaptionClock: (frozen: boolean): void => {
         this.getUIScene()?.freezeCaptionClock?.(frozen);
       },
+      advanceCaptionClock: (ms: number): void => {
+        this.getUIScene()?.advanceCaptionClock?.(ms);
+      },
       rallyPlayerAt: (tileX: number, tileY: number): boolean =>
         this.world !== undefined &&
         !handleSetRallyPoint(
@@ -844,6 +883,29 @@ export class GameScene extends Phaser.Scene {
           tileX,
           tileY,
           PLAYER_COLONY_ID,
+          isPausedByAny(this.pauseReasons),
+        ),
+      rallyColonyAt: (colonyId: number, tileX: number, tileY: number): boolean =>
+        this.world !== undefined &&
+        enqueueCommand(
+          this.world,
+          { type: 'SetRallyPoint', colonyId, tileX, tileY, issuedAtTick: this.world.tick },
+          isPausedByAny(this.pauseReasons),
+        ),
+      offerCaption: (text: string): boolean =>
+        this.getUIScene()?.showCaption(text, this.layout.w / 2, 60) ?? false,
+      placePlayerChamberAt: (chamberType: number, tileX: number, tileY: number): boolean =>
+        this.world !== undefined &&
+        enqueueCommand(
+          this.world,
+          {
+            type: 'PlaceChamber',
+            colonyId: PLAYER_COLONY_ID,
+            chamberType: chamberType as ChamberType,
+            anchorTileX: tileX,
+            anchorTileY: tileY,
+            issuedAtTick: this.world.tick,
+          },
           isPausedByAny(this.pauseReasons),
         ),
       getPlayerRaidStats: () => {
@@ -979,6 +1041,8 @@ export class GameScene extends Phaser.Scene {
   // #375 — queen HP tracking for the damage pulse and the re-arming danger caption.
   private queenDanger = createQueenDangerState();
   private queenStarvationTriggered = false; // starvation onset caption/pulse guard
+  // #395 — "Build a Food Storage chamber so your queen can lay eggs." (storage-hint.ts).
+  private storageHint = createStorageHintState();
   // #290 PR 6 — raid captions: last-seen player raid counters + per-caption
   // throttle. Re-baselined in finishBoot (fresh or loaded world).
   private readonly raidCaptions = createRaidCaptionState();
@@ -1703,6 +1767,7 @@ export class GameScene extends Phaser.Scene {
     this.lastProcessedEventTick = -1;
     this.queenDanger = createQueenDangerState();
     this.queenStarvationTriggered = false;
+    this.storageHint = createStorageHintState();
     this.contestedGlowFrames.clear();
     this.undergroundGlowFrames.clear();
     resetCaptions();
@@ -1807,6 +1872,27 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
+   * #395 — withdraw a storage hint still waiting behind another caption once it is
+   * out of date: storage no longer blocks the queen, judged on the projected world
+   * (queued commands folded in). Called before the game loop drains, while Playing
+   * or Paused (the caption clock runs on while paused, and a paused designation
+   * has not drained: no caption of its own would evict the hint), and again after
+   * the hint's own step (a tick can unblock storage with no command: a worker lost
+   * lowers the reserve).
+   */
+  private withdrawStaleStorageHint(): void {
+    if (!this.world) return;
+    if (this.gamePhase !== GamePhase.Playing && this.gamePhase !== GamePhase.Paused) return;
+    const uiScene = this.getUIScene();
+    if (uiScene?.pendingCaptionKey?.() !== 'foodStorageNeeded') return;
+    // The projected world folds in queued commands: a larder designated while
+    // paused, or still to drain this frame, already counts.
+    if (storageHintStale(this.projection.get(this.world), PLAYER_COLONY_ID)) {
+      uiScene.withdrawPendingCaption?.('foodStorageNeeded');
+    }
+  }
+
+  /**
    * Check per-frame world state for queen damage pulse and starvation onset.
    * Also fires world-state-based captions (spider visible, spiderPriority, etc.).
    * Called once per render frame while Playing.
@@ -1879,17 +1965,20 @@ export class GameScene extends Phaser.Scene {
     // entrances. Offered first: an army about to invade outranks the spider and
     // raid news.
     const armyText = nextArmyWarning(this.armyWarning, this.world, PLAYER_COLONY_ID);
-    if (
-      armyText !== null &&
-      uiScene &&
-      offerRecurringCaption(uiScene, armyText, this.layout.w / 2, 60, GATHER_CAPTION_HOLD_MS)
-    ) {
-      const owedTick = this.armyWarning.owedSinceTick;
-      markArmyWarningShown(this.armyWarning);
-      if (import.meta.env.DEV) {
-        this.armyWarningLog.push(
-          armyWarningLogEntry(this.world, PLAYER_COLONY_ID, armyText, owedTick),
-        );
+    // #395 — offered and not taken: still owed, so a long-hold caption gives way and
+    // the storage hint waits (below).
+    let armyWarningOwed = false;
+    if (armyText !== null && uiScene) {
+      if (offerRecurringCaption(uiScene, armyText, this.layout.w / 2, 60, GATHER_CAPTION_HOLD_MS)) {
+        const owedTick = this.armyWarning.owedSinceTick;
+        markArmyWarningShown(this.armyWarning);
+        if (import.meta.env.DEV) {
+          this.armyWarningLog.push(
+            armyWarningLogEntry(this.world, PLAYER_COLONY_ID, armyText, owedTick),
+          );
+        }
+      } else {
+        armyWarningOwed = true;
       }
     }
 
@@ -1906,21 +1995,56 @@ export class GameScene extends Phaser.Scene {
     // The cooldown starts only once the queue has taken the caption; until then it
     // stays owed (up to RAID_CAPTION_OWED_TICKS).
     const raidCaption = nextRaidCaption(this.raidCaptions, this.world, PLAYER_COLONY_ID);
-    if (
+    const raidTaken =
       raidCaption !== null &&
-      uiScene &&
+      uiScene !== null &&
       offerRecurringCaption(
         uiScene,
         raidCaptionText(raidCaption, activeRaidOrder(this.world, PLAYER_COLONY_ID)),
         this.layout.w / 2,
         60,
-      )
-    ) {
-      markRaidCaptionShown(this.raidCaptions, this.world, raidCaption);
-    } else if (recurringCaptionStillOwed(this.rampageCaption, raidCaption)) {
-      // #372 — news still owed behind a busy queue: a long-hold caption (the
-      // army warning) gives way, keeping CAPTION_YIELD_FLOOR_MS to be read.
-      uiScene?.yieldLongCaption?.();
+      );
+    if (raidTaken) markRaidCaptionShown(this.raidCaptions, this.world, raidCaption);
+    // #372 — a recurring caption still owed behind a busy queue (the army warning,
+    // the rampage warning, or raid news not taken): a long-hold caption (the army
+    // warning, the #395 storage hint) gives way, keeping CAPTION_YIELD_FLOOR_MS to
+    // be read; and (#395) the storage hint waits (below).
+    const recurringOwed =
+      !raidTaken && recurringCaptionStillOwed(this.rampageCaption, raidCaption, armyWarningOwed);
+    if (recurringOwed) uiScene?.yieldLongCaption?.();
+
+    // #395 (V70) — the queen lays only while stores cover the egg reserve, which the
+    // entrance pool alone never can: tell the player when storage is what stops her
+    // (storage-hint.ts). Advanced only while UIScene is up, so the caption is never
+    // marked shown without reaching the screen. The hint is retryable (offered again
+    // every frame until it shows), so it gives way to every caption but a first-use
+    // hint: offered after the recurring captions, it queues behind one that took an
+    // idle queue this frame; an event caption takes the pending slot from it; it
+    // makes no long caption give way; and while a recurring caption is owed (the
+    // queue busy) it is held back and a waiting one withdrawn, so that one comes next.
+    if (uiScene) {
+      // On the projected world: a larder the player has ordered, still queued, counts.
+      // Held back rather than offered and withdrawn: offered, it would evict a
+      // first-use hint waiting in the pending slot.
+      const storageText = advanceStorageHint(
+        this.storageHint,
+        this.projection.get(this.world),
+        PLAYER_COLONY_ID,
+        !recurringOwed,
+      );
+      if (storageText) {
+        uiScene.showCaption(
+          storageText,
+          this.layout.w / 2,
+          60,
+          'foodStorageNeeded',
+          STORAGE_HINT_HOLD_MS,
+        );
+      }
+      if (recurringOwed && uiScene.pendingCaptionKey?.() === 'foodStorageNeeded') {
+        uiScene.withdrawPendingCaption?.('foodStorageNeeded');
+      }
+      this.withdrawStaleStorageHint();
     }
   }
 
@@ -1986,6 +2110,9 @@ export class GameScene extends Phaser.Scene {
   private enterGameOver(outcome: GameOutcome): void {
     this.currentOutcome = outcome;
     this.gamePhase = GamePhase.GameOver;
+    // #395 (Codex P2) — the end screen owns the display: no caption stays over it,
+    // and none waiting behind one (a storage hint, a one-shot event caption) is promoted.
+    this.getUIScene()?.closeCaptions?.();
     // W2: first-class pause via Plan 06 Task 1 API — no setMsPerTick(Infinity)
     this.gameLoop.pause();
     // Issue #129 — clear any in-flight pan/drag/gesture so it doesn't leak
@@ -2308,6 +2435,8 @@ export class GameScene extends Phaser.Scene {
     if (quitFromPauseMenu) {
       uiScene.hidePauseMenuOverlay();
       this.gamePhase = GamePhase.GameOver;
+      // #395 — the round is over, as at game over (the survey draws above captions).
+      uiScene.closeCaptions?.();
     }
     uiScene.showSurveyOverlay({
       quitFromPauseMenu,
@@ -2612,6 +2741,9 @@ export class GameScene extends Phaser.Scene {
     this.currentCause = null;
     const uiScene = this.scene.get('UIScene') as unknown as UIScenePhase9;
     uiScene.hideGameOverOverlay();
+    // #395 (Codex P2) — no caption over the new-game screen either: a restart from
+    // the pause menu's Save/Load reaches it without a game over (bootFresh reopens).
+    uiScene.closeCaptions?.();
     // S5 / #304: show the new-game screen before creating the new world.
     // bootFresh is invoked inside the callback so wasSuspended is captured.
     this.gamePhase = GamePhase.SavePrompt; // prevent update() from ticking the old world during overlay
@@ -2748,6 +2880,12 @@ export class GameScene extends Phaser.Scene {
     if (this.viewState.activeView !== this.lastActiveView) {
       this.lastActiveView = this.viewState.activeView;
     }
+
+    // #395 — a storage hint still waiting behind another caption is withdrawn once
+    // it is out of date, judged before the loop drains; while Paused too (the
+    // caption clock runs on, and a larder ordered while paused is still queued).
+    // (While Playing, a designation's own 'chamber' caption would evict it anyway.)
+    this.withdrawStaleStorageHint();
 
     // Drive platform accumulator. When paused/GameOver, gameLoop.pause() already
     // freezes tick execution via its internal flag — update() is safe to call.
