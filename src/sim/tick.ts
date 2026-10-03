@@ -1,11 +1,6 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import {
-  allocateEntityId,
-  INVALID_ENTITY_ID,
-  SIM_VERSION_V62_AI_NEST_DEFENCE,
-  SIM_VERSION_V65_ALARM_INVASION,
-} from './types.js';
+import { allocateEntityId, INVALID_ENTITY_ID, SIM_VERSION_V65_ALARM_INVASION } from './types.js';
 import { tickSpider } from './spider.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath, checkTiebreaks } from './game-over.js';
@@ -846,7 +841,6 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
       case 'SetAIRaidClock': {
         // #371 (V62): the AI raid clock (AIStateRecord.raidSinceTick). `raiding` is
         // validated as a boolean: replayed/saved commands are not schema-checked.
-        if (world.simVersion < SIM_VERSION_V62_AI_NEST_DEFENCE) break;
         if (typeof cmd.raiding !== 'boolean') break;
         const raidRec = getAIStateForColony(world, cmd.colonyId);
         if (raidRec === null) break;

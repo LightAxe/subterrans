@@ -2749,15 +2749,6 @@ describe('#371 (V62) — the AI defends its own nest', () => {
     expect(rallies(world)).toEqual([clear()]);
   });
 
-  it('is off below V62: a V61 world gets no defence command', () => {
-    const { world, colony } = setup();
-    world.simVersion = SIM_VERSION_V61_AI_EARLY_STORAGE;
-    ant(world, FOE, DOOR_X, 10, AI);
-    colony.rallyPoint = { tileX: DOOR_X, tileY: 0 };
-    expect(aiNestDefence(world, colony, undefined)).toBeNull();
-    expect(rallies(world)).toHaveLength(0);
-  });
-
   it('past the limit a WarFooting colony probes again under a parked pair; an enemy inside still holds', () => {
     const { world, foe } = setup(5000);
     const rec = createDefaultAIStateRecord(AI);

@@ -4,12 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
 import { createScenario } from './scenario.js';
-import {
-  allocateEntityId,
-  createWorldState,
-  SIM_VERSION_V61_AI_EARLY_STORAGE,
-  SIM_VERSION_V62_AI_NEST_DEFENCE,
-} from './types.js';
+import { allocateEntityId, createWorldState } from './types.js';
 import type { WorldState } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { updateFightAntTargets } from './ant/ant-system.js';
@@ -537,9 +532,8 @@ describe('V44 (#325) — tunnel defenders: going in and coming out', () => {
 /** Six defenders on posts in a one-tile tunnel; three invaders standing still
  *  further along it. Returns the per-tick count of invaders a defender shares a
  *  tile with (combat pairs one ant of each colony per tile). */
-function spreadTrial(simVersion: number, ticks: number): number[] {
+function spreadTrial(ticks: number): number[] {
   const { world, colony, ids, ent } = rallyOnOwnEntrance(6);
-  world.simVersion = simVersion;
   const grid = world.undergroundGrids[PLAYER_COLONY_ID]!;
   for (let y = 0; y <= 3; y++) ugSet(grid, ent.x, y, UndergroundTileState.Open);
   for (let x = ent.x - 14; x <= ent.x + 14; x++) ugSet(grid, x, 3, UndergroundTileState.Open);
@@ -592,14 +586,9 @@ function spreadTrial(simVersion: number, ticks: number): number[] {
 }
 
 describe('#371 (V62) — tunnel defenders spread over the invaders', () => {
-  it('V62: every invader gets a defender of its own', () => {
-    const engaged = spreadTrial(SIM_VERSION_V62_AI_NEST_DEFENCE, 60);
+  it('every invader gets a defender of its own', () => {
+    const engaged = spreadTrial(60);
     expect(Math.max(...engaged), engaged.join(',')).toBe(3);
-  }, 30_000);
-
-  it('V61 (pinned): the pack goes for the nearest and never reaches all three', () => {
-    const engaged = spreadTrial(SIM_VERSION_V61_AI_EARLY_STORAGE, 60);
-    expect(Math.max(...engaged), engaged.join(',')).toBeLessThan(3);
   }, 30_000);
 });
 

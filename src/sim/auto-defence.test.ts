@@ -8,17 +8,13 @@
 //
 // The state-space audit (fighter order state × invasion state × which entrance ×
 // where the fighter stands) drives step 10c directly (updateFightAntTargets) on a
-// scenario nest, at V63 and at V64, and checks the V64 outcome is the automatic
-// defence where it should fire and exactly the V63 outcome everywhere else. The
+// scenario nest and checks the outcome is the automatic defence where it should
+// fire, and that a fighter outside a probe's cohort is exactly a sentry. The
 // behaviour through tick() is pinned below it.
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
 import { createScenario } from './scenario.js';
-import {
-  allocateEntityId,
-  SIM_VERSION_V63_AI_DEEP_QUEEN,
-  SIM_VERSION_V64_AUTO_DEFENCE,
-} from './types.js';
+import { allocateEntityId } from './types.js';
 import type { WorldState } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import {
@@ -47,8 +43,6 @@ import {
 
 const P = PLAYER_COLONY_ID;
 const E = ENEMY_COLONY_ID;
-const V63 = SIM_VERSION_V63_AI_DEEP_QUEEN;
-const V64 = SIM_VERSION_V64_AUTO_DEFENCE;
 /** Row of the nest's tunnel (the shafts run down to it). */
 const TUNNEL_Y = 3;
 /** Entrance B lies this many columns east of entrance A. */
@@ -85,16 +79,12 @@ function spawn(
  * under its open entrance A down to a tunnel along TUNNEL_Y, and, with `twoDoors`,
  * a second open entrance B = A + B_OFFSET whose shaft joins the same tunnel.
  */
-function nest(
-  version: number,
-  twoDoors: boolean,
-): {
+function nest(twoDoors: boolean): {
   world: WorldState;
   a: { x: number; y: number; id: number };
   b: { x: number; y: number; id: number };
 } {
   const world = createScenario(7, 'Normal');
-  world.simVersion = version;
   world.spider = null;
   world.aiState = [];
   const colony = world.colonies[P]!;
@@ -184,12 +174,14 @@ interface Outcome {
   barredB: boolean;
   recalled: boolean;
   subTask: number;
+  /** The colony has a breached entrance this tick (findBreachedEntrances). */
+  breached: boolean;
 }
 
-/** Build the case at `version`, run step 10c once, read the fighter's outcome. */
-function runCase(version: number, o: Orders, inv: Invasion, where: Where): Outcome {
+/** Build the case, run step 10c once, read the fighter's outcome. */
+function runCase(o: Orders, inv: Invasion, where: Where): Outcome {
   const twoDoors = true;
-  const { world, a, b } = nest(version, twoDoors);
+  const { world, a, b } = nest(twoDoors);
   const colony = world.colonies[P]!;
   const enemy = world.colonies[E]!;
   const ee = enemy.entrances.find((en) => en.isOpen)!;
@@ -271,6 +263,7 @@ function runCase(version: number, o: Orders, inv: Invasion, where: Where): Outco
     barredB: fighterBarredFromOwnShaft(world, id, colony, b.x, b.y),
     recalled: fighterIsRecalled(world, id),
     subTask: world.ants.subTask[id]!,
+    breached: getScratch(world).antTargeting.breachedEntrance.has(P),
   };
 }
 
@@ -284,53 +277,68 @@ function autoApplies(o: Orders, inv: Invasion): boolean {
   );
 }
 
+/** The nest is invaded where a shaft reaches, but the fighter is one automatic defence
+ *  leaves alone: its colony sent its fighters at the spider (that colony is not
+ *  surveyed for a breach), or it is hauling loot home (it deposits first). */
+function autoExempt(o: Orders, inv: Invasion): boolean {
+  return (
+    (o === 'spider' || o === 'hauling') &&
+    (inv === 'nearA' || inv === 'nearB' || inv === 'nearAandB')
+  );
+}
+
 describe('#372 (V64) — state-space audit: fighter orders × invasion × entrance × position', () => {
-  // Every combination, V63 and V64 side by side.
+  // The combinations where automatic defence applies, those where it is exempt, and
+  // those of a fighter outside a probe's cohort. (Every other combination is the
+  // fighter's ordinary orders, pinned by their own tests.)
   for (const o of ORDERS) {
     for (const inv of INVASIONS) {
+      if (!autoApplies(o, inv) && !autoExempt(o, inv) && o !== 'probeOut') continue;
       for (const where of WHERE) {
         it(`${o} / ${inv} / ${where}`, () => {
-          const v63 = runCase(V63, o, inv, where);
-          const v64 = runCase(V64, o, inv, where);
+          const out = runCase(o, inv, where);
           // The breached entrance: the nest is one connected part, so its first open
           // entrance, A, wherever the intruders are.
-          if (autoApplies(o, inv) && where === 'foreign') {
-            // In the enemy's nest it climbs out first, as at V63 (recalled: no rally
-            // holds it there); once out it may go down the breached shaft.
-            const expected = { ...(o === 'probeOut' ? runCase(V63, 'none', inv, where) : v63) };
-            expected.barredA = false;
-            expect(v64).toEqual(expected);
-            expect(v64.recalled).toBe(true);
+          if (autoExempt(o, inv)) {
+            // Never an automatic defender: not after the intruders below, not walked
+            // to the breached entrance on the surface. A colony sent at the spider
+            // has no breach at all.
+            expect(out.defends).toBe(false);
+            expect(out.moving).not.toBe(4); // DEFENDER_MOVING_TO_ENTRANCE
+            if (o === 'spider') expect(out.breached).toBe(false);
+            else expect(out.breached).toBe(true);
+          } else if (autoApplies(o, inv) && where === 'foreign') {
+            // In the enemy's nest it climbs out first (recalled: no rally holds it
+            // there), exactly as with no invasion; once out it may go down the
+            // breached shaft.
+            expect(out).toEqual({
+              ...runCase('none', 'none', 'foreign'),
+              barredA: false,
+              breached: true,
+            });
+            expect(out.recalled).toBe(true);
           } else if (autoApplies(o, inv)) {
-            const { a, b } = nest(V64, true);
+            const { a, b } = nest(true);
             if (where === 'below') {
               // Below in the nest: a tunnel defender, after the nearest intruder.
-              expect(v64.defends).toBe(true);
+              expect(out.defends).toBe(true);
               const intruder =
                 inv === 'nearB' ? `${b.x + 3},${TUNNEL_Y}` : `${a.x - 2},${TUNNEL_Y}`;
-              expect(v64.target).toBe(intruder);
+              expect(out.target).toBe(intruder);
             } else {
               // On the surface: to the breached entrance, by the routed walk (V57).
-              expect(v64.defends).toBe(false);
-              expect(v64.target).toBe(`${a.x},${a.y}`);
-              expect(v64.moving).toBe(4); // DEFENDER_MOVING_TO_ENTRANCE
+              expect(out.defends).toBe(false);
+              expect(out.target).toBe(`${a.x},${a.y}`);
+              expect(out.moving).toBe(4); // DEFENDER_MOVING_TO_ENTRANCE
             }
             // It may go down the breached shaft, and no other.
-            expect(v64.barredA).toBe(false);
-            expect(v64.barredB).toBe(true);
-            expect(v64.recalled).toBe(o === 'none' || o === 'probeOut');
-            // And at V63 it did not: a sentry (or the probe's follower).
-            expect(v63.defends).toBe(false);
-          } else if (o === 'probeOut') {
-            // Outside the probe's cohort, with nothing to defend: exactly a sentry.
-            expect(v64).toEqual(runCase(V64, 'none', inv, where));
-            // …where at V63 it followed the probe's rally.
-            expect(v63).toEqual(runCase(V63, 'probeIn', inv, where));
-            expect(v64.recalled).toBe(true);
-            expect(v63.recalled).toBe(false);
+            expect(out.barredA).toBe(false);
+            expect(out.barredB).toBe(true);
+            expect(out.recalled).toBe(true);
           } else {
-            // Nothing new applies: exactly the V63 outcome.
-            expect(v64).toEqual(v63);
+            // Outside the probe's cohort, with nothing to defend: exactly a sentry.
+            expect(out).toEqual(runCase('none', inv, where));
+            expect(out.recalled).toBe(true);
           }
         });
       }
@@ -338,12 +346,12 @@ describe('#372 (V64) — state-space audit: fighter orders × invasion × entran
   }
 
   it('the audit is not vacuous: sentries and followers act differently in it', () => {
-    expect(runCase(V64, 'none', 'none', 'surfA')).not.toEqual(
-      runCase(V64, 'rallyField', 'none', 'surfA'),
-    );
-    expect(runCase(V64, 'none', 'nearA', 'surfB')).not.toEqual(
-      runCase(V64, 'none', 'none', 'surfB'),
-    );
+    // The exemptions discriminate: a sentry in the same spot defends.
+    expect(runCase('none', 'nearA', 'below').defends).toBe(true);
+    expect(runCase('none', 'none', 'surfA')).not.toEqual(runCase('rallyField', 'none', 'surfA'));
+    expect(runCase('none', 'nearA', 'surfB')).not.toEqual(runCase('none', 'none', 'surfB'));
+    // …and a probe's follower is not a sentry.
+    expect(runCase('probeIn', 'none', 'surfA')).not.toEqual(runCase('none', 'none', 'surfA'));
   });
 });
 
@@ -352,8 +360,8 @@ describe('#372 (V64) — state-space audit: fighter orders × invasion × entran
 // ---------------------------------------------------------------------------
 
 describe('#372 (V64) — fighter-orders: which fighters a probe rally applies to', () => {
-  function probeWorld(version: number): { world: WorldState; inCohort: number; outside: number } {
-    const { world, a } = nest(version, false);
+  function probeWorld(): { world: WorldState; inCohort: number; outside: number } {
+    const { world, a } = nest(false);
     const colony = world.colonies[P]!;
     const inCohort = spawn(world, P, a.x + 2, a.y, Zone.Surface);
     const outside = spawn(world, P, a.x + 3, a.y, Zone.Surface);
@@ -369,23 +377,16 @@ describe('#372 (V64) — fighter-orders: which fighters a probe rally applies to
     return { world, inCohort, outside };
   }
 
-  it('V64: only the cohort answers the probe rally', () => {
-    const { world, inCohort, outside } = probeWorld(V64);
+  it('only the cohort answers the probe rally', () => {
+    const { world, inCohort, outside } = probeWorld();
     expect(colonyRallyIsProbe(world, world.colonies[P]!)).toBe(true);
     expect(fighterAnswersRally(world, inCohort)).toBe(true);
     expect(fighterAnswersRally(world, outside)).toBe(false);
     expect(fighterOutsideProbeCohort(world, outside)).toBe(true);
   });
 
-  it('V63 (pinned): every fighter answers it', () => {
-    const { world, inCohort, outside } = probeWorld(V63);
-    expect(colonyRallyIsProbe(world, world.colonies[P]!)).toBe(false);
-    expect(fighterAnswersRally(world, inCohort)).toBe(true);
-    expect(fighterAnswersRally(world, outside)).toBe(true);
-  });
-
   it('a rally off the probe target (the AI moved it: nest defence) is every fighter’s', () => {
-    const { world, outside } = probeWorld(V64);
+    const { world, outside } = probeWorld();
     world.colonies[P]!.rallyPoint = { tileX: 3, tileY: 3 };
     expect(fighterAnswersRally(world, outside)).toBe(true);
     world.colonies[P]!.rallyPoint = { tileX: 3, tileY: world.colonies[P]!.rallyPoint.tileY };
@@ -394,23 +395,23 @@ describe('#372 (V64) — fighter-orders: which fighters a probe rally applies to
   });
 
   it('an Invasion operation on the rally tile is every fighter’s', () => {
-    const { world, outside } = probeWorld(V64);
+    const { world, outside } = probeWorld();
     getAIStateForColony(world, P)!.operationKind = 'Invasion';
     expect(fighterAnswersRally(world, outside)).toBe(true);
   });
 
   it('no rally: nobody answers; another colony’s probe does not matter', () => {
-    const { world, inCohort } = probeWorld(V64);
+    const { world, inCohort } = probeWorld();
     world.colonies[P]!.rallyPoint = null;
     expect(fighterAnswersRally(world, inCohort)).toBe(false);
     expect(fighterOutsideProbeCohort(world, inCohort)).toBe(false);
-    const other = probeWorld(V64);
+    const other = probeWorld();
     other.world.aiState[0]!.colonyId = E; // the probe is the enemy's, not this colony's
     expect(fighterAnswersRally(other.world, other.outside)).toBe(true);
   });
 
   it('fighters outside the cohort are ranked as sentries: they take distinct posts', () => {
-    const { world, a } = nest(V64, false);
+    const { world, a } = nest(false);
     const colony = world.colonies[P]!;
     const ids = [0, 1, 2].map(() => spawn(world, P, a.x + 2, a.y, Zone.Surface));
     const cohortMate = spawn(world, P, a.x - 2, a.y, Zone.Surface);
@@ -432,7 +433,7 @@ describe('#372 (V64) — fighter-orders: which fighters a probe rally applies to
   it('a probe rally on an own entrance takes only the cohort down it (the rule is per fighter)', () => {
     // Not a case the AI makes (a probe rallies on a food pile), but the rule must
     // not leak: the shaft rule reads the fighter's orders, not the colony's rally.
-    const { world, a } = nest(V64, false);
+    const { world, a } = nest(false);
     const colony = world.colonies[P]!;
     const inCohort = spawn(world, P, a.x + 2, a.y, Zone.Surface);
     const outside = spawn(world, P, a.x + 3, a.y, Zone.Surface);
@@ -457,7 +458,7 @@ describe('#372 (V64) — fighter-orders: which fighters a probe rally applies to
   });
 
   it('a non-fighter is never "outside the cohort"', () => {
-    const { world, outside } = probeWorld(V64);
+    const { world, outside } = probeWorld();
     world.ants.task[outside] = AntTask.Foraging;
     expect(fighterOutsideProbeCohort(world, outside)).toBe(false);
   });
@@ -473,7 +474,7 @@ describe('#372 (V64) — which entrance is breached', () => {
 
   it('within one connected nest, its first open entrance, wherever the intruder is', () => {
     for (const x of [-2, 3, B_OFFSET >> 1, B_OFFSET - 1, B_OFFSET + 3]) {
-      const { world, a } = nest(V64, true);
+      const { world, a } = nest(true);
       spawn(world, E, a.x + x, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
       updateFightAntTargets(world);
       expect(breached(world), `intruder at +${x}`).toBe(a.id);
@@ -481,7 +482,7 @@ describe('#372 (V64) — which entrance is breached', () => {
   });
 
   it('an intruder walking between the two shafts does not move the breach', () => {
-    const { world, a } = nest(V64, true);
+    const { world, a } = nest(true);
     const inv = spawn(world, E, a.x, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
     for (let x = a.x - 2; x <= a.x + B_OFFSET + 3; x++) {
       world.ants.posX[inv] = (x << FP_SHIFT) + (FP_ONE >> 1);
@@ -492,7 +493,7 @@ describe('#372 (V64) — which entrance is breached', () => {
 
   it('between unconnected parts, the one whose shaft is nearest an intruder', () => {
     for (const nearB of [true, false]) {
-      const { world, a, b } = nest(V64, true);
+      const { world, a, b } = nest(true);
       ugSet(world.undergroundGrids[P]!, b.x - 3, TUNNEL_Y, UndergroundTileState.Solid);
       spawn(world, E, a.x - (nearB ? 8 : 1), TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
       spawn(world, E, b.x + (nearB ? 1 : 8), TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
@@ -502,7 +503,7 @@ describe('#372 (V64) — which entrance is breached', () => {
   });
 
   it('measured from each intruder, whatever their ids', () => {
-    const { world, a, b } = nest(V64, true);
+    const { world, a, b } = nest(true);
     ugSet(world.undergroundGrids[P]!, b.x - 3, TUNNEL_Y, UndergroundTileState.Solid);
     // Two unconnected parts. In B's part the lower-id intruder is far from its
     // shaft (9) and a higher-id one near (4); in A's part one at 5. B's nearest (4)
@@ -515,7 +516,7 @@ describe('#372 (V64) — which entrance is breached', () => {
   });
 
   it('stays with the defenders already in: a part of the nest with own fighters below beats a nearer intruder elsewhere', () => {
-    const { world, a, b } = nest(V64, true);
+    const { world, a, b } = nest(true);
     // Cut the tunnel between the shafts: two parts, A's and B's.
     ugSet(world.undergroundGrids[P]!, b.x - 3, TUNNEL_Y, UndergroundTileState.Solid);
     // An intruder deep in A's part (far from A's shaft), a defender after it, and an
@@ -526,14 +527,14 @@ describe('#372 (V64) — which entrance is breached', () => {
     updateFightAntTargets(world);
     expect(breached(world)).toBe(a.id);
     // With nobody below yet, the nearer one (B's) would be breached.
-    const w2 = nest(V64, true);
+    const w2 = nest(true);
     ugSet(w2.world.undergroundGrids[P]!, w2.b.x - 3, TUNNEL_Y, UndergroundTileState.Solid);
     spawn(w2.world, E, w2.a.x - 12, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
     spawn(w2.world, E, w2.b.x, 1, Zone.Underground, { grid: P, speed: 0 });
     updateFightAntTargets(w2.world);
     expect(breached(w2.world)).toBe(w2.b.id);
     // Mirrored (the defenders' part is the higher-id entrance's): still theirs.
-    const w3 = nest(V64, true);
+    const w3 = nest(true);
     ugSet(w3.world.undergroundGrids[P]!, w3.b.x - 3, TUNNEL_Y, UndergroundTileState.Solid);
     spawn(w3.world, E, w3.b.x + 6, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
     spawn(w3.world, P, w3.b.x + 5, TUNNEL_Y, Zone.Underground);
@@ -543,7 +544,7 @@ describe('#372 (V64) — which entrance is breached', () => {
   });
 
   it('on a tie, the lower entranceId', () => {
-    const { world, a, b } = nest(V64, true);
+    const { world, a, b } = nest(true);
     ugSet(world.undergroundGrids[P]!, b.x - 3, TUNNEL_Y, UndergroundTileState.Solid);
     // Unconnected parts, an intruder in each, equally near its own shaft.
     spawn(world, E, b.x + 2, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
@@ -553,7 +554,7 @@ describe('#372 (V64) — which entrance is breached', () => {
   });
 
   it('skips a nearer entrance whose shaft does not reach the intruder', () => {
-    const { world, a, b } = nest(V64, true);
+    const { world, a, b } = nest(true);
     // Cut the tunnel between the shafts: B's shaft no longer reaches the A side.
     ugSet(world.undergroundGrids[P]!, b.x - 1, TUNNEL_Y, UndergroundTileState.Solid);
     // An intruder just west of the cut: nearer B's shaft by Manhattan, reached only from A.
@@ -563,7 +564,7 @@ describe('#372 (V64) — which entrance is breached', () => {
   });
 
   it('none for an intruder no shaft reaches, on the surface, or in another nest', () => {
-    const { world, a } = nest(V64, false);
+    const { world, a } = nest(false);
     ugSet(world.undergroundGrids[P]!, a.x + 6, 9, UndergroundTileState.Open);
     spawn(world, E, a.x + 6, 9, Zone.Underground, { grid: P, speed: 0 });
     spawn(world, E, a.x + 1, a.y, Zone.Surface, { grid: E, speed: 0 });
@@ -572,7 +573,7 @@ describe('#372 (V64) — which entrance is breached', () => {
   });
 
   it('none for a closed entrance: only an open shaft is defended', () => {
-    const { world, a } = nest(V64, false);
+    const { world, a } = nest(false);
     world.colonies[P]!.entrances[0]!.isOpen = false;
     spawn(world, E, a.x + 1, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
     updateFightAntTargets(world);
@@ -580,7 +581,7 @@ describe('#372 (V64) — which entrance is breached', () => {
   });
 
   it('cleared on the pass after the last intruder dies', () => {
-    const { world, a } = nest(V64, false);
+    const { world, a } = nest(false);
     const inv = spawn(world, E, a.x + 1, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
     updateFightAntTargets(world);
     expect(breached(world)).toBe(a.id);
@@ -590,15 +591,8 @@ describe('#372 (V64) — which entrance is breached', () => {
   });
 
   it('none while the colony’s rally is every fighter’s order (they defend only by it)', () => {
-    const { world, a } = nest(V64, false);
+    const { world, a } = nest(false);
     world.colonies[P]!.rallyPoint = { tileX: a.x + 5, tileY: a.y + 12 };
-    spawn(world, E, a.x + 1, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
-    updateFightAntTargets(world);
-    expect(breached(world)).toBeUndefined();
-  });
-
-  it('V63 (pinned): never', () => {
-    const { world, a } = nest(V63, false);
     spawn(world, E, a.x + 1, TUNNEL_Y, Zone.Underground, { grid: P, speed: 0 });
     updateFightAntTargets(world);
     expect(breached(world)).toBeUndefined();
@@ -612,7 +606,6 @@ describe('#372 (V64) — which entrance is breached', () => {
 /** A settled player garrison: `n` sentries holding posts round entrance A (and,
  *  with `twoDoors`, `n` more round B), no rally, the ratio asking for all of them. */
 function garrison(
-  version: number,
   n: number,
   twoDoors: boolean,
 ): {
@@ -622,7 +615,7 @@ function garrison(
   atA: number[];
   atB: number[];
 } {
-  const { world, a, b } = nest(version, twoDoors);
+  const { world, a, b } = nest(twoDoors);
   const colony = world.colonies[P]!;
   const atA: number[] = [];
   const atB: number[] = [];
@@ -646,8 +639,8 @@ function invade(world: WorldState, a: { x: number; y: number }, xs: readonly num
 }
 
 describe('#372 (V64) — automatic defence through tick()', () => {
-  it('V64: the garrison goes down, kills the intruders, and comes back out to its posts', () => {
-    const { world, a, atA } = garrison(V64, 4, false);
+  it('the garrison goes down, kills the intruders, and comes back out to its posts', () => {
+    const { world, a, atA } = garrison(4, false);
     expect(atA.every((id) => world.ants.subTask[id] === FightingSubState.Holding)).toBe(true);
     const invaders = invade(world, a, [a.x + 8, a.x + 11]);
     let wentDown = 0;
@@ -670,18 +663,8 @@ describe('#372 (V64) — automatic defence through tick()', () => {
     }
   }, 30_000);
 
-  it('V63 (pinned): the garrison stays at its posts and the intruders live', () => {
-    const { world, a, atA } = garrison(V63, 4, false);
-    const invaders = invade(world, a, [a.x + 8, a.x + 11]);
-    for (let t = 0; t < 300; t++) {
-      tick(world, []);
-      expect(atA.every((id) => world.ants.zone[id] === Zone.Surface)).toBe(true);
-    }
-    expect(invaders.map((i) => world.ants.alive[i])).toEqual([1, 1]);
-  }, 30_000);
-
   it('sentries at the other entrance walk over and go down the breached one', () => {
-    const { world, a, b, atA, atB } = garrison(V64, 2, true);
+    const { world, a, b, atA, atB } = garrison(2, true);
     // One connected nest: A is breached even with the intruder just below B, so
     // B's sentries come round to A.
     const invaders = invade(world, a, [b.x + 3]);
@@ -704,7 +687,7 @@ describe('#372 (V64) — automatic defence through tick()', () => {
   }, 30_000);
 
   it('a colony-wide rally elsewhere keeps its fighters there: no automatic defence', () => {
-    const { world, a, atA } = garrison(V64, 3, false);
+    const { world, a, atA } = garrison(3, false);
     const colony = world.colonies[P]!;
     colony.rallyPoint = { tileX: a.x + 5, tileY: a.y + 12 };
     for (let t = 0; t < 80; t++) tick(world, []);
@@ -722,7 +705,7 @@ describe('#372 (V64) — automatic defence through tick()', () => {
   }, 30_000);
 
   it('on its way to the breached entrance it takes no other shaft, not even from the spider', () => {
-    const { world, a, b } = nest(V64, true);
+    const { world, a, b } = nest(true);
     const colony = world.colonies[P]!;
     // A spider right by entrance B; an automatic defender on B's doorstep; A breached.
     const spider = createScenario(7, 'Normal').spider!;
@@ -735,7 +718,7 @@ describe('#372 (V64) — automatic defence through tick()', () => {
     expect(fighterBarredFromOwnShaft(world, id, colony, b.x, b.y)).toBe(true);
     expect(fighterBarredFromOwnShaft(world, id, colony, a.x, a.y)).toBe(false);
     // With no intruder it is a sentry again and does take cover down B.
-    const w2 = nest(V64, true);
+    const w2 = nest(true);
     const s2 = createScenario(7, 'Normal').spider!;
     s2.posX = spider.posX;
     s2.posY = spider.posY;
@@ -747,21 +730,21 @@ describe('#372 (V64) — automatic defence through tick()', () => {
     );
   });
 
-  it('surplus sentries do not stand down while the nest is invaded (V64), and do at V63', () => {
-    for (const version of [V64, V63]) {
-      const { world, a, atA } = garrison(version, 5, false);
-      const colony = world.colonies[P]!;
-      invade(world, a, [a.x + 11]);
-      colony.computedAllocation.fight = 1; // surplus 4: three would go
-      standDownSurplusSentries(world, colony);
-      const idle = atA.filter((id) => world.ants.task[id] === AntTask.Idle).length;
-      expect(idle, `v${version}`).toBe(version === V64 ? 0 : 3);
-    }
+  it('surplus sentries do not stand down while the nest is invaded, and do once it is clear', () => {
+    const { world, a, atA } = garrison(5, false);
+    const colony = world.colonies[P]!;
+    const invaders = invade(world, a, [a.x + 11]);
+    colony.computedAllocation.fight = 1; // surplus 4: three would go
+    standDownSurplusSentries(world, colony);
+    expect(atA.filter((id) => world.ants.task[id] === AntTask.Idle).length).toBe(0);
+    for (const id of invaders) world.ants.alive[id] = 0; // test-only removal
+    standDownSurplusSentries(world, colony);
+    expect(atA.filter((id) => world.ants.task[id] === AntTask.Idle).length).toBe(3);
   }, 30_000);
 });
 
 describe('#372 (V64) — an AI probe sends only its cohort (through tick())', () => {
-  function probe(version: number): {
+  function probe(): {
     world: WorldState;
     cohort: number[];
     others: number[];
@@ -769,7 +752,6 @@ describe('#372 (V64) — an AI probe sends only its cohort (through tick())', ()
     home: { x: number; y: number };
   } {
     const world = createScenario(11, 'Normal');
-    world.simVersion = version;
     world.spider = null;
     const enemy = world.colonies[E]!;
     const ee = enemy.entrances.find((en) => en.isOpen)!;
@@ -819,21 +801,14 @@ describe('#372 (V64) — an AI probe sends only its cohort (through tick())', ()
     Math.abs((world.ants.posX[id]! >> FP_SHIFT) - p.x) +
     Math.abs((world.ants.posY[id]! >> FP_SHIFT) - p.y);
 
-  it('V64: the three recorded fighters go to the probe target; the rest stay sentries at home', () => {
-    const { world, cohort, others, target, home } = probe(V64);
+  it('the three recorded fighters go to the probe target; the rest stay sentries at home', () => {
+    const { world, cohort, others, target, home } = probe();
     expect(getAIStateForColony(world, E)!.state).toBe('Probing');
     for (const id of cohort)
       expect(dist(world, id, target), tileOf(world, id)).toBeLessThanOrEqual(3);
     for (const id of others) {
       expect(dist(world, id, home), tileOf(world, id)).toBeLessThanOrEqual(8);
       expect(world.ants.subTask[id]).toBe(FightingSubState.Holding);
-    }
-  }, 30_000);
-
-  it('V63 (pinned): every fighter follows the probe', () => {
-    const { world, cohort, others, target } = probe(V63);
-    for (const id of [...cohort, ...others]) {
-      expect(dist(world, id, target), tileOf(world, id)).toBeLessThanOrEqual(3);
     }
   }, 30_000);
 });

@@ -6,7 +6,7 @@ import { ENTRANCE_SHAFT_DEPTH, FIGHT_AGGRO_RADIUS } from '../constants.js';
 import { AntTask, FightingSubState } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
 import { Zone, type UndergroundGrid } from '../terrain.js';
-import { SIM_VERSION_V64_AUTO_DEFENCE, type WorldState } from '../types.js';
+import type { WorldState } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
 import {
   antIsAtHome,
@@ -414,7 +414,7 @@ export function colonyRecalledItsFighters(world: WorldState, colonyId: number): 
  * #372 — fighter `id` is recalled: its colony recalled its fighters
  * (colonyRecalledItsFighters) or, from V64, its colony's rally is an AI probe's and
  * `id` is outside the probe's cohort (fighter-orders.ts), so no rally holds it in a
- * foreign nest. Exactly colonyRecalledItsFighters below V64. The predicate behind
+ * foreign nest. The predicate behind
  * tickAntMovement's underground recall navigation and ascent, and
  * invaderIsRecalled, so they stay in lockstep.
  */
@@ -542,7 +542,7 @@ function rallyDefendedEntrance(world: WorldState, colony: ColonyRecord): Fighter
  * #372 (V64) — colony `colonyId`'s BREACHED entrance this tick, or null: step 10c's
  * pass (findBreachedEntrances) found an enemy ant below ground in the colony's nest
  * and this is the open entrance its fighters with no orders defend (automatic
- * defence). Null below V64 and while the colony has sent its fighters at the spider
+ * defence). Null while the colony has sent its fighters at the spider
  * (the pass records none then). Read only from step 10c on (the pass recomputes it
  * before anything reads it; nothing between step 10c and step 16 changes the rally
  * or the spider order, and step 12 only ever opens entrances, never closes one).
@@ -572,7 +572,6 @@ function defendedEntrance(world: WorldState, colony: ColonyRecord): FighterEntra
  * The entrance fighter `id` defends as a tunnel defender this tick, or null: the
  * own entrance its colony's rally is on, if it answers the rally (V44); if it has
  * no orders, from V64 (#372), its colony's breached entrance (automatic defence).
- * Below V64 exactly defendedEntrance of its colony.
  */
 function fighterDefendedEntrance(world: WorldState, id: number): FighterEntrance | null {
   const colony = world.colonies[world.ants.colonyId[id]!];
@@ -584,7 +583,7 @@ function fighterDefendedEntrance(world: WorldState, id: number): FighterEntrance
 /**
  * #372 (V64) — the breached entrance fighter `id` defends automatically, or null: it
  * has no orders (hasNoOrders), is not hauling loot home (a hauler deposits first),
- * and its colony's nest is breached (autoDefendedEntrance). Null below V64.
+ * and its colony's nest is breached (autoDefendedEntrance).
  */
 function fighterAutoDefendedEntrance(world: WorldState, id: number): FighterEntrance | null {
   if (!hasNoOrders(world, id)) return null;
@@ -606,13 +605,12 @@ function fighterAutoDefendedEntrance(world: WorldState, id: number): FighterEntr
  * that rally). Only colonies whose rally is not every
  * fighter's order are surveyed: no rally, or an AI probe's (fighter-orders.ts),
  * and not one sent at the spider. Cleared first, so a colony no longer invaded
- * has none. Nothing below V64.
+ * has none.
  */
 function findBreachedEntrances(world: WorldState): void {
   const at = getScratch(world).antTargeting;
   const breached = at.breachedEntrance;
   breached.clear();
-  if (world.simVersion < SIM_VERSION_V64_AUTO_DEFENCE) return;
   const ants = world.ants;
   const intruders = at.breachIntruders;
   for (const cidKey in world.colonies) {
@@ -1746,7 +1744,7 @@ export function updateFightAntTargets(world: WorldState): void {
     // #372 (V64) — the rally this fighter answers (fighter-orders.ts: not a probe's
     // it is outside the cohort of), else, with no orders, the breached entrance it
     // defends while its nest is invaded (automatic defence: routed exactly as for a
-    // rally on that own entrance), else none (a sentry). Below V64 the colony's rally.
+    // rally on that own entrance), else none (a sentry).
     const answersRally = fighterAnswersRally(world, id);
     const autoDefended = answersRally ? null : fighterAutoDefendedEntrance(world, id);
     // The entrance it defends as a tunnel defender (fighterDefendedEntrance), once.

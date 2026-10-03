@@ -173,7 +173,7 @@ export interface StartAIOperationCommand extends SimCommandBase {
  * #371 (V62) — the AI controller starts (`raiding: true`) or clears the raid clock
  * of its colony's AIStateRecord (`raidSinceTick`). Pushed instead of writing
  * world.aiState directly, so the sim alone reproduces it on replay (ADR-0007, #258).
- * Starting a clock that is already running keeps its start. No-op below V62.
+ * Starting a clock that is already running keeps its start.
  */
 export interface SetAIRaidClockCommand extends SimCommandBase {
   readonly type: 'SetAIRaidClock';

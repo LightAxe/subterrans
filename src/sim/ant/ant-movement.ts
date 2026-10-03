@@ -39,7 +39,7 @@ import {
   surfaceGoalDistance,
 } from '../surface-routing.js';
 import { UndergroundTileState, Zone, ugGet, type UndergroundGrid } from '../terrain.js';
-import { SIM_VERSION_V62_AI_NEST_DEFENCE, type WorldState } from '../types.js';
+import type { WorldState } from '../types.js';
 import {
   pickInvaderUndergroundStep,
   pickNearestHostileUnderground,
@@ -1047,10 +1047,7 @@ export function tickAntMovement(
           // the raiders instead of stacking behind one duel. No invader reachable:
           // step at 10c's target.
           let step = NO_FREE_HOSTILE;
-          if (
-            world.simVersion >= SIM_VERSION_V62_AI_NEST_DEFENCE &&
-            defenderChasesInvader(world, id)
-          ) {
+          if (defenderChasesInvader(world, id)) {
             step = invaderHuntStep(world, id, ants.colonyId[id]!, claimsNoTile, true);
           }
           if (step === NO_FREE_HOSTILE) step = defenderUndergroundStep(world, id);
