@@ -13,11 +13,7 @@ import {
   tickQueenEggProduction,
 } from './lifecycle-system.js';
 import { tickDeathCleanup, tickFoodConsumption } from './colony-system.js';
-import {
-  createWorldState,
-  SIM_VERSION_V69_FOOD_FAIRNESS,
-  SIM_VERSION_V70_EGG_RESERVE,
-} from '../types.js';
+import { createWorldState } from '../types.js';
 import type { WorldState } from '../types.js';
 import { createColonyRecord } from './colony-store.js';
 import type { ColonyRecord } from './colony-store.js';
@@ -41,6 +37,7 @@ import {
   BASE_FOOD_STORAGE_CAPACITY,
   FOOD_CHAMBER_CAPACITY,
   QUEEN_EGG_FOOD_THRESHOLD,
+  QUEEN_EGG_INTERVAL_FLOOR_TICKS,
   QUEEN_EGG_RESERVE_RUNWAY_TICKS,
   WORKER_BASE_SPEED,
   WORKER_MEAL_FP,
@@ -206,10 +203,8 @@ function setStores(world: WorldState, colony: ColonyRecord, layout: Layout, tota
   expect(colonyFoodTotal(world, colony)).toBe(totalFp);
 }
 
-function makeWorld(simVersion: number): WorldState {
+function makeWorld(): WorldState {
   const world = createWorldState(42, MAX_TEST_ENTITIES);
-  world.simVersion = simVersion;
-
   world.tick = 10_000;
   return world;
 }
@@ -271,7 +266,7 @@ describe('#395 (V70) — runwayFoodFp', () => {
 describe('#395 (V70) — eggReserveFp: the whole colony for the runway', () => {
   it('is the oracle reserve across colony sizes (dead workers on the roster do not eat)', () => {
     for (const shape of SHAPES) {
-      const world = makeWorld(SIM_VERSION_V70_EGG_RESERVE);
+      const world = makeWorld();
       const colony = makeColony(world, 1, shape, 'pool');
       expect(eggReserveFp(world, colony), JSON.stringify(shape)).toBe(
         oracleReserve(shape.larvae, shape.eggs, shape.workers, shape.fighters),
@@ -283,7 +278,7 @@ describe('#395 (V70) — eggReserveFp: the whole colony for the runway', () => {
     // Pins the arithmetic of the chosen runway, so a retune of it or of a hunger
     // profile is a visible decision.
     expect(RUNWAY).toBe(1200);
-    const world = makeWorld(SIM_VERSION_V70_EGG_RESERVE);
+    const world = makeWorld();
     expect(eggReserveFp(world, makeColony(world, 1, SHAPES[0]!, 'pool'))).toBe(2400 + 1200);
     expect(eggReserveFp(world, makeColony(world, 2, SHAPES[5]!, 'pool'))).toBe(
       2400 + 15 * 1200 + 8 * 64,
@@ -291,7 +286,7 @@ describe('#395 (V70) — eggReserveFp: the whole colony for the runway', () => {
   });
 
   it('each brood and each worker adds its own runway, wherever it stands (reads no colony id)', () => {
-    const world = makeWorld(SIM_VERSION_V70_EGG_RESERVE);
+    const world = makeWorld();
     const base = eggReserveFp(world, makeColony(world, 1, SHAPES[4]!, 'pool'));
     const plusLarva = eggReserveFp(
       world,
@@ -320,7 +315,7 @@ describe('#395 (V70) — eggReserveFp: the whole colony for the runway', () => {
     // fighter meal. If the two are ever split, that file is the one to keep honest.
     expect(FIGHTER_HUNGER.mealFp).toBe(WORKER_HUNGER.mealFp);
     expect(FIGHTER_HUNGER.mealIntervalTicks).toBe(WORKER_HUNGER.mealIntervalTicks);
-    const world = makeWorld(SIM_VERSION_V70_EGG_RESERVE);
+    const world = makeWorld();
     const colony = makeColony(world, 1, { larvae: 2, eggs: 1, workers: 5, fighters: 0 }, 'pool');
     const before = eggReserveFp(world, colony);
     despawnAnt(world, colony.workers[0]!, { cause: 'starvation' });
@@ -336,7 +331,7 @@ describe('#395 (V70) — eggReserveFp sizes every worker on one of two profiles'
   it('workerHungerProfile returns WORKER_HUNGER or FIGHTER_HUNGER for every task', () => {
     // eggReserveFp sizes the two profiles once per call; a third profile would have to
     // be added there. This pins the assumption.
-    const world = makeWorld(SIM_VERSION_V70_EGG_RESERVE);
+    const world = makeWorld();
     const colony = makeColony(world, 1, { larvae: 0, eggs: 0, workers: 1, fighters: 0 }, 'pool');
     const id = colony.workers[0]!;
     for (const task of Object.values(AntTask)) {
@@ -358,7 +353,7 @@ describe('#395 (V70) — the queen lays only while the stores cover the egg rese
           [need - 1, false],
           [need + 1, true],
         ] as const) {
-          const world = makeWorld(SIM_VERSION_V70_EGG_RESERVE);
+          const world = makeWorld();
           const colony = makeColony(world, 1, shape, layout);
           setStores(world, colony, layout, stores);
           const eggsBefore = colony.eggCount;
@@ -372,9 +367,9 @@ describe('#395 (V70) — the queen lays only while the stores cover the egg rese
     }
   });
 
-  it('the 3-food threshold is gone: a lone queen with 3 food (or 3599 fp) does not lay at V70', () => {
+  it('the 3-food threshold is gone: a lone queen with 3 food (or 3599 fp) does not lay', () => {
     for (const stores of [QUEEN_EGG_FOOD_THRESHOLD, 3599]) {
-      const world = makeWorld(SIM_VERSION_V70_EGG_RESERVE);
+      const world = makeWorld();
       const colony = makeColony(world, 1, SHAPES[0]!, 'pool');
       setStores(world, colony, 'pool', stores);
       tickQueenEggProduction(world, colony);
@@ -391,7 +386,7 @@ describe('#395 (V70) — the queen lays only while the stores cover the egg rese
   });
 
   it('every colony is judged on its own stores and mouths (CLNY-08: any number of colonies)', () => {
-    const world = makeWorld(SIM_VERSION_V70_EGG_RESERVE);
+    const world = makeWorld();
     const shapes = [SHAPES[1]!, SHAPES[4]!, SHAPES[6]!, SHAPES[2]!];
     const colonies = shapes.map((s, i) => makeColony(world, i, s, LAYOUTS[i]!));
     // Colonies 0 and 2 just covered; 1 and 3 one fp short.
@@ -406,36 +401,15 @@ describe('#395 (V70) — the queen lays only while the stores cover the egg rese
   });
 });
 
-describe('#395 — pinned V69: the 3-food threshold, whatever the colony', () => {
-  it('lays at 768 fp and not at 767 for every colony size (the V69 brood boom)', () => {
-    for (const shape of SHAPES) {
-      for (const [stores, lays] of [
-        [QUEEN_EGG_FOOD_THRESHOLD, true],
-        [QUEEN_EGG_FOOD_THRESHOLD - 1, false],
-      ] as const) {
-        const world = makeWorld(SIM_VERSION_V69_FOOD_FAIRNESS);
-        const colony = makeColony(world, 1, shape, 'pool');
-        setStores(world, colony, 'pool', stores);
-        const eggsBefore = colony.eggCount;
-        tickQueenEggProduction(world, colony);
-        expect(colony.eggCount - eggsBefore, `${JSON.stringify(shape)} ${stores}`).toBe(
-          lays ? 1 : 0,
-        );
-      }
-    }
-  });
-});
-
 describe('#395 (V70) — over time: steady in a healthy colony, paused while the stores are short', () => {
   /** Lay ticks over `ticks` ticks (egg production only; nothing hatches or eats), with
    *  `storesAt(t)` in the stores at each tick. */
   function layTicks(
-    simVersion: number,
     shape: Shape,
     storesAt: (t: number, colony: ColonyRecord, world: WorldState) => number,
     ticks: number,
   ): number[] {
-    const world = makeWorld(simVersion);
+    const world = makeWorld();
     const colony = makeColony(world, 1, shape, 'pool+1');
     const start = world.tick;
     const lays: number[] = [];
@@ -449,19 +423,21 @@ describe('#395 (V70) — over time: steady in a healthy colony, paused while the
     return lays;
   }
 
-  it('with the stores always above the reserve she lays on exactly the V69 cadence', () => {
+  it('with the stores always above the reserve she lays on the plain interval cadence', () => {
     // Stores comfortably above the reserve at every tick (it grows with each egg).
     const rich = (_t: number, c: ColonyRecord, w: WorldState): number => eggReserveFp(w, c) + 5000;
-    const v70 = layTicks(SIM_VERSION_V70_EGG_RESERVE, SHAPES[4]!, rich, 3000);
-    const v69 = layTicks(SIM_VERSION_V69_FOOD_FAIRNESS, SHAPES[4]!, rich, 3000);
-    expect(v70.length).toBeGreaterThanOrEqual(10);
-    expect(v70).toEqual(v69);
+    const lays = layTicks(SHAPES[4]!, rich, 3000);
+    expect(lays.length).toBeGreaterThanOrEqual(10);
+    // Pinned: the cadence the V69 rule (no reserve) gave on the same stores, every
+    // floor interval from tick 0 (#408 kept this as an absolute list when it removed
+    // the V69 side of the comparison).
+    expect(lays).toEqual(Array.from({ length: 20 }, (_, i) => i * QUEEN_EGG_INTERVAL_FLOOR_TICKS));
   });
 
   it('a raid that empties the stores pauses laying until they cover the reserve again', () => {
     const raided = (t: number, c: ColonyRecord, w: WorldState): number =>
       t >= 1000 && t < 2000 ? 1200 : eggReserveFp(w, c) + 2000;
-    const lays = layTicks(SIM_VERSION_V70_EGG_RESERVE, SHAPES[4]!, raided, 3000);
+    const lays = layTicks(SHAPES[4]!, raided, 3000);
     expect(lays.some((t) => t < 1000)).toBe(true);
     expect(lays.some((t) => t >= 1000 && t < 2000)).toBe(false);
     // The first tick back above the reserve: the interval has long elapsed.
@@ -470,15 +446,11 @@ describe('#395 (V70) — over time: steady in a healthy colony, paused while the
 
   it('just short of the reserve she never lays, however long it lasts (a famine)', () => {
     const short = (_t: number, c: ColonyRecord, w: WorldState): number => eggReserveFp(w, c) - 1;
-    expect(layTicks(SIM_VERSION_V70_EGG_RESERVE, SHAPES[6]!, short, 3000)).toEqual([]);
-    // At V69 the same stores lay all along.
-    expect(layTicks(SIM_VERSION_V69_FOOD_FAIRNESS, SHAPES[6]!, short, 3000).length).toBeGreaterThan(
-      5,
-    );
+    expect(layTicks(SHAPES[6]!, short, 3000)).toEqual([]);
   });
 
   it('a large colony needs proportionally more: 300 workers and fighters need 300 worker runways', () => {
-    const world = makeWorld(SIM_VERSION_V70_EGG_RESERVE);
+    const world = makeWorld();
     const big = makeColony(world, 1, { larvae: 0, eggs: 0, workers: 250, fighters: 50 }, 'pool');
     expect(eggReserveFp(world, big)).toBe(
       oracleRunwayFp(QUEEN_HUNGER, RUNWAY) +
@@ -499,19 +471,14 @@ describe('#395 (V70) — storage capacity caps what the reserve allows', () => {
     expect(colonyFoodTotal(world, colony)).toBe(colonyFoodCapacity(colony));
   }
 
-  it('with no FoodStorage chamber she never lays, even with the entrance pool full (V69 did)', () => {
+  it('with no FoodStorage chamber she never lays, even with the entrance pool full', () => {
     for (const workers of [0, 3, 10]) {
-      for (const [simVersion, lays] of [
-        [SIM_VERSION_V70_EGG_RESERVE, 0],
-        [SIM_VERSION_V69_FOOD_FAIRNESS, 1],
-      ] as const) {
-        const world = makeWorld(simVersion);
-        const colony = makeColony(world, 1, { larvae: 0, eggs: 0, workers, fighters: 0 }, 'pool');
-        fillToCapacity(world, colony);
-        expect(colonyFoodCapacity(colony)).toBe(BASE_FOOD_STORAGE_CAPACITY);
-        tickQueenEggProduction(world, colony);
-        expect(colony.eggCount, `${workers} workers at V${simVersion}`).toBe(lays);
-      }
+      const world = makeWorld();
+      const colony = makeColony(world, 1, { larvae: 0, eggs: 0, workers, fighters: 0 }, 'pool');
+      fillToCapacity(world, colony);
+      expect(colonyFoodCapacity(colony)).toBe(BASE_FOOD_STORAGE_CAPACITY);
+      tickQueenEggProduction(world, colony);
+      expect(colony.eggCount, `${workers} workers`).toBe(0);
     }
   });
 
@@ -530,7 +497,7 @@ describe('#395 (V70) — storage capacity caps what the reserve allows', () => {
         while (oracleReserve(ceiling + 1, 0, workers, 0) <= capacity) ceiling++;
         for (const brood of [ceiling, ceiling + 1]) {
           if (brood < 0) continue;
-          const world = makeWorld(SIM_VERSION_V70_EGG_RESERVE);
+          const world = makeWorld();
           const shape = { larvae: brood, eggs: 0, workers, fighters: 0 };
           const colony = makeColony(world, 1, shape, layout);
           fillToCapacity(world, colony);
@@ -564,7 +531,7 @@ describe('#395 (V70) — the reserve feeds the colony for the runway (real consu
     const timings = [WORKER_MEAL_INTERVAL_TICKS - 1, 0];
     for (const shape of [SHAPES[1]!, SHAPES[4]!, SHAPES[5]!, SHAPES[6]!])
       for (const lastMealAgo of timings) {
-        const world = makeWorld(SIM_VERSION_V70_EGG_RESERVE);
+        const world = makeWorld();
         const colony = makeColony(world, 1, shape, 'chambers-only:3');
         const ants = world.ants;
         // Most meals in the runway for every worker. Some eggs hatch, and some larvae

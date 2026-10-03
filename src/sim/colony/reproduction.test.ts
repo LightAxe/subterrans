@@ -9,23 +9,25 @@
 //   6. D-29 WarFooting: 10× surplus colony reaches AI WarFooting ≥120 ticks earlier
 
 import { describe, it, expect } from 'vitest';
-import { tickQueenEggProduction, tickLifecycleTransitions } from './lifecycle-system.js';
+import {
+  eggReserveFp,
+  tickQueenEggProduction,
+  tickLifecycleTransitions,
+} from './lifecycle-system.js';
 import { tickLarvaMaturation } from './larva-maturation.js';
 import {
   createWorldState,
-  SIM_VERSION_V20_SPIDER,
   SIM_VERSION_V21_REPRODUCTION,
   SIM_VERSION_V22_DIFFICULTY,
 } from '../types.js';
 import { createColonyRecord } from './colony-store.js';
 import { setPoolFoodForTest } from '../food/food-test-utils.js';
+import { colonyFoodTotal } from '../food/food-api.js';
 import { initAnt } from '../ant/ant-store.js';
 import { AntTask, ChamberType, NursingSubState } from '../enums.js';
 import { Zone, createUndergroundGrid, ugSet, UndergroundTileState } from '../terrain.js';
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import {
-  QUEEN_EGG_INTERVAL_TICKS,
-  QUEEN_EGG_FOOD_THRESHOLD,
   QUEEN_EGG_INTERVAL_BASE_TICKS,
   QUEEN_EGG_INTERVAL_MEDIUM_TICKS,
   QUEEN_EGG_INTERVAL_FAST_TICKS,
@@ -48,9 +50,10 @@ const MAX_TEST_ENTITIES = 512;
 const QUEEN_TILE_X = 8;
 const QUEEN_TILE_Y = 4;
 
-function makeWorld(simVersion: number = SIM_VERSION_V21_REPRODUCTION): WorldState {
+/** A LATEST world; `simVersion` pins an older stamp (the pre-V22 cases below). */
+function makeWorld(simVersion?: number): WorldState {
   const world = createWorldState(42, MAX_TEST_ENTITIES);
-  world.simVersion = simVersion;
+  if (simVersion !== undefined) world.simVersion = simVersion;
   return world;
 }
 
@@ -60,7 +63,7 @@ function makeWorld(simVersion: number = SIM_VERSION_V21_REPRODUCTION): WorldStat
  */
 function setupColony(
   world: WorldState,
-  foodStored = QUEEN_EGG_FOOD_THRESHOLD,
+  foodStored = 10_000, // above a lone queen's V70 egg reserve (3600 fp)
 ): { colony: ColonyRecord; queenId: number } {
   const queenId = world.nextEntityId++;
   const posX = (QUEEN_TILE_X << FP_SHIFT) + (FP_ONE >> 1);
@@ -156,11 +159,53 @@ function addAttendingNurse(
   return id;
 }
 
-// Compute the food amount that produces a given sX10 ratio for COLONY_SIZE_FLOOR mouths.
-function foodForSX10(sX10: number): number {
-  const denom = COLONY_SIZE_FLOOR * FOOD_PER_ANT_BASELINE; // 8 × 60 = 480
+// Compute the food amount that produces a given sX10 ratio for `mouths` mouths
+// (COLONY_SIZE_FLOOR by default).
+function foodForSX10(sX10: number, mouths = COLONY_SIZE_FLOOR): number {
+  const denom = mouths * FOOD_PER_ANT_BASELINE; // 8 × 60 = 480 at the floor
   // eslint-disable-next-line no-restricted-syntax -- test helper; integer division is intentional
   return Math.ceil((sX10 * denom) / 10);
+}
+
+/**
+ * Workers in the surplus-tier colonies. #395 (V70): the queen lays only while the
+ * stores cover the egg reserve, which a lone queen's lean-tier stores never do (3600
+ * fp against a lean bound of 1440 at the COLONY_SIZE_FLOOR). With 40 workers the
+ * reserve (3600 + 40 × 64) sits inside the lean tier, so every tier is reachable
+ * with the stores covering it.
+ */
+const TIER_WORKERS = 40;
+/** The tier colony's mouths: its workers and the queen (no brood yet). */
+const TIER_MOUTHS = TIER_WORKERS + 1;
+
+/** Add `n` Idle workers (alive, on the roster) at the queen's tile. */
+function addIdleWorkers(world: WorldState, colony: ColonyRecord, n: number): void {
+  for (let i = 0; i < n; i++) {
+    const id = world.nextEntityId++;
+    initAnt(world.ants, id, {
+      colonyId: COLONY_ID,
+      posX: (QUEEN_TILE_X << FP_SHIFT) + (FP_ONE >> 1),
+      posY: (QUEEN_TILE_Y << FP_SHIFT) + (FP_ONE >> 1),
+      task: AntTask.Idle,
+      speed: 0,
+    });
+    world.ants.zone[id] = Zone.Underground;
+    colony.workers.push(id);
+    colony.workerCount += 1;
+  }
+}
+
+/** A LATEST colony of TIER_WORKERS workers, its stores set to `food(colony)`. */
+function tierColony(food: (world: WorldState, colony: ColonyRecord) => number): {
+  world: WorldState;
+  colony: ColonyRecord;
+} {
+  const world = makeWorld();
+  const { colony } = setupColony(world, 0);
+  addIdleWorkers(world, colony, TIER_WORKERS);
+  setPoolFoodForTest(world, colony, food(world, colony));
+  expect(colonyFoodTotal(world, colony)).toBeGreaterThanOrEqual(eggReserveFp(world, colony));
+  return { world, colony };
 }
 
 // ---------------------------------------------------------------------------
@@ -170,24 +215,15 @@ function foodForSX10(sX10: number): number {
 describe('eggIntervalForColony — V21 surplus thresholds', () => {
   // Pre-threshold (sX10 < 30): BASE interval = 300.
   // We verify by checking that an egg is laid at a tick that's a multiple of
-  // the EXPECTED interval but NOT at a tick that's off-cycle.
-
-  it('V20 → unchanged static interval (300 ticks)', () => {
-    const world = makeWorld(SIM_VERSION_V20_SPIDER);
-    const { colony } = setupColony(world, QUEEN_EGG_FOOD_THRESHOLD);
-    world.tick = QUEEN_EGG_INTERVAL_TICKS; // 300
-    tickQueenEggProduction(world, colony);
-    expect(colony.eggCount).toBe(1);
-
-    // Off-cycle tick with V20 still uses static interval.
-    world.tick = QUEEN_EGG_INTERVAL_MEDIUM_TICKS; // 250 — NOT a multiple of 300
-    tickQueenEggProduction(world, colony);
-    expect(colony.eggCount).toBe(1); // no new egg
-  });
+  // the EXPECTED interval but NOT at a tick that's off-cycle. The colonies hold
+  // TIER_WORKERS workers so their stores can cover the V70 egg reserve in every tier.
 
   it('V21, lean food (base interval=300): lays at 300, not at 250', () => {
-    const world = makeWorld();
-    const { colony } = setupColony(world, QUEEN_EGG_FOOD_THRESHOLD); // sX10 = 16 → BASE
+    // Exactly the egg reserve: still below 3× surplus (sX10 < 30 → BASE).
+    const { world, colony } = tierColony((w, c) => eggReserveFp(w, c));
+    expect(colonyFoodTotal(world, colony) * 10).toBeLessThan(
+      30 * TIER_MOUTHS * FOOD_PER_ANT_BASELINE,
+    );
     world.tick = QUEEN_EGG_INTERVAL_BASE_TICKS; // 300
     tickQueenEggProduction(world, colony);
     expect(colony.eggCount).toBe(1);
@@ -199,9 +235,8 @@ describe('eggIntervalForColony — V21 surplus thresholds', () => {
   });
 
   it('V21, 3× surplus (medium interval=250): lays at 250, not at 300', () => {
-    // sX10 >= 30: food = foodForSX10(30) = ceil(30*480/10) = ceil(1440) = 1440
-    const world = makeWorld();
-    const { colony } = setupColony(world, foodForSX10(30));
+    // sX10 >= 30: food = foodForSX10(30, 41) = ceil(30*2460/10) = 7380
+    const { world, colony } = tierColony(() => foodForSX10(30, TIER_MOUTHS));
     world.tick = QUEEN_EGG_INTERVAL_MEDIUM_TICKS; // 250
     tickQueenEggProduction(world, colony);
     expect(colony.eggCount).toBe(1);
@@ -217,9 +252,8 @@ describe('eggIntervalForColony — V21 surplus thresholds', () => {
   });
 
   it('V21, 5× surplus (fast interval=200): lays at 200, not at 250', () => {
-    // sX10 >= 50: food = foodForSX10(50) = ceil(50*480/10) = 2400
-    const world = makeWorld();
-    const { colony } = setupColony(world, foodForSX10(50));
+    // sX10 >= 50: food = foodForSX10(50, 41) = ceil(50*2460/10) = 12300
+    const { world, colony } = tierColony(() => foodForSX10(50, TIER_MOUTHS));
     world.tick = QUEEN_EGG_INTERVAL_FAST_TICKS; // 200
     tickQueenEggProduction(world, colony);
     expect(colony.eggCount).toBe(1);
@@ -232,9 +266,8 @@ describe('eggIntervalForColony — V21 surplus thresholds', () => {
   });
 
   it('V21, 10× surplus (floor interval=150): lays at 150, not at 200', () => {
-    // sX10 >= 100: food = foodForSX10(100) = ceil(100*480/10) = 4800
-    const world = makeWorld();
-    const { colony } = setupColony(world, foodForSX10(100));
+    // sX10 >= 100: food = foodForSX10(100, 41) = ceil(100*2460/10) = 24600
+    const { world, colony } = tierColony(() => foodForSX10(100, TIER_MOUTHS));
     world.tick = QUEEN_EGG_INTERVAL_FLOOR_TICKS; // 150
     tickQueenEggProduction(world, colony);
     expect(colony.eggCount).toBe(1);
@@ -242,14 +275,6 @@ describe('eggIntervalForColony — V21 surplus thresholds', () => {
     colony.eggs.length = 0;
     colony.eggCount = 0;
     world.tick = QUEEN_EGG_INTERVAL_FAST_TICKS; // 200 — not a multiple of 150
-    tickQueenEggProduction(world, colony);
-    expect(colony.eggCount).toBe(0);
-  });
-
-  it('V21, food below threshold → no egg (DISABLED sentinel)', () => {
-    const world = makeWorld();
-    const { colony } = setupColony(world, QUEEN_EGG_FOOD_THRESHOLD - 1);
-    world.tick = 0;
     tickQueenEggProduction(world, colony);
     expect(colony.eggCount).toBe(0);
   });
@@ -365,15 +390,16 @@ describe('tickLarvaMaturation — throughput cap (cap binds)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. D-29: 10× surplus colony reaches workerCount=10 ≥120 ticks earlier
+// 6. D-29: 10× surplus colony reaches its first new worker ≥120 ticks earlier
 //
 // Demonstrates that faster egg interval (150 vs 300 ticks) from the
 // food-surplus lever leads to a measurable reproduction advantage.
 //
-// Setup: colony starts with 9 workers, queen in Queen chamber, Nursery
-// chamber present. Food is pinned each tick. Runs tickQueenEggProduction +
-// tickLifecycleTransitions + tickLarvaMaturation per "tick" and records
-// the sim tick when workerCount reaches 10 (one new worker from reproduction).
+// Setup: colony starts with TIER_WORKERS (40) workers, queen in Queen chamber,
+// Nursery chamber present; the lean stores hold exactly the V70 egg reserve
+// (#395). Food is pinned each tick. Runs tickQueenEggProduction +
+// tickLifecycleTransitions + tickLarvaMaturation per "tick" and records the sim
+// tick when workerCount reaches 41 (one new worker from reproduction).
 //
 // Expected timing (no nurse adjacency, so no acceleration):
 //   Lean  (interval=300): first egg at t=300, larva at t=1500, worker at t=3000
@@ -382,46 +408,20 @@ describe('tickLarvaMaturation — throughput cap (cap binds)', () => {
 // ---------------------------------------------------------------------------
 
 describe('D-29 WarFooting — reproduction speed advantage', () => {
-  function makeD29World(foodLevel: number): { world: WorldState; colony: ColonyRecord } {
-    const world = makeWorld(SIM_VERSION_V21_REPRODUCTION);
-    world.tick = 0;
-    const { colony } = setupColony(world, foodLevel);
-
-    // Place queen at QUEEN_TILE_X, QUEEN_TILE_Y (inside the Queen chamber from setupColony).
-    // Gate 6 (queen-in-chamber) is already satisfied by setupColony.
-
-    // Add 9 pre-existing workers (workerCount = 9).
-    for (let i = 0; i < 9; i++) {
-      const id = world.nextEntityId++;
-      initAnt(world.ants, id, {
-        colonyId: COLONY_ID,
-        posX: (QUEEN_TILE_X << FP_SHIFT) + (FP_ONE >> 1),
-        posY: (QUEEN_TILE_Y << FP_SHIFT) + (FP_ONE >> 1),
-        task: AntTask.Idle,
-        speed: 0,
-      });
-      world.ants.zone[id] = Zone.Underground;
-      colony.workers.push(id);
-      colony.workerCount += 1;
-    }
-    return { world, colony };
-  }
-
-  it('10× surplus colony reaches workerCount=10 ≥120 ticks before lean colony', () => {
+  it('10× surplus colony reaches its first new worker ≥120 ticks before lean colony', () => {
     const MAX_TICKS = 8400;
     const MIN_TICK_DELTA = 120;
 
-    // With 9 workers + queen (mouths = max(10, COLONY_SIZE_FLOOR=8) = 10):
-    //   denom = 10 × FOOD_PER_ANT_BASELINE (60) = 600
-    //   Lean: food=768  → sX10 = floor(768×10/600) = 12 → BASE interval (300)
-    //   Rich: food=6000 → sX10 = floor(6000×10/600) = 100 → FLOOR interval (150)
-    const LEAN_FOOD = QUEEN_EGG_FOOD_THRESHOLD; // 768
-    // foodForSX10(100) = 4800 with 8 mouths (COLONY_SIZE_FLOOR), but with 10 mouths
-    // (9 workers + queen) the threshold for FLOOR interval needs food ≥ 6000.
-    const RICH_FOOD_10X = 6000; // sX10 = floor(6000×10/600) = 100 → FLOOR (150)
-
-    const { world: worldA, colony: colonyA } = makeD29World(LEAN_FOOD);
-    const { world: worldB, colony: colonyB } = makeD29World(RICH_FOOD_10X);
+    // With 40 workers + queen (mouths = 41): denom = 41 × FOOD_PER_ANT_BASELINE (60) = 2460
+    //   Lean: food = the egg reserve, 6160 → sX10 = floor(6160×10/2460) = 25 → BASE (300)
+    //   Rich: food = 24600 → sX10 = floor(24600×10/2460) = 100 → FLOOR interval (150)
+    const { world: worldA, colony: colonyA } = tierColony((w, c) => eggReserveFp(w, c));
+    const { world: worldB, colony: colonyB } = tierColony(() => foodForSX10(100, TIER_MOUTHS));
+    const LEAN_FOOD = colonyFoodTotal(worldA, colonyA);
+    const RICH_FOOD_10X = colonyFoodTotal(worldB, colonyB);
+    expect(LEAN_FOOD * 10).toBeLessThan(30 * TIER_MOUTHS * FOOD_PER_ANT_BASELINE);
+    worldA.tick = 0;
+    worldB.tick = 0;
 
     // Reset queenLastEggTick so neither world lays at t=1 (default=-300 would
     // give elapsed=301>=300, firing both worlds at the same tick and masking the
@@ -448,21 +448,25 @@ describe('D-29 WarFooting — reproduction speed advantage', () => {
       tickLifecycleTransitions(worldB, colonyB);
       tickLarvaMaturation(worldB, colonyB);
 
-      if (reachTickA < 0 && colonyA.workerCount >= 10) reachTickA = t;
-      if (reachTickB < 0 && colonyB.workerCount >= 10) reachTickB = t;
+      if (reachTickA < 0 && colonyA.workerCount >= TIER_MOUTHS) reachTickA = t;
+      if (reachTickB < 0 && colonyB.workerCount >= TIER_MOUTHS) reachTickB = t;
 
       if (reachTickA >= 0 && reachTickB >= 0) break;
     }
 
     expect(
       reachTickB,
-      `Rich colony never reached workerCount=10 within ${MAX_TICKS} ticks`,
+      `Rich colony never reached workerCount=${TIER_MOUTHS} within ${MAX_TICKS} ticks`,
+    ).toBeGreaterThan(0);
+    expect(
+      reachTickA,
+      `Lean colony never reached workerCount=${TIER_MOUTHS} within ${MAX_TICKS} ticks`,
     ).toBeGreaterThan(0);
 
     const delta = reachTickA - reachTickB;
     expect(
       delta,
-      `Expected rich colony to reach 10 workers ≥${MIN_TICK_DELTA} ticks before lean ` +
+      `Expected rich colony to reach ${TIER_MOUTHS} workers ≥${MIN_TICK_DELTA} ticks before lean ` +
         `(lean=${reachTickA}, rich=${reachTickB}, delta=${delta})`,
     ).toBeGreaterThanOrEqual(MIN_TICK_DELTA);
   });
