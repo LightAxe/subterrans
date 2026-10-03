@@ -71,11 +71,7 @@ import { fighterIsHungry } from '../hunger.js';
 import { colonyRaidType, isEntranceTileOfAnyColony } from '../raid-order.js';
 import { getScratch, RAID_REACH_WINDOW_RADIUS, RAID_REACH_WINDOW_SIDE } from '../scratch.js';
 import { Zone } from '../terrain.js';
-import {
-  SIM_VERSION_V59_INVADER_RETARGET,
-  SIM_VERSION_V60_RAID_ORDERS,
-  type WorldState,
-} from '../types.js';
+import { SIM_VERSION_V60_RAID_ORDERS, type WorldState } from '../types.js';
 import {
   DIR_DX,
   DIR_DY,
@@ -241,7 +237,6 @@ function hostileInReach(
   const raid = getScratch(world).raid;
   const cand = raid.reachCand;
   cand.length = 0;
-  const v59 = world.simVersion >= SIM_VERSION_V59_INVADER_RETARGET;
   for (const key in world.colonies) {
     if (!Object.hasOwn(world.colonies, key)) continue;
     const c = world.colonies[key as unknown as keyof typeof world.colonies]!;
@@ -258,7 +253,7 @@ function hostileInReach(
       cand.push(o);
     }
   }
-  if (v59 && cand.length > 0) dropSaturatedCandidates(world, id, gridColonyId, tx, ty, cand);
+  if (cand.length > 0) dropSaturatedCandidates(world, id, gridColonyId, tx, ty, cand);
   if (cand.length === 0) return -1;
 
   // Pass 2 — bounded BFS (depth R) over the (2W+1)² window centred on the raider.

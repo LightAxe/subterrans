@@ -980,8 +980,8 @@ export function tickAntMovement(
         } else {
           // #364 (V59): with no step-10e aim, hunt the nearest hostile BY PATH whose
           // tile is not saturated (its colony does not already hold the duel
-          // there); the policy lives in invader-retarget.ts. None reachable (or
-          // below V59): hunt as before.
+          // there); the policy lives in invader-retarget.ts. None reachable: hunt
+          // as before.
           const aimed = ants.targetPosX[id] !== -1;
           const huntStep = aimed
             ? NO_FREE_HOSTILE

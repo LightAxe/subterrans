@@ -7,7 +7,7 @@
 // any other tile when any friend does). From V59 an invader on the hunt steps
 // toward the nearest hostile BY PATH on a tile not saturated for it
 // (invaderHuntStep), and a raider's reach check ignores hostiles on saturated
-// tiles. Every behaviour case is pinned at V58 (unchanged) and V59.
+// tiles.
 
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
@@ -15,7 +15,6 @@ import { createScenario } from './scenario.js';
 import {
   allocateEntityId,
   LATEST_SIM_VERSION,
-  SIM_VERSION_V58_STARVING_FIGHTER_EATS,
   SIM_VERSION_V59_INVADER_RETARGET,
   type WorldState,
 } from './types.js';
@@ -53,7 +52,6 @@ import {
   rallyOn,
 } from './raid-test-utils.js';
 
-const V58 = SIM_VERSION_V58_STARVING_FIGHTER_EATS;
 const V59 = SIM_VERSION_V59_INVADER_RETARGET;
 /** Enough HP that no test duel ends. */
 const UNKILLABLE_HP = 1_000_000;
@@ -72,9 +70,8 @@ type Tile = { x: number; y: number };
  * `at(k, dy)` is the tile k tiles along from the shaft, dy rows below ROW.
  * The player's rally is on the enemy entrance: its fighters there are invaders.
  */
-function nest(ver: number, dir: 1 | -1 = 1) {
+function nest(dir: 1 | -1 = 1) {
   const world = createScenario(7, 'Normal');
-  world.simVersion = ver;
   world.spider = null;
   world.aiState = [];
   setPoolFoodForTest(world, world.colonies[PLAYER_COLONY_ID]!, 2000);
@@ -175,8 +172,8 @@ function stepOf(s: number): [number, number] {
 
 /** Defender A 4 along the corridor, B at the branch's end; invader `first` on A,
  *  `second` (a higher id) one short of A, where the branch leaves the corridor. */
-function duelAtA(ver: number, dir: 1 | -1 = 1) {
-  const n = nest(ver, dir);
+function duelAtA(dir: 1 | -1 = 1) {
+  const n = nest(dir);
   const a = n.at(4);
   const b = n.at(8, 3);
   const defA = addDefender(n.world, a);
@@ -192,7 +189,7 @@ describe('#364 — saturated, concretely (tileSaturatedFor)', () => {
   });
 
   it('its own tile: only a LOWER-id friend saturates it', () => {
-    const { world, at } = nest(V59);
+    const { world, at } = nest();
     const t = at(5);
     const low = addInvader(world, t);
     const high = addInvader(world, t);
@@ -201,7 +198,7 @@ describe('#364 — saturated, concretely (tileSaturatedFor)', () => {
   });
 
   it('any other tile: ANY friend saturates it, lower id or higher', () => {
-    const { world, at } = nest(V59);
+    const { world, at } = nest();
     const t = at(5);
     const low = addInvader(world, at(1));
     addInvader(world, t);
@@ -211,7 +208,7 @@ describe('#364 — saturated, concretely (tileSaturatedFor)', () => {
   });
 
   it('an enemy on the tile, or a friend in another nest or on the surface, does not', () => {
-    const { world, at } = nest(V59);
+    const { world, at } = nest();
     const t = at(5);
     const me = addInvader(world, at(1));
     addDefender(world, t);
@@ -229,33 +226,28 @@ describe('#364 — saturated, concretely (tileSaturatedFor)', () => {
 
 describe('#364 — the hunt goes for the nearest FREE hostile by path (invaderHuntStep)', () => {
   for (const dir of [1, -1] as const) {
-    it(`V59 (${dir > 0 ? 'east' : 'west'}): the second invader leaves the queue for the free defender, round the bend`, () => {
-      const { world, second } = duelAtA(V59, dir);
+    it(`${dir > 0 ? 'east' : 'west'}: the second invader leaves the queue for the free defender, round the bend`, () => {
+      const { world, second } = duelAtA(dir);
       // Its way to B leaves the corridor down the branch, then runs along: the
       // FIRST step is south.
       expect(stepOf(hunt(world, second))).toEqual([0, 1]);
     });
   }
 
-  it('V58: no hunt step (it queues behind the duel as before)', () => {
-    const { world, second } = duelAtA(V58);
-    expect(hunt(world, second)).toBe(NO_FREE_HOSTILE);
-  });
-
   it('the invader in the duel holds: a free hostile shares its own tile', () => {
-    const { world, first } = duelAtA(V59);
+    const { world, first } = duelAtA();
     expect(stepOf(hunt(world, first))).toEqual([0, 0]);
   });
 
   it('a higher-id friend on its own tile does not unseat it: it holds its duel', () => {
-    const { world, a, first } = duelAtA(V59);
+    const { world, a, first } = duelAtA();
     addInvader(world, a);
     expect(stepOf(hunt(world, first))).toEqual([0, 0]);
   });
 
   it('on the duel tile behind a lower-id friend, it leaves for the free defender', () => {
     for (const dir of [1, -1] as const) {
-      const { world, a, second } = duelAtA(V59, dir);
+      const { world, a, second } = duelAtA(dir);
       world.ants.posX[second] = (a.x << FP_SHIFT) + (FP_ONE >> 1);
       // Back one tile to the branch's mouth, then down it.
       expect(stepOf(hunt(world, second))).toEqual([-dir, 0]);
@@ -263,7 +255,7 @@ describe('#364 — the hunt goes for the nearest FREE hostile by path (invaderHu
   });
 
   it('a higher-id friend already fighting at B saturates B for it too: no free hostile', () => {
-    const { world, b, second } = duelAtA(V59);
+    const { world, b, second } = duelAtA();
     const later = addInvader(world, b);
     expect(later).toBeGreaterThan(second);
     // Every hostile saturated: it keeps its place in the queue beside A's duel.
@@ -271,7 +263,7 @@ describe('#364 — the hunt goes for the nearest FREE hostile by path (invaderHu
   });
 
   it('a free hostile it cannot reach does not pull it off the queue', () => {
-    const { world, at, grid, second } = duelAtA(V59);
+    const { world, at, grid, second } = duelAtA();
     const cut = at(3, 1);
     ugSet(grid, cut.x, cut.y, UndergroundTileState.Solid); // the branch cut off
     // B out of reach: it keeps its place in the queue beside A's duel.
@@ -281,7 +273,7 @@ describe('#364 — the hunt goes for the nearest FREE hostile by path (invaderHu
   /** duelAtA, but with a LOWER-id friend than `second` standing at the branch
    *  mouth, and a third defender past A, reachable only through A's tile. */
   function blockedMouth() {
-    const n = nest(V59);
+    const n = nest();
     const a = n.at(4);
     addDefender(n.world, a);
     addDefender(n.world, n.at(8, 3));
@@ -305,14 +297,14 @@ describe('#364 — the hunt goes for the nearest FREE hostile by path (invaderHu
   });
 
   it('a HIGHER-id friend in the way does not block it (that friend is the one bumped)', () => {
-    const { world, at, second } = duelAtA(V59);
+    const { world, at, second } = duelAtA();
     const later = addInvader(world, at(3, 1));
     expect(later).toBeGreaterThan(second);
     expect(stepOf(hunt(world, second))).toEqual([0, 1]);
   });
 
   it('routes through a lower-id friend tile where friends stack (the shaft top)', () => {
-    const { world, sx, open, first, second } = duelAtA(V59);
+    const { world, sx, open, first, second } = duelAtA();
     // `second` moved to a stub beside the shaft top, whose only way on is the
     // shaft top itself; `first` (a lower id) moved there.
     open({ x: sx - 1, y: 0 });
@@ -325,7 +317,7 @@ describe('#364 — the hunt goes for the nearest FREE hostile by path (invaderHu
   });
 
   it('picks the nearest free hostile BY PATH, not by Manhattan distance', () => {
-    const { world, grid, at, open, second } = duelAtA(V59);
+    const { world, grid, at, open, second } = duelAtA();
     // A pocket 4 above `second` (Manhattan 4; B is Manhattan 8), reached only the
     // long way: back along the corridor to the shaft, up it, and along (path 10;
     // B's path is 8).
@@ -348,7 +340,7 @@ describe('#364 — the hunt goes for the nearest FREE hostile by path (invaderHu
 
   it('with every hostile saturated, it goes to the nearest queue BY PATH (one metric, not Manhattan)', () => {
     for (const dir of [1, -1] as const) {
-      const { world, at, open } = nest(V59, dir);
+      const { world, at, open } = nest(dir);
       // D at the corridor's far end, its duel held by a lower-id friend; a pocket
       // defender P 4 above the queue's mouth (Manhattan 4 from `me`; D is 9), P's
       // tile held by a higher-id friend, reached only the long way round (path 10;
@@ -366,7 +358,7 @@ describe('#364 — the hunt goes for the nearest FREE hostile by path (invaderHu
   });
 
   it('a queue it can walk to: a saturated hostile whose friend is a higher id (no block)', () => {
-    const { world, at } = nest(V59);
+    const { world, at } = nest();
     const b = at(8, 3);
     addDefender(world, b);
     const me = addInvader(world, at(3));
@@ -378,7 +370,7 @@ describe('#364 — the hunt goes for the nearest FREE hostile by path (invaderHu
    *  mouth, and D at the corridor's far end with its duel held by a lower-id friend
    *  (D's queue lies east, along the corridor). */
   function mouthHeld() {
-    const n = nest(V59);
+    const n = nest();
     const d = n.at(12);
     addDefender(n.world, d);
     addInvader(n.world, d);
@@ -434,7 +426,7 @@ describe('#364 — the hunt goes for the nearest FREE hostile by path (invaderHu
   });
 
   it('neutral ants are not hostiles', () => {
-    const { world, defB, second } = duelAtA(V59);
+    const { world, defB, second } = duelAtA();
     world.ants.colonyId[defB] = 0; // B neutral: no free hostile left
     expect(stepOf(hunt(world, second))).toEqual([0, 0]); // the queue beside A
     world.ants.colonyId[world.colonies[ENEMY_COLONY_ID]!.workers[0]!] = 0; // A neutral too
@@ -444,50 +436,41 @@ describe('#364 — the hunt goes for the nearest FREE hostile by path (invaderHu
 
 describe('#364 — full ticks: a pile of invaders spreads over the defenders', () => {
   for (const dir of [1, -1] as const) {
-    for (const [ver, spreads] of [
-      [V58, false],
-      [V59, true],
-    ] as const) {
-      it(`V${ver} (${dir > 0 ? 'east' : 'west'}): the far defender ${spreads ? 'is' : 'is never'} engaged`, () => {
-        const { world, sx, at } = nest(ver, dir);
-        const near = addDefender(world, at(4));
-        const far = addDefender(world, at(8, 3));
-        const invaders: number[] = [];
-        for (let y = ROW; y >= ROW - 2; y--) invaders.push(addInvader(world, { x: sx, y }));
-        for (const i of invaders) world.ants.hp[i] = UNKILLABLE_HP;
-        // Per invader, its last two tiles: an A-B-A move is a bounce.
-        const prev = invaders.map(() => [-1, -1, -1, -1]);
-        let bounces = 0;
-        let farEngaged = 0;
-        let nearEngaged = 0;
-        for (let t = 0; t < 150; t++) {
-          for (const i of invaders) world.ants.lastMealTick[i] = world.tick;
-          world.ants.lastMealTick[near] = world.tick;
-          world.ants.lastMealTick[far] = world.tick;
-          // #400 (V71): step 16f clamps every ant to its max HP where it stands, so
-          // "unkillable" is restored each tick (no blow takes more than one tick's HP).
-          for (const id of [...invaders, near, far]) world.ants.hp[id] = UNKILLABLE_HP;
-          tick(world, []);
-          invaders.forEach((i, k) => {
-            expect(world.ants.alive[i]).toBe(1);
-            const x = world.ants.posX[i]! >> FP_SHIFT;
-            const y = world.ants.posY[i]! >> FP_SHIFT;
-            const p = prev[k]!;
-            if (x === p[0] && y === p[1] && (x !== p[2] || y !== p[3])) bounces++;
-            prev[k] = [p[2]!, p[3]!, x, y];
-          });
-          if (world.ants.combatOpponentId[far] !== -1) farEngaged++;
-          if (world.ants.combatOpponentId[near] !== -1) nearEngaged++;
-        }
-        expect(nearEngaged).toBeGreaterThan(50);
-        if (spreads) {
-          expect(farEngaged).toBeGreaterThan(50);
-          expect(bounces).toBe(0);
-        } else {
-          expect(farEngaged).toBe(0);
-        }
-      });
-    }
+    it(`${dir > 0 ? 'east' : 'west'}: the far defender is engaged`, () => {
+      const { world, sx, at } = nest(dir);
+      const near = addDefender(world, at(4));
+      const far = addDefender(world, at(8, 3));
+      const invaders: number[] = [];
+      for (let y = ROW; y >= ROW - 2; y--) invaders.push(addInvader(world, { x: sx, y }));
+      for (const i of invaders) world.ants.hp[i] = UNKILLABLE_HP;
+      // Per invader, its last two tiles: an A-B-A move is a bounce.
+      const prev = invaders.map(() => [-1, -1, -1, -1]);
+      let bounces = 0;
+      let farEngaged = 0;
+      let nearEngaged = 0;
+      for (let t = 0; t < 150; t++) {
+        for (const i of invaders) world.ants.lastMealTick[i] = world.tick;
+        world.ants.lastMealTick[near] = world.tick;
+        world.ants.lastMealTick[far] = world.tick;
+        // #400 (V71): step 16f clamps every ant to its max HP where it stands, so
+        // "unkillable" is restored each tick (no blow takes more than one tick's HP).
+        for (const id of [...invaders, near, far]) world.ants.hp[id] = UNKILLABLE_HP;
+        tick(world, []);
+        invaders.forEach((i, k) => {
+          expect(world.ants.alive[i]).toBe(1);
+          const x = world.ants.posX[i]! >> FP_SHIFT;
+          const y = world.ants.posY[i]! >> FP_SHIFT;
+          const p = prev[k]!;
+          if (x === p[0] && y === p[1] && (x !== p[2] || y !== p[3])) bounces++;
+          prev[k] = [p[2]!, p[3]!, x, y];
+        });
+        if (world.ants.combatOpponentId[far] !== -1) farEngaged++;
+        if (world.ants.combatOpponentId[near] !== -1) nearEngaged++;
+      }
+      expect(nearEngaged).toBeGreaterThan(50);
+      expect(farEngaged).toBeGreaterThan(50);
+      expect(bounces).toBe(0);
+    });
   }
 });
 
@@ -516,7 +499,6 @@ describe('#364 — the raid check does not depend on its unsaved stamp counter',
   it('a rollover clears the window: a friend long gone does not still saturate a tile', () => {
     const r = raidWorld();
     const w = r.world;
-    w.simVersion = V59;
     rallyOn(r.player, r.enemyDoor);
     const id = addRaidFighter(w, PLAYER_COLONY_ID, 100, 6, ENEMY_COLONY_ID);
     const hx = 100 - RAID_START_CLEAR_RADIUS_TILES;
@@ -562,29 +544,23 @@ describe('#364 — a raider aimed by step 10e follows that aim, not the hunt', (
 });
 
 describe('#364 — a duel its colony holds no longer stops a raider looting', () => {
-  for (const [ver, loots] of [
-    [V58, false],
-    [V59, true],
-  ] as const) {
-    it(`V${ver}: a hostile in reach on a friend-held tile ${loots ? 'does not stop' : 'stops'} it`, () => {
-      const r = raidWorld();
-      r.world.simVersion = ver;
-      rallyOn(r.player, r.enemyDoor);
-      const id = addRaidFighter(r.world, PLAYER_COLONY_ID, 100, 6, ENEMY_COLONY_ID);
-      const hx = 100 - RAID_START_CLEAR_RADIUS_TILES;
-      addEnemyWorker(r.world, hx, 6);
-      expect(fighterMayLoot(r.world, r.player, id)).toBe(false); // a free hostile stops it
-      addRaidFighter(r.world, PLAYER_COLONY_ID, hx, 6, ENEMY_COLONY_ID); // a friend holds that duel
-      expect(fighterMayLoot(r.world, r.player, id)).toBe(loots);
-    });
-  }
+  it('a hostile in reach on a friend-held tile does not stop it', () => {
+    const r = raidWorld();
+    rallyOn(r.player, r.enemyDoor);
+    const id = addRaidFighter(r.world, PLAYER_COLONY_ID, 100, 6, ENEMY_COLONY_ID);
+    const hx = 100 - RAID_START_CLEAR_RADIUS_TILES;
+    addEnemyWorker(r.world, hx, 6);
+    expect(fighterMayLoot(r.world, r.player, id)).toBe(false); // a free hostile stops it
+    addRaidFighter(r.world, PLAYER_COLONY_ID, hx, 6, ENEMY_COLONY_ID); // a friend holds that duel
+    expect(fighterMayLoot(r.world, r.player, id)).toBe(true);
+  });
 });
 
 describe('#364 — results never depend on the unsaved search-stamp counters', () => {
   /** The pile-up nest with a raid larder in play is not needed: the hunt alone
    *  exercises the hunt stamps; raid stamps are exercised by raidPile below. */
   function pile() {
-    const { world, sx, at } = nest(V59);
+    const { world, sx, at } = nest();
     addDefender(world, at(4));
     addDefender(world, at(8, 3));
     addDefender(world, at(12));
@@ -593,7 +569,6 @@ describe('#364 — results never depend on the unsaved search-stamp counters', (
   }
   function raidPile() {
     const r = raidWorld();
-    r.world.simVersion = V59;
     rallyOn(r.player, r.enemyDoor);
     for (let x = 90; x <= 110; x += 2)
       addRaidFighter(r.world, PLAYER_COLONY_ID, x, 6, ENEMY_COLONY_ID);
