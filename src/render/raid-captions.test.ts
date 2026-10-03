@@ -15,7 +15,7 @@ import {
 } from './raid-captions.js';
 import { tick } from '../sim/tick.js';
 import { ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
-import { SIM_VERSION_V51_UNIFIED_HUNGER, type WorldState } from '../sim/types.js';
+import type { WorldState } from '../sim/types.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import type { SimCommand } from '../sim/commands.js';
 import { addFighter, raidWorld, rallyOn } from '../sim/raid-test-utils.js';
@@ -217,7 +217,7 @@ describe('nextRaidCaption — driven by a real V52 raid', () => {
 });
 
 describe('rallyTargetsEnemyEntrance', () => {
-  it("is true on an enemy's open entrance in a V52 world", () => {
+  it("is true on an enemy's open entrance", () => {
     const r = raidWorld();
     expect(rallyTargetsEnemyEntrance(r.world, P, r.enemyDoor.x, r.enemyDoor.y)).toBe(true);
   });
@@ -231,12 +231,6 @@ describe('rallyTargetsEnemyEntrance', () => {
   it('is false on a closed enemy entrance', () => {
     const r = raidWorld();
     for (const e of r.enemy.entrances) e.isOpen = false;
-    expect(rallyTargetsEnemyEntrance(r.world, P, r.enemyDoor.x, r.enemyDoor.y)).toBe(false);
-  });
-
-  it('is false before V52 (no raids in that world)', () => {
-    const r = raidWorld();
-    r.world.simVersion = SIM_VERSION_V51_UNIFIED_HUNGER;
     expect(rallyTargetsEnemyEntrance(r.world, P, r.enemyDoor.x, r.enemyDoor.y)).toBe(false);
   });
 });

@@ -15,7 +15,6 @@ import type { WorldState, EntityId, AIStateRecord, SpiderState } from '../sim/ty
 import {
   LATEST_SIM_VERSION,
   SIM_VERSION_V71_HEALTH_MODEL,
-  SIM_VERSION_V52_RAIDING,
   SIM_VERSION_V60_RAID_ORDERS,
 } from '../sim/types.js';
 import { AI_MAX_OPERATION_FIGHTERS, SPIDER_HUNT_INTERVAL_TICKS } from '../sim/constants.js';
@@ -1377,9 +1376,8 @@ function validateAntColumns(saved: SerializedAnts, capacity: number): void {
     ['colonyId', saved.colonyId, byte],
     ['task', saved.task, enumMax(4)],
     // 5 = FightingSubState.Hauling (#290 PR 5, V52), the largest sub-state any
-    // task writes. Looting 4 / Hauling 5 were reserved at V50 and are written from
-    // V52 only: the assembled-world check below rejects them in an older save, and
-    // on a non-fighter.
+    // task writes. Looting 4 / Hauling 5 are written on a fighter only: the
+    // assembled-world check below rejects them on a non-fighter.
     ['subTask', saved.subTask, enumMax(5)],
     ['speed', saved.speed, finiteInt],
     ['foodCarrying', saved.foodCarrying, finiteInt],
@@ -2160,13 +2158,12 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     difficulty: s.difficulty === 'Easy' || s.difficulty === 'Hard' ? s.difficulty : 'Normal',
   };
 
-  // #290 PR 5 — the raid sub-states Looting (4) and Hauling (5) exist from V52
-  // only, and only on a fighter. (The column check above admits up to 5.)
-  const raidSubStates = world.simVersion >= SIM_VERSION_V52_RAIDING;
+  // #290 PR 5 (V52) — the raid sub-states Looting (4) and Hauling (5) exist only on
+  // a fighter. (The column check above admits up to 5.)
   for (let id = 0; id < world.ants.alive.length; id++) {
     const sub = world.ants.subTask[id]!;
     if (sub < FightingSubState.Looting) continue;
-    if (!raidSubStates || world.ants.task[id] !== AntTask.Fighting) {
+    if (world.ants.task[id] !== AntTask.Fighting) {
       throw new Error(
         `Invalid ants.subTask[${id}]: ${sub} (task ${world.ants.task[id]}) at simVersion ${world.simVersion}`,
       );

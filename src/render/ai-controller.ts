@@ -6,7 +6,6 @@
 
 import type { AIStateRecord, WorldState } from '../sim/types.js';
 import {
-  SIM_VERSION_V53_NO_LOOT_WHEN_FULL,
   SIM_VERSION_V61_AI_EARLY_STORAGE,
   SIM_VERSION_V62_AI_NEST_DEFENCE,
   SIM_VERSION_V63_AI_DEEP_QUEEN,
@@ -1667,15 +1666,12 @@ function hasChamberOrPending(
  *   - `colonyFoodTotal` is at least AI_EXTRA_FOOD_STORAGE_FULL_PCT of
  *     `colonyFoodCapacity` (pending chambers add no capacity).
  * Every input is world state, so the command stream stays deterministic per seed.
- * Sticky-version gated: the rule shipped with V53, so a
- * pre-V53 world keeps the AI command stream it was recorded under. The #395 changes
- * (no fixed cap, the reserve bound) are not gated (the pre-1.0 policy): they apply
- * from V53 on.
+ * The rule shipped with V53; the #395 changes (no fixed cap, the reserve bound)
+ * followed under the pre-1.0 policy.
  * The AI state (Peacetime .. Invading) is deliberately not an input: a colony
  * whose raiders bring food home to a full larder wants the room most.
  */
 export function aiExtraFoodStorageWanted(world: WorldState, colony: ColonyRecord): boolean {
-  if (world.simVersion < SIM_VERSION_V53_NO_LOOT_WHEN_FULL) return false;
   let completedStorage = 0;
   let queen = false;
   for (const ch of colony.chambers) {

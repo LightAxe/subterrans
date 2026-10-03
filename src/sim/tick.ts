@@ -1573,7 +1573,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // Step 10e (V52, #290 PR 5): raids — who loots this tick, and surface haulers'
   // way home (ant-raid.ts). After 10c/10d, which leave haulers alone; before any
   // step that moves food or digs, so the stock flow field it computes is still
-  // current at step 16. Inert below V52.
+  // current at step 16.
   updateRaiders(world);
 
   // ---------------------------------------------------------------------------
@@ -1694,7 +1694,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // Step 16e (V52, #290 PR 5): raid arrival actions — a looter in an enemy
   // FoodStorage chamber takes a load, a hauler home deposits it (ant-raid.ts).
   // Right after the forager actions: the same arrival-on-the-tile verbs. Numbered
-  // 16e so the existing 16c/16d keep their names. Inert below V52.
+  // 16e so the existing 16c/16d keep their names.
   tickRaidActions(world);
 
   // ---------------------------------------------------------------------------

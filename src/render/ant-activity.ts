@@ -67,9 +67,9 @@ export interface AntActivity {
   foraging: ForagingBreakdown;
   digging: DiggingBreakdown;
   fighting: number;
-  /** Fighters looting an enemy larder (Fighting.Looting; V52 raids only). */
+  /** Fighters looting an enemy larder (Fighting.Looting; V52 raids). */
   raiding: number;
-  /** Fighters carrying raided food home (Fighting.Hauling; V52 raids only). */
+  /** Fighters carrying raided food home (Fighting.Hauling; V52 raids). */
   hauling: number;
   nursing: number;
   idle: number;

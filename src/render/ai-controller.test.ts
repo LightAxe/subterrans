@@ -49,7 +49,6 @@ import {
 import {
   createWorldState,
   allocateEntityId,
-  SIM_VERSION_V52_RAIDING,
   SIM_VERSION_V60_RAID_ORDERS,
   SIM_VERSION_V61_AI_EARLY_STORAGE,
   SIM_VERSION_V62_AI_NEST_DEFENCE,
@@ -823,15 +822,6 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const offCadence = { ...world, tick: 1 } as unknown as WorldState;
       aiChamberPlacement(offCadence, colony);
       expect(fsCommands(offCadence)).toHaveLength(0);
-    });
-
-    it('is off below V53: a V52 world never gets the extra chamber', () => {
-      const { world, colony } = settledColony(CAP_ONE_CHAMBER);
-      expect(aiExtraFoodStorageWanted(world, colony)).toBe(true);
-      world.simVersion = SIM_VERSION_V52_RAIDING;
-      expect(aiExtraFoodStorageWanted(world, colony)).toBe(false);
-      aiChamberPlacement(world, colony);
-      expect(fsCommands(world)).toHaveLength(0);
     });
 
     it('the near-full threshold is 90 %: 6452 fp of 7168 qualifies, 6451 does not', () => {
