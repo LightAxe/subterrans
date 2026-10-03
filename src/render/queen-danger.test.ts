@@ -7,8 +7,7 @@ import {
   createQueenDangerState,
   stepQueenDanger,
   advanceQueenDanger,
-  noteQueenHit,
-  noteQueenHp,
+  noteQueenDangerTick,
   QUEEN_DANGER_REARM_TICKS,
   QUEEN_DANGER_REARM_UNHURT_TICKS,
   type QueenDangerState,
@@ -20,6 +19,8 @@ import { checkAndTrigger, resetCaptions, untrigger } from './onboarding-captions
 import { QUEEN_DAMAGE_SUPPRESS_TICKS } from './screen-effects.js';
 import { createScenario } from '../sim/scenario.js';
 import { tick } from '../sim/tick.js';
+import { GameOutcome } from '../sim/game-over.js';
+import type { WorldState } from '../sim/types.js';
 import {
   COMBAT_COOLDOWN_TICKS,
   COMBAT_HP_QUEEN,
@@ -34,7 +35,7 @@ import { setColonyFoodForTest } from '../sim/food/food-test-utils.js';
 
 const DANGER = 'Your queen is in danger.';
 
-/** GameScene's per-frame queen-danger step, minus Phaser: returns the caption shown, if any. */
+/** One look (stepQueenDanger) and the caption it decides, minus the world: returns the caption, if any. */
 function frame(
   state: QueenDangerState,
   hp: number,
@@ -594,33 +595,16 @@ describe('#416 review: harm inside a frame or a tick (seen before every sim tick
     };
   }
 
-  it('a loss seen between frames (noteQueenHp) is harm, though a heal hides it by the frame', () => {
+  it('a new last-hit tick is harm, dated to the look, though her HP shows none', () => {
     const s = createQueenDangerState();
-    frame(s, 30, true, 100, false);
-    noteQueenHp(s, 29, 101); // a drain
-    noteQueenHp(s, 29, 102);
-    noteQueenHp(s, 30, 103); // a meal and a heal tick
-    expect(stepQueenDanger(s, 30, true, false, 104)).toEqual({ hurt: true, rearm: false });
-    expect(s.lastHarmTick).toBe(101); // dated to the drain, not the frame
-    expect(stepQueenDanger(s, 30, true, false, 105).hurt).toBe(false); // reported once
-    // And the 30 s run from the drain.
-    expect(hold(s, 30, true, false, 106, 101 + QUEEN_DANGER_REARM_UNHURT_TICKS + 5)).toEqual([
-      101 + QUEEN_DANGER_REARM_UNHURT_TICKS,
-    ]);
-  });
-
-  it('a new last-hit tick (noteQueenHit) is harm, dated a tick after the blow, though her HP shows none', () => {
-    const s = createQueenDangerState();
-    noteQueenHit(s, 40); // the first look only records it (an old blow)
-    frame(s, 30, true, 100, false);
+    // The first look only records her clock (an old blow).
+    expect(stepQueenDanger(s, 30, true, false, 100, 40)).toEqual({ hurt: false, rearm: false });
     expect(s.lastHarmTick).toBeNull();
-    noteQueenHit(s, 40); // unchanged: no new blow
-    expect(stepQueenDanger(s, 30, true, false, 101).hurt).toBe(false);
-    noteQueenHit(s, 150); // a blow on sim tick 150, its HP healed back in the same tick
-    expect(stepQueenDanger(s, 30, true, false, 151)).toEqual({ hurt: true, rearm: false });
+    expect(stepQueenDanger(s, 30, true, false, 101, 40).hurt).toBe(false); // no new blow
+    // A blow on sim tick 150 whose HP a heal in the same tick put back.
+    expect(stepQueenDanger(s, 30, true, false, 151, 150)).toEqual({ hurt: true, rearm: false });
     expect(s.lastHarmTick).toBe(151);
-    noteQueenHit(s, 150);
-    expect(stepQueenDanger(s, 30, true, false, 152).hurt).toBe(false); // reported once
+    expect(stepQueenDanger(s, 30, true, false, 152, 150).hurt).toBe(false); // seen once
     expect(hold(s, 30, true, false, 153, 151 + QUEEN_DANGER_REARM_UNHURT_TICKS + 5)).toEqual([
       151 + QUEEN_DANGER_REARM_UNHURT_TICKS,
     ]);
@@ -696,4 +680,404 @@ describe('#416 review: harm inside a frame or a tick (seen before every sim tick
     // #227: a long run of full-scenario ticks — explicit generous timeout so the local
     // coverage gate passes under v8 instrumentation.
   }, 30_000);
+
+  it('a blow just after the 30 s re-arm, inside one frame: re-armed on its own tick, so the new attack is announced', () => {
+    const h = loopHarness();
+    // Unharmed since the look at h.hit, fed and still wounded: the look at
+    // h.hit + 600 re-arms. A 1-HP blow lands on that sim tick (seen at the next look),
+    // and one 5-tick frame holds both.
+    const rearmAt = h.hit + QUEEN_DANGER_REARM_UNHURT_TICKS;
+    h.strikes.add(rearmAt);
+    h.runTo(rearmAt - 2);
+    expect(h.s.lastHarmTick).toBe(h.hit); // not yet re-armed
+    h.frameOf(MAX_CATCHUP_TICKS); // sim ticks rearmAt - 2 .. rearmAt + 2
+    expect(h.world.ants.hp[h.q]).toBeLessThan(QUEEN_HP_HOME); // still wounded
+    expect(h.s.lastHarmTick).toBe(rearmAt + 1); // the new blow, seen after its tick
+    expect(h.shown).toEqual([h.hit + 1, rearmAt + 3]); // announced in that frame
+    expect(h.pulses()).toBe(2);
+    // #227: a long run of full-scenario ticks — explicit generous timeout so the local
+    // coverage gate passes under v8 instrumentation.
+  }, 30_000);
+});
+
+// ---------------------------------------------------------------------------
+// #416 review — batching invariance: the property test.
+//
+// State-space audit. One LOOK per sim tick's end state (beforeSimTick's before each
+// tick, the frame step's after the frame's last), each handled by stepQueenDanger
+// the same way wherever it falls in a render frame:
+//
+//   tracker at the look              | since the previous look                  | the look decides, as of its tick
+//   ---------------------------------+------------------------------------------+-------------------------------------------------
+//   any                              | HP dropped (a blow, a starvation drain)  | harm; past the grace: a pulse, + caption if armed
+//   any                              | new lastHitTick, HP not dropped          | the same (a heal and a 1-HP blow in one tick)
+//   never harmed / re-armed          | nothing                                  | nothing
+//   harmed, not fed                  | nothing                                  | nothing (a starving queen never re-arms)
+//   harmed, fed, unharmed < 200      | nothing                                  | nothing
+//   harmed, fed, at full HP, ≥ 200   | nothing                                  | re-arm (untrigger)
+//   harmed, fed, unharmed ≥ 600      | nothing                                  | re-arm (untrigger)
+//   any                              | nothing: a second look at the same state | nothing (idempotent)
+//
+// In-frame position (first, middle, last tick, or a frame of its own) never enters a
+// decision; it only picks the frame that presents it — the one whose looks include
+// that tick. advanceQueenDanger presents one pulse for any harm owed, and the caption
+// if one was decided. So, for any sequence of per-tick events and any batching, a
+// frame pulses iff some harm past the grace was seen at a tick in (its first tick,
+// its last tick], and shows the caption iff the caption was decided at such a tick —
+// with the decisions those of an independent per-tick model (`oracle`). Fixed cases:
+// Codex's three batching findings on #418.
+
+/** The queen after one sim tick of a script (sim order: meal or drain at step 3, heal at 16f, blow at 17). */
+interface ScriptTick {
+  readonly hp: number;
+  readonly lastHit: number;
+  /** She ate on this tick. */
+  readonly meal: boolean;
+  /** A blow landed, or a drain took HP, on this tick. */
+  readonly harm: boolean;
+}
+
+/**
+ * Play `n` sim ticks of the queen in her nest by the sim's rules: unfed ticks drain
+ * 1 HP every QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS (never to 0); a fed, safe, wounded
+ * queen heals 1 HP on each heal tick; then a blow of `blowOn(t)` HP lands (0 = none;
+ * never to 0 HP, though it stamps her clock).
+ */
+function playQueen(
+  n: number,
+  fedOn: (t: number) => boolean,
+  blowOn: (t: number, healedThisTick: boolean) => number,
+): ScriptTick[] {
+  const out: ScriptTick[] = [];
+  let hp = QUEEN_HP_HOME;
+  let lastHit = -1;
+  let unfed = 0;
+  for (let t = 0; t < n; t++) {
+    const meal = fedOn(t);
+    let harm = false;
+    if (meal) unfed = 0;
+    else if (++unfed % QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS === 0 && hp > 1) {
+      hp -= 1;
+      harm = true;
+    }
+    let healed = false;
+    const safe = lastHit < 0 || t - lastHit >= HEAL_SAFE_TICKS;
+    if (meal && safe && hp < QUEEN_HP_HOME && t % QUEEN_HEAL_INTERVAL_TICKS === 0) {
+      hp += 1;
+      healed = true;
+    }
+    const dmg = blowOn(t, healed);
+    if (dmg > 0) {
+      hp = Math.max(1, hp - dmg);
+      lastHit = t;
+      harm = true;
+    }
+    out.push({ hp, lastHit, meal, harm });
+  }
+  return out;
+}
+
+/** mulberry32: a small seeded PRNG in [0, 1). */
+function prng(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * A random script of episodes: a burst of harm — a fight (blows of 1–3 HP), a famine
+ * (drains), a trickle (short unfed runs), a 1-HP blow on a heal tick that the heal
+ * cancels, a drain just before a heal tick, or one blow (often heavy, so she stays
+ * wounded) — then calm: within a few ticks of the 600- or 200-tick window, or any
+ * length. Every boundary is crossed at every phase of a frame across the batchings.
+ */
+function randomScript(seed: number, n: number): ScriptTick[] {
+  const r = prng(seed);
+  const int = (lo: number, hi: number): number => lo + Math.floor(r() * (hi - lo + 1));
+  const fed = new Array<boolean>(n).fill(true);
+  const blow = new Array<number>(n).fill(0);
+  const sneak = new Set<number>();
+  const healTickFrom = (t: number): number =>
+    Math.ceil(t / QUEEN_HEAL_INTERVAL_TICKS) * QUEEN_HEAL_INTERVAL_TICKS;
+  let t = int(0, 60); // sometimes harm inside the round-start grace
+  while (t < n) {
+    const k = r();
+    if (k < 0.35) {
+      const len = int(1, 60);
+      const p = 0.05 + r() * 0.25;
+      for (let i = 0; i < len && t < n; i++, t++) if (i === 0 || r() < p) blow[t] = int(1, 3);
+    } else if (k < 0.5) {
+      const len = int(QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS, 40);
+      for (let i = 0; i < len && t < n; i++, t++) fed[t] = false;
+    } else if (k < 0.62) {
+      const end = t + int(40, 240);
+      while (t < end && t < n) {
+        const unfedRun = int(QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS, 8);
+        for (let j = 0; j < unfedRun && t < n; j++, t++) fed[t] = false;
+        t += int(10, 60);
+      }
+    } else if (k < 0.72) {
+      t = healTickFrom(t + HEAL_SAFE_TICKS); // safe again, so the heal lands first
+      sneak.add(t);
+      t += 1;
+    } else if (k < 0.8) {
+      const heal = healTickFrom(t + HEAL_SAFE_TICKS + QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS);
+      for (let u = heal - QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS; u < heal && u < n; u++)
+        fed[u] = false;
+      t = heal + 1;
+    } else {
+      blow[t] = r() < 0.6 ? int(10, 25) : int(1, 3);
+      t += 1;
+    }
+    const g = r();
+    t +=
+      g < 0.35
+        ? QUEEN_DANGER_REARM_UNHURT_TICKS + int(-6, 6)
+        : g < 0.55
+          ? QUEEN_DANGER_REARM_TICKS + int(-6, 6)
+          : g < 0.75
+            ? int(0, 150)
+            : int(150, 1300);
+  }
+  return playQueen(
+    n,
+    (u) => fed[u]!,
+    (u) => (blow[u]! > 0 ? blow[u]! : sneak.has(u) ? 1 : 0),
+  );
+}
+
+/** A script from fixed blows (sim tick → HP) and unfed sim-tick ranges, calm otherwise. */
+function fixedScript(
+  n: number,
+  blows: ReadonlyMap<number, number>,
+  unfed: readonly (readonly [number, number])[] = [],
+): ScriptTick[] {
+  return playQueen(
+    n,
+    (t) => !unfed.some(([a, b]) => t >= a && t <= b),
+    (t) => blows.get(t) ?? 0,
+  );
+}
+
+/**
+ * The independent per-tick model of the rule: the world ticks at which a pulse is
+ * decided (harm past the grace) and at which the caption is (such harm while armed).
+ * Sim tick t's end state is looked at on world tick t + 1.
+ */
+function oracle(script: readonly ScriptTick[]): {
+  pulses: Set<number>;
+  captions: Set<number>;
+  rearms: { unhurt: number; healed: number };
+} {
+  const pulses = new Set<number>();
+  const captions = new Set<number>();
+  const rearms = { unhurt: 0, healed: 0 };
+  let armed = true;
+  let lastHarm: number | null = null;
+  for (let t = 0; t < script.length; t++) {
+    const T = t + 1;
+    const st = script[t]!;
+    if (st.harm) {
+      lastHarm = T;
+      if (T > QUEEN_DAMAGE_SUPPRESS_TICKS) {
+        pulses.add(T);
+        if (armed) captions.add(T);
+        armed = false;
+      }
+      continue;
+    }
+    if (lastHarm === null || !st.meal) continue;
+    const unharmed = T - lastHarm;
+    const full = st.hp >= QUEEN_HP_HOME;
+    if (unharmed >= QUEEN_DANGER_REARM_UNHURT_TICKS) rearms.unhurt += 1;
+    else if (full && unharmed >= QUEEN_DANGER_REARM_TICKS) rearms.healed += 1;
+    else continue;
+    lastHarm = null;
+    armed = true;
+  }
+  return { pulses, captions, rearms };
+}
+
+/** Frame sizes (sim ticks per render frame, 0..MAX_CATCHUP_TICKS) by frame index. */
+type Batching = { readonly name: string; readonly size: (frame: number) => number };
+
+function batchings(seed: number): Batching[] {
+  const out: Batching[] = [{ name: '1', size: () => 1 }];
+  for (const n of [2, 3, MAX_CATCHUP_TICKS]) {
+    for (let off = 0; off < n; off++) {
+      out.push({ name: `${n}+${off}`, size: (i) => (i === 0 && off > 0 ? off : n) });
+    }
+  }
+  const cycle = (name: string, sizes: readonly number[]): Batching => ({
+    name,
+    size: (i) => sizes[i % sizes.length]!,
+  });
+  out.push(cycle('irregular A', [1, 5, 2, 0, 4, 3, 5, 0, 1, 1, 5, 2]));
+  out.push(cycle('irregular B', [5, 5, 5, 1, 0, 0, 3, 2, 5, 4]));
+  const r = prng(seed ^ 0x9e3779b9);
+  const sizes = Array.from({ length: 97 }, () => Math.floor(r() * (MAX_CATCHUP_TICKS + 1)));
+  sizes[0] = 1;
+  out.push(cycle('random', sizes));
+  return out;
+}
+
+describe('#416 review: the outcome of every tick is the same however the ticks are batched', () => {
+  const world = createScenario(7, 'Normal');
+  const colony = world.colonies[PLAYER_COLONY_ID]!;
+  const q = stageQueenInNest(world, colony);
+  const prev = createScenario(7, 'Normal');
+
+  function setTick(w: WorldState, t: number): void {
+    // eslint-disable-next-line no-restricted-syntax -- test fixture clock: the scripted tick
+    w.tick = t;
+  }
+
+  /**
+   * Play `script` through GameScene's wiring — the game loop, `perTick` as its
+   * onBeforeTick, advanceQueenDanger once per render frame — with `batching`'s frame
+   * sizes, and return the frames whose pulse or caption disagree with the oracle.
+   */
+  function mismatches(
+    script: readonly ScriptTick[],
+    batching: Batching,
+    hook: 'beforeSimTick' | 'noteQueenDangerTick',
+  ): string[] {
+    resetCaptions();
+    setTick(world, 0);
+    world.ants.hp[q] = QUEEN_HP_HOME;
+    world.ants.lastHitTick[q] = -1;
+    world.ants.lastMealTick[q] = -1;
+    const s = createQueenDangerState();
+    const rampage = createRampageCaptionState();
+    const loop = createGameLoop(
+      (w) => {
+        const st = script[w.tick]!;
+        w.ants.hp[q] = st.hp;
+        w.ants.lastHitTick[q] = st.lastHit;
+        if (st.meal) w.ants.lastMealTick[q] = w.tick;
+        setTick(w, w.tick + 1);
+        return GameOutcome.None;
+      },
+      world,
+      {
+        onBeforeTick:
+          hook === 'beforeSimTick'
+            ? (w) => beforeSimTick(w, [], rampage, PLAYER_COLONY_ID, prev, s)
+            : (w) => noteQueenDangerTick(s, w, PLAYER_COLONY_ID),
+      },
+    );
+    const want = oracle(script);
+    const inFrame = (ticks: Set<number>, from: number, to: number): boolean => {
+      for (let t = from + 1; t <= to; t++) if (ticks.has(t)) return true;
+      return false;
+    };
+    const bad: string[] = [];
+    for (let i = 0; world.tick < script.length; i++) {
+      const from = world.tick;
+      const n = Math.min(batching.size(i), script.length - from);
+      loop.update(n * MS_PER_TICK);
+      const f = advanceQueenDanger(s, world, colony);
+      const to = world.tick;
+      const pulse = inFrame(want.pulses, from, to);
+      const caption = inFrame(want.captions, from, to);
+      if (f.pulse !== pulse || (f.caption !== null) !== caption) {
+        bad.push(
+          `[${batching.name}] frame ${from}..${to}: pulse ${f.pulse}/${pulse}, caption ${f.caption !== null}/${caption}`,
+        );
+      }
+    }
+    return bad.slice(0, 5);
+  }
+
+  function expectInvariant(
+    script: readonly ScriptTick[],
+    seed: number,
+    hook: 'beforeSimTick' | 'noteQueenDangerTick',
+  ): void {
+    const want = oracle(script);
+    expect(want.captions.size).toBeGreaterThan(1); // the script exercises re-arms
+    for (const b of batchings(seed)) expect(mismatches(script, b, hook)).toEqual([]);
+  }
+
+  // Codex's three findings on #418, through beforeSimTick (GameScene's own wiring).
+  it('fixed: a drain, a meal and a heal inside one frame (8d1bbaf)', () => {
+    // A heavy blow; then, at heal tick 440, a drain on 439 (unfed 434..439) that the
+    // meal and heal on 440 hide; then blows that a too-early re-arm would announce.
+    const script = fixedScript(
+      1500,
+      new Map([
+        [100, 30],
+        [720, 2],
+        [1400, 2],
+      ]),
+      [[434, 439]],
+    );
+    expect(script[439]!.harm && script[440]!.hp === script[438]!.hp).toBe(true);
+    expectInvariant(script, 1, 'beforeSimTick');
+    // #227: explicit generous timeout so the local coverage gate passes.
+  }, 30_000);
+
+  it('fixed: a heal and a 1-HP blow in one tick (6ed61a3)', () => {
+    const script = fixedScript(
+      1500,
+      new Map([
+        [100, 30],
+        [440, 1],
+        [720, 2],
+        [1400, 2],
+      ]),
+    );
+    expect(script[440]!.hp).toBe(script[439]!.hp); // the heal hides the blow
+    expectInvariant(script, 2, 'beforeSimTick');
+    // #227: explicit generous timeout so the local coverage gate passes.
+  }, 30_000);
+
+  it('fixed: a blow on or just after the 30 s re-arm tick, at every frame phase (this fix)', () => {
+    // Blows of 15 HP (she stays wounded), each 600 + k sim ticks after the last: the
+    // re-arm look is due on the blow's own look (k = 0: not re-armed) or k ticks before it.
+    const blows = new Map<number, number>([[100, 20]]);
+    let at = 100;
+    for (const k of [0, 1, 2, 3, 4, 5]) {
+      at += QUEEN_DANGER_REARM_UNHURT_TICKS + k;
+      blows.set(at, 15);
+    }
+    const script = fixedScript(at + 50, blows);
+    expect(script.every((st) => st.hp < QUEEN_HP_HOME || st.lastHit < 100)).toBe(true);
+    expectInvariant(script, 3, 'beforeSimTick');
+    // #227: explicit generous timeout so the local coverage gate passes.
+  }, 30_000);
+
+  const SEEDS = [11, 23, 37, 41, 59, 61, 73, 89, 97, 101, 113, 127];
+  it.each(SEEDS)('random script, seed %i: every batching matches the per-tick model', (seed) => {
+    expectInvariant(randomScript(seed, 4000), seed, 'noteQueenDangerTick');
+  });
+
+  it('the random scripts exercise both re-arm paths, a hidden blow and a hidden drain', () => {
+    let unhurt = 0;
+    let healed = 0;
+    let hiddenBlows = 0;
+    let hiddenDrains = 0;
+    for (const seed of SEEDS) {
+      const script = randomScript(seed, 4000);
+      const { rearms } = oracle(script);
+      unhurt += rearms.unhurt;
+      healed += rearms.healed;
+      for (let t = 2; t < script.length; t++) {
+        const a = script[t - 2]!;
+        const b = script[t - 1]!;
+        const c = script[t]!;
+        if (c.harm && c.lastHit === t && c.hp >= b.hp) hiddenBlows += 1; // healed in its tick
+        if (b.harm && b.lastHit !== t - 1 && !c.harm && c.hp >= a.hp) hiddenDrains += 1; // healed next tick
+      }
+    }
+    expect(unhurt).toBeGreaterThan(0);
+    expect(healed).toBeGreaterThan(0);
+    expect(hiddenBlows).toBeGreaterThan(0);
+    expect(hiddenDrains).toBeGreaterThan(0);
+  });
 });

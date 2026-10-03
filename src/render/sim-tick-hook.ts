@@ -28,9 +28,10 @@ import { noteQueenDangerTick, type QueenDangerState } from './queen-danger.js';
  *      tick later), still owes the warning; and, with `prevState` still the world
  *      before that tick, on the threat as that tick's rampage shelter saw it (an
  *      entrance it opened, by a spider it then moved out of reach);
- *   3. #416 review — the queen-danger tracker's look at `viewerColonyId`'s queen, her
- *      HP and last-hit clock (noteQueenDangerTick), so harm that a later tick of the
- *      frame hides (a starvation drain, then a meal and a heal tick) still counts;
+ *   3. #416 review — the queen-danger tracker's look at `viewerColonyId`'s queen
+ *      (noteQueenDangerTick): it decides that tick's harm and re-arm on the tick's own
+ *      end state, so the outcome does not depend on how many ticks the frame runs
+ *      (GameScene's frame step only presents what was decided);
  *   4. the prevState snapshot for render interpolation.
  */
 export function beforeSimTick(

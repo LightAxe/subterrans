@@ -2027,8 +2027,8 @@ export class GameScene extends Phaser.Scene {
     // Queen damage pulse. From V66 (#375) a starving queen loses HP too, so the
     // pulse and "Your queen is in danger." cover both causes. The caption re-arms
     // once the danger has passed (queen-danger.ts: fed, and unhurt for 30 s, or for
-    // 10 s once back at full HP). She is also observed before every sim tick
-    // (beforeSimTick), so harm inside a multi-tick frame is not missed.
+    // 10 s once back at full HP). Harm and re-arm are decided per sim tick (the
+    // look in beforeSimTick, and this frame's own); this only presents them.
     const danger = advanceQueenDanger(this.queenDanger, this.world, playerColony);
     if (danger.pulse) triggerQueenDamagePulse(this.cameras.main);
     // Caption #9: queen damage (combat or starvation), once per danger spell.
