@@ -378,22 +378,19 @@ describe('queenStoresRect (#413 — the "Waiting for stores" strip)', () => {
     expect(queenStoresRect(stats, 150.2).w).toBe(151 + 2 * textInset);
   });
 
-  // ~6 px a char at the line's 10px monospace (storage-hint.spec.ts checks the strip
-  // the real renderer draws).
-  const CHAR_W = 6;
+  // A little over the ~5.4 px a char of the line's 9px monospace
+  // (HUD_STATS_LAYOUT.queenStores.fontSize; storage-hint.spec.ts measures the strip the
+  // real renderer draws).
+  const CHAR_W = 5.5;
 
-  it('a two-digit line ends left of the widest caption at the top', () => {
-    // GameScene centres top captions at (w/2, 60); "Waiting for stores: 99/99" is 25 chars.
+  it('a three-digit line ("Waiting for stores: 100/108") ends left of the widest top caption', () => {
+    expect(HUD_STATS_LAYOUT.queenStores.fontSize).toBe('9px');
+    // GameScene centres top captions at (w/2, 60).
     const hud = buildHudLayout(DEFAULT_LAYOUT);
     const cx = DEFAULT_LAYOUT.w / 2;
     const captionLeft = cx - (captionWrapWidth(cx, 60, hud) + 2 * CAPTION_PAD_X) / 2;
-    const r = queenStoresRect(hud.STATS, 25 * CHAR_W);
+    const r = queenStoresRect(hud.STATS, 27 * CHAR_W);
     expect(r.x + r.w).toBeLessThanOrEqual(captionLeft);
-  });
-
-  it('a worst-case line ("Waiting for stores: 999/999") fits the stats width', () => {
-    const r = queenStoresRect(stats, 27 * CHAR_W);
-    expect(r.x + r.w).toBeLessThanOrEqual(stats.x + stats.w);
   });
 
   it('lies under the ant-activity popup, which UIScene hides it behind', () => {

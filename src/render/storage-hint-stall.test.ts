@@ -1,13 +1,14 @@
 // storage-hint-stall.test.ts — #413: storage is the colony's population cap (the V70
 // egg reserve counts the brood waiting, so one larder holds about 3 brood), and the
 // game now says so:
-//   - the Food Storage hint fires whenever the reserve the queen needs now is more
-//     than storage can hold (the full-larder stall), not only when the colony has no
-//     larder at all, and never while a larder with room is being filled;
-//   - with a larder it says the stores are full; it shows once per stall, re-armed
-//     only after the stall clears, and at most once per cooldown;
-//   - the queen's "Waiting for stores: 24/30" line shows while the reserve holds
-//     her back, with the numbers the sim's egg gate compares.
+//   - the Food Storage hint fires whenever what the queen needs now is more than
+//     storage can hold (the full-larder stall), not only when the colony has no larder
+//     at all, and never while a larder with room is being filled;
+//   - with a larder it says the stores are full (or, when they are not, too small); it
+//     shows once per stall, re-armed only after the stall clears (storage covering the
+//     need, or storage built), and at most once per cooldown;
+//   - the queen's "Waiting for stores: 24/30" line shows while the reserve holds her
+//     back, with the numbers the sim's egg gate compares.
 // The #395 rules this builds on (dwell, pending larders, withdrawal) are pinned in
 // storage-hint.test.ts.
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -15,24 +16,27 @@ import {
   advanceStorageHint,
   createStorageHintState,
   formatQueenStoresLine,
+  queenStoresNeedFp,
   queenStoresWait,
   storageHintCondition,
   STORAGE_FULL_HINT_TEXT,
   STORAGE_HINT_COOLDOWN_TICKS,
   STORAGE_HINT_DWELL_TICKS,
   STORAGE_HINT_REARM_TICKS,
+  STORAGE_SMALL_HINT_TEXT,
   type StorageHintState,
 } from './storage-hint.js';
 import { resetCaptions, untrigger } from './onboarding-captions.js';
 import { createScenario } from '../sim/scenario.js';
 import type { WorldState } from '../sim/types.js';
-import { allocateEntityId, SIM_VERSION_V69_FOOD_FAIRNESS } from '../sim/types.js';
+import { allocateEntityId } from '../sim/types.js';
 import type { ChamberRecord, ColonyRecord } from '../sim/colony/colony-store.js';
 import {
   eggReserveFp,
   eggReserveStorageShortfallFp,
   tickQueenEggProduction,
 } from '../sim/colony/lifecycle-system.js';
+import { tickFoodConsumption } from '../sim/colony/colony-system.js';
 import { colonyFoodCapacity, colonyFoodTotal } from '../sim/food/food-api.js';
 import { initAnt } from '../sim/ant/ant-store.js';
 import { despawnAnt } from '../sim/ant-death.js';
@@ -55,10 +59,14 @@ import { LARVA_HUNGER, QUEEN_HUNGER, WORKER_HUNGER, runwayFoodFp } from '../sim/
 
 const NO_LARDER_TEXT = 'Build a Food Storage chamber so your queen can lay eggs.';
 const FULL = STORAGE_FULL_HINT_TEXT;
+const SMALL = STORAGE_SMALL_HINT_TEXT;
 const RUNWAY = QUEEN_EGG_RESERVE_RUNWAY_TICKS;
 const QUEEN_FP = runwayFoodFp(QUEEN_HUNGER, RUNWAY);
 const LARVA_FP = runwayFoodFp(LARVA_HUNGER, RUNWAY);
 const WORKER_FP = runwayFoodFp(WORKER_HUNGER, RUNWAY);
+/** What the queen and each larva eat every tick, before the egg gate reads the stores. */
+const QUEEN_MEAL = QUEEN_HUNGER.mealFp;
+const LARVA_MEAL = LARVA_HUNGER.mealFp;
 const ONE_LARDER = BASE_FOOD_STORAGE_CAPACITY + FOOD_CHAMBER_CAPACITY;
 const DWELL = STORAGE_HINT_DWELL_TICKS;
 const REARM = STORAGE_HINT_REARM_TICKS;
@@ -69,11 +77,8 @@ const START_WORKERS = 3;
 
 let nextChamberId = 95_000;
 
-function scenario(simVersion?: number): { world: WorldState; colony: ColonyRecord } {
-  const world =
-    simVersion === undefined
-      ? createScenario(7, 'Normal')
-      : createScenario(7, 'Normal', simVersion);
+function scenario(): { world: WorldState; colony: ColonyRecord } {
+  const world = createScenario(7, 'Normal');
   return { world, colony: world.colonies[PLAYER_COLONY_ID]! };
 }
 
@@ -99,12 +104,12 @@ function readyToLay(world: WorldState, colony: ColonyRecord): void {
   addChamber(world, colony, ChamberType.Nursery);
 }
 
-/** Add `n` living workers (or eggs) to `colony`. */
+/** Add `n` living workers, eggs or larvae to `colony`. */
 function addAnts(
   world: WorldState,
   colony: ColonyRecord,
   n: number,
-  role: 'worker' | 'egg' = 'worker',
+  role: 'worker' | 'egg' | 'larva' = 'worker',
 ): number[] {
   const ids: number[] = [];
   for (let i = 0; i < n; i++) {
@@ -122,6 +127,9 @@ function addAnts(
     if (role === 'egg') {
       colony.eggs.push(id);
       colony.eggCount += 1;
+    } else if (role === 'larva') {
+      colony.larvae.push(id);
+      colony.larvaeCount += 1;
     } else {
       colony.workers.push(id);
       colony.workerCount += 1;
@@ -151,6 +159,18 @@ function pendStorage(world: WorldState, anchorX: number): void {
   };
 }
 
+/** Put `stores` fp in `colony`'s stores: the pool up to its cap, the rest in `larder`. */
+function setStores(
+  world: WorldState,
+  colony: ColonyRecord,
+  larder: ChamberRecord,
+  stores: number,
+): void {
+  const pool = Math.min(stores, BASE_FOOD_STORAGE_CAPACITY);
+  setPoolFoodForTest(world, colony, pool);
+  setChamberStockForTest(world, colony, larder, stores - pool);
+}
+
 /**
  * The opening stall, as playtest 3 found it at 1:00 (#413): Queen chamber, Nursery and
  * one Food Storage chamber, the larder near full (26 food: the pool's 8 and 18 in the
@@ -161,10 +181,34 @@ function stall(): { world: WorldState; colony: ColonyRecord; larder: ChamberReco
   const { world, colony } = scenario();
   readyToLay(world, colony);
   const larder = addChamber(world, colony, ChamberType.FoodStorage);
-  setPoolFoodForTest(world, colony, BASE_FOOD_STORAGE_CAPACITY);
-  setChamberStockForTest(world, colony, larder, 18 * FP_ONE);
+  setStores(world, colony, larder, 26 * FP_ONE);
   addAnts(world, colony, 3, 'egg');
   return { world, colony, larder };
+}
+
+/** Every egg gate open but the reserve: the queen at home in her Queen chamber (tiles
+ *  20..23 × 10..12) and her egg interval long past. */
+function queenHome(world: WorldState, colony: ColonyRecord): void {
+  const q = colony.queenEntityId;
+  world.ants.zone[q] = Zone.Underground;
+  world.ants.posX[q] = 21 << FP_SHIFT;
+  world.ants.posY[q] = 11 << FP_SHIFT;
+  colony.queenLastEggTick = 0;
+  // eslint-disable-next-line no-restricted-syntax -- test fixture: stage the world tick
+  world.tick = 100_000;
+  world.ants.lastMealTick[q] = world.tick - 1;
+}
+
+/** The next tick, in the sim's own order for `colony`'s queen: food consumption
+ *  (step 3: the queen and every larva eat, a meal due each tick), then egg production
+ *  (step 6). True if she laid. */
+function eggStep(world: WorldState, colony: ColonyRecord): boolean {
+  const before = colony.eggCount;
+  // eslint-disable-next-line no-restricted-syntax -- test fixture: stage the world tick
+  world.tick = world.tick + 1;
+  tickFoodConsumption(world, colony);
+  tickQueenEggProduction(world, colony);
+  return colony.eggCount > before;
 }
 
 /** Run frames from tick `from` to `to` (inclusive); the captions shown, as `tick:text`. */
@@ -179,13 +223,38 @@ function run(state: StorageHintState, world: WorldState, from: number, to: numbe
   return shown;
 }
 
-describe('#413 — storageHintCondition: the reserve the queen needs now against capacity', () => {
+describe('#413 — queenStoresNeedFp: what the stores must hold for her to lay next tick', () => {
+  it('is the egg reserve plus the meals the queen and larvae eat before the egg gate', () => {
+    const { world, colony } = stall();
+    expect(queenStoresNeedFp(world, colony)).toBe(eggReserveFp(world, colony) + QUEEN_MEAL);
+    addAnts(world, colony, 2, 'larva');
+    expect(queenStoresNeedFp(world, colony)).toBe(
+      eggReserveFp(world, colony) + QUEEN_MEAL + 2 * LARVA_MEAL,
+    );
+  });
+
+  it('matches the sim: she lays on the tick the frame showed the stores at the need', () => {
+    const { world, colony } = scenario();
+    readyToLay(world, colony);
+    // No workers, whose meals at home come only one tick in their meal interval.
+    for (const id of [...colony.workers]) despawnAnt(world, id, { cause: 'starvation' });
+    addAnts(world, colony, 2, 'larva');
+    queenHome(world, colony);
+    for (const id of colony.larvae) world.ants.lastMealTick[id] = world.tick - 1;
+    const need = queenStoresNeedFp(world, colony);
+    setPoolFoodForTest(world, colony, need - 1);
+    expect(eggStep(world, colony)).toBe(false);
+    setPoolFoodForTest(world, colony, need);
+    expect(eggStep(world, colony)).toBe(true);
+  });
+});
+
+describe('#413 — storageHintCondition: what the queen needs now against capacity', () => {
   it('the opening stall (one larder near full, 3 brood waiting) is blocked; #395 missed it', () => {
     const { world, colony } = stall();
-    const reserve = eggReserveFp(world, colony);
-    expect(reserve).toBe(QUEEN_FP + 4 * LARVA_FP + START_WORKERS * WORKER_FP);
+    expect(eggReserveFp(world, colony)).toBe(QUEEN_FP + 4 * LARVA_FP + START_WORKERS * WORKER_FP);
     expect(colonyFoodCapacity(colony)).toBe(ONE_LARDER);
-    expect(reserve).toBeGreaterThan(ONE_LARDER);
+    expect(queenStoresNeedFp(world, colony)).toBeGreaterThan(ONE_LARDER);
     expect(colonyFoodTotal(world, colony)).toBe(26 * FP_ONE);
     // The #395 trigger: storage covers the reserve with no brood waiting.
     expect(eggReserveStorageShortfallFp(world, colony)).toBe(0);
@@ -194,36 +263,43 @@ describe('#413 — storageHintCondition: the reserve the queen needs now against
 
   it('a larder with room being filled is covered, however low the stores (a wait for food)', () => {
     const { world, colony, larder } = stall();
-    mature(colony); // two eggs: the reserve (24.2 food) fits in the larder
-    setPoolFoodForTest(world, colony, 5 * FP_ONE);
-    setChamberStockForTest(world, colony, larder, 0);
-    expect(eggReserveFp(world, colony)).toBeLessThanOrEqual(ONE_LARDER);
-    expect(colonyFoodTotal(world, colony)).toBeLessThan(eggReserveFp(world, colony));
+    mature(colony); // two eggs: the need (24.4 food) fits in the larder
+    setStores(world, colony, larder, 5 * FP_ONE);
+    expect(queenStoresNeedFp(world, colony)).toBeLessThanOrEqual(ONE_LARDER);
+    expect(colonyFoodTotal(world, colony)).toBeLessThan(queenStoresNeedFp(world, colony));
     expect(storageHintCondition(world, PLAYER_COLONY_ID)).toBe('covered');
   });
 
-  it('the edge: a reserve exactly at capacity is covered, one worker more is blocked', () => {
+  it('a reserve exactly at capacity is blocked: the queen eats before the gate reads it', () => {
     const { world, colony } = scenario();
     readyToLay(world, colony);
-    addChamber(world, colony, ChamberType.FoodStorage);
+    const larder = addChamber(world, colony, ChamberType.FoodStorage);
     addAnts(world, colony, 1, 'egg');
     // QUEEN_FP + 2 larvae' worth + W workers = one larder's capacity, exactly.
     const workers = (ONE_LARDER - QUEEN_FP - 2 * LARVA_FP) / WORKER_FP;
     expect(Number.isInteger(workers)).toBe(true);
-    addAnts(world, colony, workers - START_WORKERS);
+    const extra = addAnts(world, colony, workers - START_WORKERS);
     expect(eggReserveFp(world, colony)).toBe(ONE_LARDER);
-    expect(storageHintCondition(world, PLAYER_COLONY_ID)).toBe('covered');
-    addAnts(world, colony, 1);
     expect(storageHintCondition(world, PLAYER_COLONY_ID)).toBe('blocked');
+    // The sim agrees: with the stores full she never lays (her meal comes out first).
+    queenHome(world, colony);
+    for (const id of colony.workers) world.ants.lastMealTick[id] = world.tick - 1;
+    setStores(world, colony, larder, ONE_LARDER);
+    expect(eggStep(world, colony)).toBe(false);
+    // One worker fewer: covered, and a full larder lets her lay.
+    despawnAnt(world, extra[0]!, { cause: 'starvation' });
+    expect(storageHintCondition(world, PLAYER_COLONY_ID)).toBe('covered');
+    setStores(world, colony, larder, ONE_LARDER);
+    expect(eggStep(world, colony)).toBe(true);
   });
 
-  it('stores at the reserve are covered whatever capacity says: she is not held back', () => {
+  it('stores at the need are covered whatever capacity says: she is not held back', () => {
     const { world, colony, larder } = stall();
     // Only the test setter can push the stores past capacity: all of them in the pool.
     setChamberStockForTest(world, colony, larder, 0);
-    setPoolFoodForTest(world, colony, eggReserveFp(world, colony));
+    setPoolFoodForTest(world, colony, queenStoresNeedFp(world, colony));
     expect(storageHintCondition(world, PLAYER_COLONY_ID)).toBe('covered');
-    setPoolFoodForTest(world, colony, eggReserveFp(world, colony) - 1);
+    setPoolFoodForTest(world, colony, queenStoresNeedFp(world, colony) - 1);
     expect(storageHintCondition(world, PLAYER_COLONY_ID)).toBe('blocked');
   });
 
@@ -235,9 +311,9 @@ describe('#413 — storageHintCondition: the reserve the queen needs now against
 
   it('a brood stall past one more larder needs two designated', () => {
     const { world, colony } = stall();
-    // Five more eggs: the reserve tops the larder by more than one more chamber.
+    // Five more eggs: the need tops the larder by more than one more chamber.
     addAnts(world, colony, 5, 'egg');
-    expect(eggReserveFp(world, colony) - ONE_LARDER).toBeGreaterThan(FOOD_CHAMBER_CAPACITY);
+    expect(queenStoresNeedFp(world, colony) - ONE_LARDER).toBeGreaterThan(FOOD_CHAMBER_CAPACITY);
     pendStorage(world, 30);
     expect(storageHintCondition(world, PLAYER_COLONY_ID)).toBe('blocked');
     pendStorage(world, 36);
@@ -263,19 +339,29 @@ describe('#413 — advanceStorageHint: copy, once per stall, cooldown', () => {
     expect(run(s, world, DWELL, 3 * DWELL)).toEqual([`${DWELL}:${FULL}`]);
   });
 
-  it('never fires while a larder with room is filled up to the reserve', () => {
+  it('a stall with the stores under 3/4 full says the stores are too small', () => {
+    const { world, colony, larder } = stall();
+    // 21 of 28 food is 3/4 exactly: still "full"; one fp under is not.
+    setStores(world, colony, larder, 21 * FP_ONE);
+    expect(run(createStorageHintState(), world, 0, DWELL)).toEqual([`${DWELL}:${FULL}`]);
+    resetCaptions();
+    setStores(world, colony, larder, 21 * FP_ONE - 1);
+    expect(run(createStorageHintState(), world, 0, DWELL)).toEqual([`${DWELL}:${SMALL}`]);
+    resetCaptions();
+    setStores(world, colony, larder, 0); // a famine, a raid
+    expect(run(createStorageHintState(), world, 0, DWELL)).toEqual([`${DWELL}:${SMALL}`]);
+  });
+
+  it('never fires while a larder with room is filled up to the need', () => {
     const { world, colony, larder } = stall();
     mature(colony);
-    const reserve = eggReserveFp(world, colony);
+    const need = queenStoresNeedFp(world, colony);
     const s = createStorageHintState();
-    // Foragers bring the stores from 5 food to just under the reserve over 4000 ticks:
+    // Foragers bring the stores from 5 food to just under the need over 4000 ticks:
     // the queen is held back the whole time, storage never.
     const from = 5 * FP_ONE;
     for (let t = 0; t <= 4000; t++) {
-      const stores = from + Math.floor(((reserve - 1 - from) * t) / 4000);
-      const pool = Math.min(stores, BASE_FOOD_STORAGE_CAPACITY);
-      setPoolFoodForTest(world, colony, pool);
-      setChamberStockForTest(world, colony, larder, stores - pool);
+      setStores(world, colony, larder, from + Math.floor(((need - 1 - from) * t) / 4000));
       expect(run(s, world, t, t)).toEqual([]);
       expect(queenStoresWait(world, PLAYER_COLONY_ID)?.capped).toBe(false);
     }
@@ -304,7 +390,7 @@ describe('#413 — advanceStorageHint: copy, once per stall, cooldown', () => {
     const { world, colony } = stall();
     const s = createStorageHintState();
     expect(run(s, world, 0, DWELL)).toEqual([`${DWELL}:${FULL}`]);
-    // Two brood mature: storage covers the reserve for the re-arm time (the stall clears).
+    // Two brood mature: storage covers the need for the re-arm time (the stall clears).
     mature(colony);
     mature(colony);
     expect(run(s, world, DWELL + 1, DWELL + 1 + REARM)).toEqual([]);
@@ -314,6 +400,28 @@ describe('#413 — advanceStorageHint: copy, once per stall, cooldown', () => {
     const due = DWELL + COOLDOWN;
     expect(due).toBeGreaterThan(back + DWELL);
     expect(run(s, world, back, due - 1)).toEqual([]);
+    expect(run(s, world, due, due + 3 * DWELL)).toEqual([`${due}:${FULL}`]);
+  });
+
+  it('told to build the first larder, a player who does is told again at the next stall', () => {
+    const { world, colony } = scenario();
+    readyToLay(world, colony);
+    const s = createStorageHintState();
+    expect(run(s, world, 0, DWELL)).toEqual([`${DWELL}:${NO_LARDER_TEXT}`]);
+    // The player designates a larder; it is dug and completes at tick 900.
+    pendStorage(world, 30);
+    expect(run(s, world, DWELL + 1, 899)).toEqual([]);
+    delete world.pendingChambers[`${PLAYER_COLONY_ID}:30:9`];
+    const larder = addChamber(world, colony, ChamberType.FoodStorage);
+    // The queen lays her three eggs within 300 ticks (less than the re-arm time): no
+    // long covered spell, but the larder itself clears the stall the hint was about.
+    expect(run(s, world, 900, 1199)).toEqual([]);
+    addAnts(world, colony, 3, 'egg');
+    setStores(world, colony, larder, 26 * FP_ONE);
+    expect(storageHintCondition(world, PLAYER_COLONY_ID)).toBe('blocked');
+    const due = DWELL + COOLDOWN; // the cooldown still holds it until then
+    expect(due).toBeGreaterThan(1200 + DWELL);
+    expect(run(s, world, 1200, due - 1)).toEqual([]);
     expect(run(s, world, due, due + 3 * DWELL)).toEqual([`${due}:${FULL}`]);
   });
 
@@ -366,82 +474,37 @@ describe('#413 — queenStoresWait / formatQueenStoresLine: "Waiting for stores"
     expect(queenStoresWait(world, PLAYER_COLONY_ID)).toBeNull();
   });
 
-  it('null before V70 (no egg reserve gates her)', () => {
-    const { world, colony } = scenario(SIM_VERSION_V69_FOOD_FAIRNESS);
-    readyToLay(world, colony);
-    expect(queenStoresWait(world, PLAYER_COLONY_ID)).toBeNull();
-  });
-
-  it('the stall: the stores against the reserve, capped, as the HUD rounds them', () => {
+  it('the stall: the stores against the need, capped, as the HUD rounds them', () => {
     const { world } = stall();
     const wait = queenStoresWait(world, PLAYER_COLONY_ID)!;
-    // 26 food stored; the reserve, 28.875 food, reads 29.
-    expect(wait).toEqual({ storedFood: 26, reserveFood: 29, capped: true });
+    // 26 food stored; the need, 28.88 food, reads 29.
+    expect(wait).toEqual({ storedFood: 26, needFood: 29, capped: true });
     expect(formatQueenStoresLine(wait)).toBe('Waiting for stores: 26/29');
   });
 
   it('a wait the larder can hold is not capped', () => {
     const { world, colony, larder } = stall();
     mature(colony);
-    setChamberStockForTest(world, colony, larder, 0);
+    setStores(world, colony, larder, BASE_FOOD_STORAGE_CAPACITY);
     expect(queenStoresWait(world, PLAYER_COLONY_ID)).toEqual({
       storedFood: 8,
-      reserveFood: Math.ceil(eggReserveFp(world, colony) / FP_ONE),
+      needFood: Math.ceil(queenStoresNeedFp(world, colony) / FP_ONE),
       capped: false,
     });
   });
 
-  it('the stores always read below the reserve while she waits (floor against ceiling)', () => {
-    const { world, colony } = stall();
-    const reserve = eggReserveFp(world, colony);
-    for (const stores of [reserve - 1, reserve - FP_ONE, reserve - FP_ONE - 1, 0]) {
-      setPoolFoodForTest(world, colony, stores);
-      for (const ch of colony.chambers) {
-        if (ch.chamberType === ChamberType.FoodStorage)
-          setChamberStockForTest(world, colony, ch, 0);
-      }
+  it('shown exactly while the stores are short of the need, always reading below it', () => {
+    const { world, colony, larder } = stall();
+    const need = queenStoresNeedFp(world, colony);
+    for (const stores of [0, need - FP_ONE - 1, need - FP_ONE, need - 1]) {
+      setStores(world, colony, larder, stores);
       const wait = queenStoresWait(world, PLAYER_COLONY_ID)!;
       expect(wait.storedFood).toBe(stores >> FP_SHIFT);
-      expect(wait.storedFood).toBeLessThan(wait.reserveFood);
+      expect(wait.storedFood).toBeLessThan(wait.needFood);
     }
-    // A reserve of whole food reads as itself: the queen, two larvae' worth (one egg
-    // and the next) and one worker come to exactly 19 food.
-    const { world: w2, colony: c2 } = scenario();
-    readyToLay(w2, c2);
-    for (const id of c2.workers.slice(1)) despawnAnt(w2, id, { cause: 'starvation' });
-    addAnts(w2, c2, 1, 'egg');
-    expect(eggReserveFp(w2, c2)).toBe(QUEEN_FP + 2 * LARVA_FP + WORKER_FP);
-    expect(eggReserveFp(w2, c2)).toBe(19 * FP_ONE);
-    setPoolFoodForTest(w2, c2, 19 * FP_ONE - 1);
-    expect(queenStoresWait(w2, PLAYER_COLONY_ID)).toEqual({
-      storedFood: 18,
-      reserveFood: 19,
-      capped: true, // the pool alone holds 8
-    });
-    setPoolFoodForTest(w2, c2, 19 * FP_ONE);
-    expect(queenStoresWait(w2, PLAYER_COLONY_ID)).toBeNull();
-  });
-
-  it('matches the sim: shown exactly while the egg gate holds her back', () => {
-    const { world, colony } = scenario();
-    readyToLay(world, colony);
-    // Every other egg gate open: the queen at home in her Queen chamber (tiles 20..23 x
-    // 10..12) and her interval long past.
-    const q = colony.queenEntityId;
-    world.ants.zone[q] = Zone.Underground;
-    world.ants.posX[q] = 21 << FP_SHIFT;
-    world.ants.posY[q] = 11 << FP_SHIFT;
-    colony.queenLastEggTick = 0;
-    // eslint-disable-next-line no-restricted-syntax -- test fixture: stage the world tick
-    world.tick = 100_000;
-    const reserve = eggReserveFp(world, colony);
-    setPoolFoodForTest(world, colony, reserve - 1);
-    expect(queenStoresWait(world, PLAYER_COLONY_ID)).not.toBeNull();
-    tickQueenEggProduction(world, colony);
-    expect(colony.eggCount).toBe(0);
-    setPoolFoodForTest(world, colony, reserve);
+    // Only the test setter can reach the need past capacity.
+    setChamberStockForTest(world, colony, larder, 0);
+    setPoolFoodForTest(world, colony, need);
     expect(queenStoresWait(world, PLAYER_COLONY_ID)).toBeNull();
-    tickQueenEggProduction(world, colony);
-    expect(colony.eggCount).toBe(1);
   });
 });

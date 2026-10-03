@@ -237,6 +237,7 @@ import { advanceQueenDanger, createQueenDangerState } from './queen-danger.js';
 import {
   advanceStorageHint,
   createStorageHintState,
+  queenStoresNeedFp,
   storageHintStale,
   STORAGE_HINT_HOLD_MS,
 } from './storage-hint.js';
@@ -497,10 +498,16 @@ declare global {
         rect: { x: number; y: number; w: number; h: number };
       } | null;
       /** #413 — the player colony's stores (colonyFoodTotal), storage capacity
-       *  (colonyFoodCapacity) and egg reserve (eggReserveFp), in fp, read-only, so a
-       *  spec can check the "Waiting for stores" line against what gates the queen.
-       *  Null before the first boot. Dev-build only. */
-      getPlayerStores?(): { foodTotalFp: number; capacityFp: number; eggReserveFp: number } | null;
+       *  (colonyFoodCapacity), egg reserve (eggReserveFp) and what the stores must
+       *  hold for the queen to lay next tick (storage-hint.ts queenStoresNeedFp), in
+       *  fp, read-only, so a spec can check the "Waiting for stores" line against what
+       *  gates the queen. Null before the first boot. Dev-build only. */
+      getPlayerStores?(): {
+        foodTotalFp: number;
+        capacityFp: number;
+        eggReserveFp: number;
+        needFp: number;
+      } | null;
       /** #372 — each caption this round, oldest first: the final full-opacity hold
        *  scheduled for it (ms) and whether it gave way. Dev-build only. */
       getCaptionHolds?(): { text: string; holdMs: number; yielded: boolean }[];
@@ -921,6 +928,7 @@ export class GameScene extends Phaser.Scene {
           foodTotalFp: colonyFoodTotal(this.world, c),
           capacityFp: colonyFoodCapacity(c),
           eggReserveFp: eggReserveFp(this.world, c),
+          needFp: queenStoresNeedFp(this.world, c),
         };
       },
       getCaptionHolds: () => this.getUIScene()?.captionHolds?.() ?? [],
@@ -1987,8 +1995,9 @@ export class GameScene extends Phaser.Scene {
    * (queued commands folded in). Called before the game loop drains, while Playing
    * or Paused (the caption clock runs on while paused, and a paused designation
    * has not drained: no caption of its own would evict the hint), and again after
-   * the hint's own step (a tick can unblock storage with no command: a worker lost
-   * lowers the reserve).
+   * the hint's own step (a tick can unblock storage with no command: a larva
+   * maturing, #413, or a worker lost lowers the reserve; a Food Storage chamber
+   * completing raises capacity).
    */
   private withdrawStaleStorageHint(): void {
     if (!this.world) return;

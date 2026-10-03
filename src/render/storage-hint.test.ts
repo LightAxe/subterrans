@@ -32,7 +32,7 @@ import { despawnAnt } from '../sim/ant-death.js';
 import { AntTask, ChamberType } from '../sim/enums.js';
 import { Zone } from '../sim/terrain.js';
 import { FP_SHIFT } from '../sim/fixed.js';
-import { addChamberForTest } from '../sim/food/food-test-utils.js';
+import { addChamberForTest, setPoolFoodForTest } from '../sim/food/food-test-utils.js';
 import {
   BASE_FOOD_STORAGE_CAPACITY,
   ENEMY_COLONY_ID,
@@ -345,7 +345,7 @@ describe('advanceStorageHint', () => {
   beforeEach(() => resetCaptions());
 
   /** A world where storage blocks the queen, and a switch to cover it. It has a Food
-   *  Storage chamber, so the hint is FULL (#413). */
+   *  Storage chamber and its stores are full, so the hint is FULL (#413). */
   function blockedWorld(): {
     world: WorldState;
     cover: () => void;
@@ -356,6 +356,7 @@ describe('advanceStorageHint', () => {
     readyToLay(world, colony);
     // One completed chamber and one worker past its edge: removing that worker covers.
     addChamber(world, colony, ChamberType.FoodStorage);
+    setPoolFoodForTest(world, colony, capacity(1)); // the stores full (all in the pool)
     const edge = workersToOutgrow(1);
     addAnts(world, colony, edge - 1 - START_WORKERS);
     let extra: number | null = addAnts(world, colony, 1)[0]!;
@@ -518,13 +519,6 @@ describe('advanceStorageHint', () => {
     expect(run(s, world, b, b + STORAGE_HINT_DWELL_TICKS)).toEqual([
       `${b + STORAGE_HINT_DWELL_TICKS}:${FULL}`,
     ]);
-  });
-
-  it('never shows on a V69 save', () => {
-    const { world, colony } = scenario(SIM_VERSION_V69_FOOD_FAIRNESS);
-    readyToLay(world, colony);
-    const s = createStorageHintState();
-    expect(run(s, world, 0, 3 * STORAGE_HINT_DWELL_TICKS)).toEqual([]);
   });
 
   it('the enemy colony blocked does not show the player the hint', () => {

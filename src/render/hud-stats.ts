@@ -97,12 +97,14 @@ export const HUD_STATS_LAYOUT = {
     yOffset: 13, // matches row 2
   },
   // #413 — the queen's "Waiting for stores" line (storage-hint.ts queenStoresWait):
-  // its own dark strip just under the stats rect, sized to the 10px text, shown only
-  // while the egg reserve holds her back.
+  // its own dark strip just under the stats rect, sized to its text, shown only while
+  // the egg reserve holds her back. 9px: a sub-line of the stats, and narrow enough
+  // that a three-digit line ends left of the widest caption at the top.
   queenStores: {
     gapY: 2, // below the stats rect's bottom edge
     h: 13,
     textInset: 4, // the text's left and right padding inside the strip
+    fontSize: '9px',
   },
 } as const;
 

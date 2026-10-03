@@ -699,6 +699,7 @@ export class UIScene extends Phaser.Scene {
   // colour and strip as last drawn (null while hidden; read via
   // __phase9_test.getQueenStoresLine()).
   private queenStoresText!: Phaser.GameObjects.Text;
+  private queenStoresColor: string = HUD_STATS_COLORS.queenStoresWaitingCss;
   private queenStoresShown: { text: string; color: string; rect: HudRect } | null = null;
   private triangleLabels!: Phaser.GameObjects.Text[];
   private viewToggleText!: Phaser.GameObjects.Text;
@@ -882,10 +883,11 @@ export class UIScene extends Phaser.Scene {
     this.queenLabelText.setScrollFactor(0);
 
     // #413 — the queen's "Waiting for stores" line, on its own strip under the
-    // stats rect; placed, coloured and shown per frame in update().
+    // stats rect; placed, coloured and shown per frame in update(). A size below the
+    // stats' 10px: a sub-line, and narrow enough to end left of the top captions.
     this.queenStoresText = this.add.text(STATS_TEXT_X, STATS_ROW2_Y, '', {
       color: HUD_STATS_COLORS.queenStoresWaitingCss,
-      fontSize: '10px',
+      fontSize: HUD_STATS_LAYOUT.queenStores.fontSize,
       fontFamily: 'monospace',
     });
     this.queenStoresText.setScrollFactor(0);
@@ -1709,8 +1711,12 @@ export class UIScene extends Phaser.Scene {
       const color = storesWait.capped
         ? HUD_STATS_COLORS.queenStoresCappedCss
         : HUD_STATS_COLORS.queenStoresWaitingCss;
+      // setText is a no-op for the same text; setColor would re-render every frame.
       this.queenStoresText.setText(line);
-      this.queenStoresText.setColor(color);
+      if (color !== this.queenStoresColor) {
+        this.queenStoresText.setColor(color);
+        this.queenStoresColor = color;
+      }
       const strip = queenStoresRect(this.hud.STATS, this.queenStoresText.width);
       this.gfx.fillStyle(HUD_STATS_COLORS.background, HUD_STATS_COLORS.backgroundAlpha);
       this.gfx.fillRect(strip.x, strip.y, strip.w, strip.h);
@@ -1719,7 +1725,7 @@ export class UIScene extends Phaser.Scene {
         strip.y + 1,
       );
       this.queenStoresText.setVisible(true);
-      this.queenStoresShown = { text: line, color, rect: strip };
+      if (import.meta.env.DEV) this.queenStoresShown = { text: line, color, rect: strip };
     } else {
       this.queenStoresText.setVisible(false);
       this.queenStoresShown = null;
