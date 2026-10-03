@@ -1170,19 +1170,29 @@ export const HEAL_SAFE_TICKS = 100;
 /**
  * #400 (V71) — a fed, safe worker (fighters and nurses included) on its home ground
  * regains 1 HP on each tick that is a multiple of this: 16 → 20 (coming home) in
- * 8 s, a near-dead fighter back to full in ~40 s.
+ * 8 s, a near-dead fighter back to full in ~40 s. The queen heals at this rate too
+ * (QUEEN_HEAL_INTERVAL_TICKS, #398).
  */
 export const ANT_HEAL_INTERVAL_TICKS = 40;
 
 /**
- * #400 (V71) — the queen's healing: 1 HP on each tick that is a multiple of this, while
- * she is fed (ate this tick), safe and in her nest. Twice her starvation drain rate
- * (QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS), the ratio #375 tuned for V66's fed
- * regeneration against the AI's famines (40–90 ticks long, 60–150 apart; PR #386), so
- * a short hunger burst still heals back. Replaces V66's QUEEN_FED_HP_REGEN_INTERVAL_TICKS,
- * which also healed her mid-fight.
+ * #400 (V71), #398 — the queen's healing: 1 HP on each tick that is a multiple of this,
+ * while she is fed (ate this tick), safe and in her nest. #398 slowed it from 3 to the
+ * ant rate, so a strike that wounds her lasts: from 7 HP she needs up to
+ * (QUEEN_HP_HOME − 7) × 40 = 1720 ticks (86 s) to heal to full, once HEAL_SAFE_TICKS
+ * (5 s) have passed since the last blow — about 1½ minutes, where 3 took about 11 s —
+ * so an attack that follows within that time finds her still hurt. While the stores
+ * hold food she eats every tick (QUEEN_MEAL_INTERVAL_TICKS), so she is fed on every
+ * heal tick, whichever tick her meals resumed on (queen-starvation-drain.test.ts).
+ * Healing is now much slower than her starvation drain (1 HP per
+ * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS unfed ticks): a 30-tick famine (5 HP) takes up
+ * to 200 fed ticks to heal back. The old 3, twice the drain rate, was #375's ratio for
+ * the AI's frequent short famines at V66 (PR #386). At V71 they are rare: in a 20-seed
+ * both-AI probe for #398, 2 of 40 AI queens ever missed a meal, and the AI-economy
+ * sweep (Normal 200 seeds, both-AI 100) found no new queen starvation at 40.
+ * A bare balance retune: no simVersion bump (AGENTS.md "simVersion and saves").
  */
-export const QUEEN_HEAL_INTERVAL_TICKS = 3;
+export const QUEEN_HEAL_INTERVAL_TICKS = ANT_HEAL_INTERVAL_TICKS;
 
 /**
  * #400 (V71) — the spider's healing: 1 HP on each tick that is a multiple of this,
