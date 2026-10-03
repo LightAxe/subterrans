@@ -26,12 +26,7 @@ import {
   type RampageCaptionState,
   type RecurringCaptionSink,
 } from './recurring-captions.js';
-import {
-  SIM_VERSION_V67_NO_MATCH_TIMEOUT,
-  SIM_VERSION_V68_RAMPAGE_SHELTER,
-  type SpiderBehaviorState,
-  type WorldState,
-} from '../sim/types.js';
+import type { SpiderBehaviorState, WorldState } from '../sim/types.js';
 import { createScenario } from '../sim/scenario.js';
 import { rampageThreatens } from '../sim/ant/ant-system.js';
 import { spiderOnRampage } from '../sim/spider.js';
@@ -318,10 +313,9 @@ function setTick(world: WorldState, tick: number): void {
   world.tick = tick;
 }
 
-/** A seed-7 Normal world at `version` and tick T1, its spider hungry at its lair. */
-function spiderWorld(version: number = SIM_VERSION_V68_RAMPAGE_SHELTER): WorldState {
+/** A seed-7 Normal world at tick T1, its spider hungry at its lair. */
+function spiderWorld(): WorldState {
   const world = createScenario(7, 'Normal');
-  world.simVersion = version;
   setTick(world, T1);
   put(world, LAIR, 'Patrolling');
   return world;
@@ -625,49 +619,29 @@ describe('rampageThreatensViewer (#397)', () => {
     return out;
   }
 
-  it("from V68 it is the rampage shelter's own rampageThreatens", () => {
+  it("it is the rampage shelter's own rampageThreatens (V68)", () => {
+    // Closed entrances and the grace window included.
     let threats = 0;
     const w = spiderWorld();
-    for (const [tile, state, target, hunger] of cases()) {
-      put(w, tile, state, target, hunger);
-      for (const cid of [P, E]) {
-        const want = rampageThreatens(w, w.colonies[cid]!);
-        expect(rampageThreatensViewer(w, cid)).toBe(want);
-        if (want) threats++;
-      }
-    }
-    expect(threats).toBeGreaterThan(20); // not vacuous
-  });
-
-  it('below V68 (no shelter rule) it is that same test, without the version gate', () => {
-    // An older save: rampageThreatens is always false there, so the warning
-    // applies the rule itself. Parity with the V68 copy of the same world,
-    // closed entrances and the grace window included.
-    let threats = 0;
-    const old = spiderWorld(SIM_VERSION_V67_NO_MATCH_TIMEOUT);
-    const now = spiderWorld();
     for (const grace of [false, true]) {
       for (const closed of [false, true]) {
         for (const [tile, state, target, hunger] of cases()) {
-          for (const w of [old, now]) {
-            setTick(w, grace ? SPIDER_GRACE_TICKS - 1 : T1);
-            w.colonies[P]!.entrances[0]!.isOpen = !closed;
-            put(w, tile, state, target, hunger);
-          }
+          setTick(w, grace ? SPIDER_GRACE_TICKS - 1 : T1);
+          w.colonies[P]!.entrances[0]!.isOpen = !closed;
+          put(w, tile, state, target, hunger);
           for (const cid of [P, E]) {
-            expect(rampageThreatens(old, old.colonies[cid]!)).toBe(false);
-            const want = rampageThreatens(now, now.colonies[cid]!);
-            expect(rampageThreatensViewer(old, cid)).toBe(want);
+            const want = rampageThreatens(w, w.colonies[cid]!);
+            expect(rampageThreatensViewer(w, cid)).toBe(want);
             if (want) threats++;
           }
         }
       }
     }
-    expect(threats).toBeGreaterThan(20);
+    expect(threats).toBeGreaterThan(20); // not vacuous
   });
 
   it('a closed entrance is no threat; the camp target still is', () => {
-    const w = spiderWorld(SIM_VERSION_V67_NO_MATCH_TIMEOUT);
+    const w = spiderWorld();
     w.colonies[P]!.entrances[0]!.isOpen = false;
     put(w, P_DOOR, 'Hunting');
     expect(rampageThreatensViewer(w, P)).toBe(false);
