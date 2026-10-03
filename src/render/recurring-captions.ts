@@ -138,11 +138,9 @@ export function oweRampageCaption(
  * #397 — the spider on a rampage (spiderOnRampage) threatens colony
  * `viewerColonyId` by the rampage shelter's own threat rule (idle-reserve.ts
  * rampageThreatRule: camping, or on its way to camp, one of the colony's entrances,
- * or within RAMPAGE_THREAT_RADIUS_TILES of an open one). From V68 that is exactly
- * the sim's rampageThreatens, so the warning comes as that colony's idle workers
- * head underground. Below V68 (an older save, with no shelter rule, whose
- * rampageThreatens is always false) the same rule still warns. Reads only; any
- * colony may be the viewer (CLNY-08).
+ * or within RAMPAGE_THREAT_RADIUS_TILES of an open one). That is exactly the sim's
+ * rampageThreatens (V68), so the warning comes as that colony's idle workers head
+ * underground. Reads only; any colony may be the viewer (CLNY-08).
  */
 export function rampageThreatensViewer(world: WorldState, viewerColonyId: ColonyId): boolean {
   const colony = world.colonies[viewerColonyId];

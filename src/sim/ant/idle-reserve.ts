@@ -32,11 +32,7 @@
 // fields, a cache derived from the saved terrain). The mill wander is a hash of
 // (tick-bucket ^ antId) — no world.rngState draw.
 
-import {
-  SIM_VERSION_V65_ALARM_INVASION,
-  SIM_VERSION_V68_RAMPAGE_SHELTER,
-  type WorldState,
-} from '../types.js';
+import type { WorldState } from '../types.js';
 import { spiderOnRampage } from '../spider.js';
 import {
   SURFACE_GOAL_UNREACHED,
@@ -484,18 +480,17 @@ export function holdAlarmedCivilianAtShaft(
 
 /**
  * #377 (V68) — the rampage shelter's global gate: the spider is on a rampage
- * (spider.ts spiderOnRampage — out hunting hungry, until it eats or dies) and the
- * world is V68 or later. rampageThreatens (below) decides per colony; it is what step
+ * (spider.ts spiderOnRampage — out hunting hungry, until it eats or dies).
+ * rampageThreatens (below) decides per colony; it is what step
  * 10a (sheltering idle workers stay recruitable), step 15b (idle surface workers go
  * in, idle shelterers stay in) and step 16 (the routed dash, the hold at the shaft, a
  * holder's occupancy shift) read. The spider does not move or change state between
  * those steps (it ticks at 17.5), so 15b and 16 always read the same answer within a
  * tick; 10a can lag them by that tick when step 12 opens an entrance near the spider
- * (one tick of the V34 recruit skip for a shelterer 15b keeps in anyway). Always false
- * below V68.
+ * (one tick of the V34 recruit skip for a shelterer 15b keeps in anyway).
  */
 export function rampageShelterActive(world: WorldState): boolean {
-  return world.simVersion >= SIM_VERSION_V68_RAMPAGE_SHELTER && spiderOnRampage(world);
+  return spiderOnRampage(world);
 }
 
 /**
@@ -504,9 +499,8 @@ export function rampageShelterActive(world: WorldState): boolean {
  * colony's door (rampageThreatRule, below).
  * Only then does the rampage shelter apply to the colony — every V68 rule reads
  * this (steps 10a, 15b and 16), not rampageShelterActive — so a colony the spider is
- * not hunting keeps its idle reserve out, as at V67. Pure: the simVersion, tick and
- * difficulty, the spider's saved state, hunger and position, and the colony's
- * entrances. Always false below V68.
+ * not hunting keeps its idle reserve out. Pure: the tick and difficulty, the spider's
+ * saved state, hunger and position, and the colony's entrances.
  */
 export function rampageThreatens(world: WorldState, colony: ColonyRecord): boolean {
   return rampageShelterActive(world) && rampageThreatRule(world, colony);
@@ -521,10 +515,9 @@ export function rampageThreatens(world: WorldState, colony: ColonyRecord): boole
  *    whatever it is doing: chasing a straggler between camps (the camper's divert
  *    clears its target), hunting, patrolling hungry, or camping the other colony's
  *    door nearby.
- * No rampage gate and no simVersion gate: rampageThreatens adds the shelter's gate
- * (rampageShelterActive: V68 or later, and on a rampage), and the render-side rampage
- * warning (recurring-captions.ts) adds spiderOnRampage alone, so it warns on a
- * pre-V68 save too. The one place this geometry lives. Pure and side-effect-free;
+ * No rampage gate: rampageThreatens adds the shelter's gate (rampageShelterActive: on
+ * a rampage), and the render-side rampage warning (recurring-captions.ts) adds
+ * spiderOnRampage. The one place this geometry lives. Pure and side-effect-free;
  * false when there is no spider.
  */
 export function rampageThreatRule(world: WorldState, colony: ColonyRecord): boolean {
@@ -696,7 +689,7 @@ function setRampageShelterTarget(
  * surface goal field seeded at that entrance rather than the V34 flee dash's
  * straight line, which a wall between it and the door would pin; and it claims no
  * tile in the same-colony occupancy pass (ant-movement.ts claimsNoTile), so no
- * friend bumps it sideways off its way. Always false below V68.
+ * friend bumps it sideways off its way.
  */
 export function rampageShelterDashRoutes(world: WorldState, id: number): boolean {
   return world.ants.targetPosX[id] !== -1 && idleSurfaceShelterer(world, id, 0);
@@ -711,8 +704,7 @@ export function rampageShelterDashRoutes(world: WorldState, id: number): boolean
  * still claims its tile in the same-colony occupancy pass (ant-movement.ts
  * resolveSameColonyOccupancy), so a crowded reserve stays spread out instead of
  * stacking into the dense tiles the spider's hunt picks; but a friend's bump may move
- * it only to a tile no nearer the spider, and with none it stays. Always false below
- * V68.
+ * it only to a tile no nearer the spider, and with none it stays.
  */
 export function rampageShelterHolds(world: WorldState, id: number): boolean {
   return idleSurfaceShelterer(world, id, -1);
@@ -722,7 +714,7 @@ export function rampageShelterHolds(world: WorldState, id: number): boolean {
  * #377 / #393 (V68) — the test the dasher (rampageShelterDashRoutes, phase 0) and the
  * holder (rampageShelterHolds, phase -1) share, so the two can never drift apart: `id`
  * is an Idle worker on the surface at flee phase `phase`, of a colony whose alarm is off
- * and which the spider threatens. Always false below V68.
+ * and which the spider threatens.
  */
 function idleSurfaceShelterer(world: WorldState, id: number, phase: -1 | 0): boolean {
   const ants = world.ants;
@@ -799,14 +791,13 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
     // #322 (V49) — the alarm musters civilians home instead of freezing them.
     const alarmed = colony.alarmActive === true;
     // #377 (V68) — the spider on a rampage threatens this colony: its idle workers go
-    // in and stay in (see SIM_VERSION_V68_RAMPAGE_SHELTER). Always false below V68.
+    // in and stay in (see rampageThreatens).
     const threatened = rampageThreatens(world, colony);
     // ... by the rampage shelter's way in. Not while its alarm sounds: the alarm
     // already brings every civilian in and keeps its own V42/V49 rules for how.
     const rampageShelters = threatened && !alarmed;
     // #373 (V65) — an enemy ant is below ground in this colony's nest and it has a
     // shelterer below: build this tick's retreat field (read here and by step 16).
-    // Always false below V65.
     const invaded = computeNestRetreat(world, colony);
     const workers = colony.workers;
 
@@ -1069,11 +1060,7 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
         // A shelterer at the shaft top with nowhere to retreat to keeps the V34
         // poke-out below (the alarm, if on, still holds it there).
         if (tick >= phase) ants.fleeShelterUntilTick[id] = tick + SHELTER_COOLDOWN_TICKS;
-      } else if (
-        tick >= phase &&
-        world.simVersion >= SIM_VERSION_V65_ALARM_INVASION &&
-        tileY !== 0
-      ) {
+      } else if (tick >= phase && tileY !== 0) {
         // #373 (V65) — the invasion is over and this shelterer retreated: it is
         // below the shaft-top row (row 0), where a shelterer otherwise always is —
         // the descent and the alarm's hold both put it there, the shaft top is
@@ -1426,7 +1413,7 @@ function retreatRecord(world: WorldState, colonyId: number, cells: number): Nest
  * #373 (V65) — step 15b, first thing for `colony`: if an enemy ant stands below
  * ground in its nest and one of its workers shelters below, build this tick's
  * retreat field for it and return true (the nest is INVADED); otherwise return
- * false. Always false below V65.
+ * false.
  *
  *  1. `dist`: tunnel distance (BFS over walkable tiles) from the nearest intruder.
  *     A tile no intruder can reach is -1.
@@ -1440,7 +1427,6 @@ function retreatRecord(world: WorldState, colonyId: number, cells: number): Nest
  * A part with intruders but no chamber has no retreat tile (its tiles keep label -1).
  */
 export function computeNestRetreat(world: WorldState, colony: ColonyRecord): boolean {
-  if (world.simVersion < SIM_VERSION_V65_ALARM_INVASION) return false;
   const cid = colony.colonyId;
   const grid = world.undergroundGrids[cid];
   if (grid === undefined) return false;
@@ -1594,11 +1580,9 @@ function bfs(
  * cut at the invaders (RETREAT_CLEARANCE), so the way to the tile never runs
  * through or beside one: where it would, the shelterer's part has no chamber and
  * it holds. One already beside an invader steps away from it into a part. Always -1
- * below V65 and for anything but an Idle/Foraging ant on the flee timer
- * below ground.
+ * for anything but an Idle/Foraging ant on the flee timer below ground.
  */
 export function shelterRetreatDir(world: WorldState, id: number): number {
-  if (world.simVersion < SIM_VERSION_V65_ALARM_INVASION) return -1;
   if (!isOwnNestShelterer(world, id)) return -1;
   const ants = world.ants;
   const cid = ants.colonyId[id]!;
@@ -1635,10 +1619,9 @@ export function shelterRetreatDir(world: WorldState, id: number): number {
  * in the occupancy pass, whether it is stepping or has stopped. A shelterer that
  * stops in a tunnel (already farther than the retreat tile) would otherwise be
  * bumped back by every shelterer filing in behind it, and step onto the tile again,
- * every tick. Always false below V65.
+ * every tick.
  */
 export function shelterPassesThroughFriends(world: WorldState, id: number): boolean {
-  if (world.simVersion < SIM_VERSION_V65_ALARM_INVASION) return false;
   if (!isOwnNestShelterer(world, id)) return false;
   const rec = getScratch(world).nestRetreat.get(world.ants.colonyId[id]!);
   return rec !== undefined && rec.tick === world.tick;

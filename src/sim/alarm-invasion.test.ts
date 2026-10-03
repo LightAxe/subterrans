@@ -9,18 +9,13 @@
 //    they keep sheltering until the nest is clear, then a shelterer that retreated is
 //    released where it stands. With no intruder inside nothing changes.
 //
-// The state-space audit (alarm × invaders × worker position × ratio) runs every case
-// through tick() at V64 and at V65 and checks the V65 outcome is the recruitment or
-// the retreat where one should happen, and exactly the V64 outcome everywhere else.
-// The rules are pinned through tick() below it.
+// The state-space audit (alarm × invaders × worker position × ratio) runs through
+// tick() every case where a recruitment or a retreat should happen and checks it
+// does. The rules are pinned through tick() below it.
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
 import { createScenario } from './scenario.js';
-import {
-  allocateEntityId,
-  SIM_VERSION_V64_AUTO_DEFENCE,
-  SIM_VERSION_V65_ALARM_INVASION,
-} from './types.js';
+import { allocateEntityId } from './types.js';
 import type { WorldState } from './types.js';
 import type { ChamberRecord } from './colony/colony-store.js';
 import { initAnt } from './ant/ant-store.js';
@@ -42,8 +37,6 @@ import {
 
 const P = PLAYER_COLONY_ID;
 const E = ENEMY_COLONY_ID;
-const V64 = SIM_VERSION_V64_AUTO_DEFENCE;
-const V65 = SIM_VERSION_V65_ALARM_INVASION;
 /** Row of the nest's tunnel (the shaft runs down to it). */
 const TUNNEL_Y = 3;
 const center = (t: number): number => (t << FP_SHIFT) + (FP_ONE >> 1);
@@ -60,9 +53,8 @@ interface Nest {
  * colony) whose player nest has a shaft under its open entrance down to a tunnel
  * along TUNNEL_Y, from ax - 8 to ax + 12. No chambers yet (addChamber).
  */
-function nest(version: number): Nest {
+function nest(): Nest {
   const world = createScenario(7, 'Normal');
-  world.simVersion = version;
   world.spider = null;
   world.aiState = [];
   for (const cid of [P, E]) {
@@ -188,7 +180,7 @@ type Ratio = 'forage' | 'fight';
 
 type Expect = 'recruit' | 'retreat' | 'same';
 
-/** What V65 must do differently from V64 in this case (the rules above). */
+/** What the rules above make happen in this case ('same': neither applies). */
 function expected(alarm: Alarm, inv: Invaders, pos: Position, ratio: Ratio): Expect {
   // Every position is a recruitable worker under the alarm: Idle ones, and the
   // empty forager sheltering at the shaft top.
@@ -204,16 +196,14 @@ function expected(alarm: Alarm, inv: Invaders, pos: Position, ratio: Ratio): Exp
 const TICKS = 80;
 
 interface Run {
-  frames: string[];
   final: { task: number; zone: number; x: number; y: number; phase: number };
   taskAfterOne: number;
   phaseAfterOne: number;
   inChamber: boolean;
-  shaftX: number;
 }
 
-function runCase(version: number, alarm: Alarm, inv: Invaders, pos: Position, ratio: Ratio): Run {
-  const n = nest(version);
+function runCase(alarm: Alarm, inv: Invaders, pos: Position, ratio: Ratio): Run {
+  const n = nest();
   const { world, ax, ay } = n;
   const ch = addChamber(n, ax + 10, 2, 3, 3);
   const colony = world.colonies[P]!;
@@ -228,7 +218,6 @@ function runCase(version: number, alarm: Alarm, inv: Invaders, pos: Position, ra
   else if (pos === 'shaft') id = shelterer(world, ax, 0, until);
   else if (pos === 'shaftForager') id = shelterer(world, ax, 0, until, AntTask.Foraging);
   else id = spawn(world, P, ax + 11, 3, Zone.Underground);
-  const frames: string[] = [];
   let taskAfterOne = -1;
   let phaseAfterOne = 0;
   for (let t = 0; t < TICKS; t++) {
@@ -237,10 +226,8 @@ function runCase(version: number, alarm: Alarm, inv: Invaders, pos: Position, ra
       taskAfterOne = world.ants.task[id]!;
       phaseAfterOne = world.ants.fleeShelterUntilTick[id]!;
     }
-    frames.push(fingerprint(world, id));
   }
   return {
-    frames,
     final: {
       task: world.ants.task[id]!,
       zone: world.ants.zone[id]!,
@@ -251,11 +238,10 @@ function runCase(version: number, alarm: Alarm, inv: Invaders, pos: Position, ra
     taskAfterOne,
     phaseAfterOne,
     inChamber: world.ants.alive[id] === 1 && inChamber(world, id, ch),
-    shaftX: ax,
   };
 }
 
-describe('#373 (V65) — state-space audit: alarm × invaders × position × ratio, V64 vs V65', () => {
+describe('#373 (V65) — state-space audit: alarm × invaders × position × ratio', () => {
   const ALARMS: Alarm[] = ['on', 'off'];
   const INVADERS: Invaders[] = ['none', 'outside', 'inside'];
   const POSITIONS: Position[] = ['surface', 'shaft', 'shaftForager', 'deep'];
@@ -267,26 +253,20 @@ describe('#373 (V65) — state-space audit: alarm × invaders × position × rat
         for (const ratio of RATIOS) {
           const want = expected(alarm, inv, pos, ratio);
           tally[want] += 1;
+          // The cases where neither rule applies are the colony's ordinary behaviour,
+          // pinned by their own tests.
+          if (want === 'same') continue;
           it(`alarm ${alarm}, invaders ${inv}, ${pos}, ratio → ${ratio}: ${want}`, () => {
-            const v64 = runCase(V64, alarm, inv, pos, ratio);
-            const v65 = runCase(V65, alarm, inv, pos, ratio);
-            if (want === 'same') {
-              expect(v65.frames).toEqual(v64.frames);
-            } else if (want === 'recruit') {
-              // V65: a fighter on the first tick, its shelter (if any) over.
-              expect(v65.taskAfterOne).toBe(AntTask.Fighting);
-              expect(v65.phaseAfterOne).toBe(-1);
-              // V64: the alarm recruits nobody.
-              expect(v64.taskAfterOne).not.toBe(AntTask.Fighting);
+            const run = runCase(alarm, inv, pos, ratio);
+            if (want === 'recruit') {
+              // A fighter on the first tick, its shelter (if any) over.
+              expect(run.taskAfterOne).toBe(AntTask.Fighting);
+              expect(run.phaseAfterOne).toBe(-1);
             } else {
-              // V64: waits at the shaft top, sheltering.
-              expect(v64.final.zone).toBe(Zone.Underground);
-              expect([v64.final.x, v64.final.y]).toEqual([v64.shaftX, 0]);
-              expect(v64.final.phase).toBeGreaterThan(0);
-              // V65: in the chamber farthest from the intruder, still sheltering.
-              expect(v65.final.zone).toBe(Zone.Underground);
-              expect(v65.inChamber).toBe(true);
-              expect(v65.final.phase).toBeGreaterThan(0);
+              // In the chamber farthest from the intruder, still sheltering.
+              expect(run.final.zone).toBe(Zone.Underground);
+              expect(run.inChamber).toBe(true);
+              expect(run.final.phase).toBeGreaterThan(0);
             }
           }, 30_000);
         }
@@ -296,7 +276,6 @@ describe('#373 (V65) — state-space audit: alarm × invaders × position × rat
   it('the audit covers every class', () => {
     expect(tally.recruit).toBe(12); // alarm on × 3 invader states × 4 positions, ratio fight
     expect(tally.retreat).toBeGreaterThanOrEqual(4);
-    expect(tally.same).toBeGreaterThan(20);
   });
 });
 
@@ -305,8 +284,8 @@ describe('#373 (V65) — state-space audit: alarm × invaders × position × rat
 // ---------------------------------------------------------------------------
 
 describe('#373 (V65) — under the alarm the ratio still recruits fighters', () => {
-  function recruitWorld(version: number): { world: WorldState; ids: number[] } {
-    const n = nest(version);
+  function recruitWorld(): { world: WorldState; ids: number[] } {
+    const n = nest();
     const { world, ax, ay } = n;
     addChamber(n, ax + 10, 2, 3, 3);
     const colony = world.colonies[P]!;
@@ -324,7 +303,7 @@ describe('#373 (V65) — under the alarm the ratio still recruits fighters', () 
   }
 
   it('2:8 turns 8 of 10 into fighters, lowest id first, sheltering or not, and nothing else', () => {
-    const { world, ids } = recruitWorld(V65);
+    const { world, ids } = recruitWorld();
     // A leash wave the alarm recall parked on one sheltering forager.
     world.ants.searchWave[ids[6]!] = -(3 + 1);
     tick(world, []);
@@ -343,7 +322,7 @@ describe('#373 (V65) — under the alarm the ratio still recruits fighters', () 
   });
 
   it('a sheltering forager still carrying food is not recruited', () => {
-    const n = nest(V65);
+    const n = nest();
     const { world, ax } = n;
     world.colonies[P]!.alarmActive = true;
     world.colonies[P]!.targetRatio = { forage: 0, fight: 10 };
@@ -361,7 +340,7 @@ describe('#373 (V65) — under the alarm the ratio still recruits fighters', () 
   });
 
   it('forage demand under the alarm recruits nobody (the civilian roles wait)', () => {
-    const { world, ids } = recruitWorld(V65);
+    const { world, ids } = recruitWorld();
     world.colonies[P]!.targetRatio = { forage: 10, fight: 0 };
     tick(world, []);
     for (const id of ids) expect(world.ants.task[id]).not.toBe(AntTask.Fighting);
@@ -371,7 +350,7 @@ describe('#373 (V65) — under the alarm the ratio still recruits fighters', () 
   });
 
   it('a Mark with no digger at work does not cost the ratio a fighter', () => {
-    const n = nest(V65);
+    const n = nest();
     const { world, ax } = n;
     addChamber(n, ax + 10, 2, 3, 3);
     ugSet(world.undergroundGrids[P]!, ax + 13, TUNNEL_Y, UndergroundTileState.Marked);
@@ -387,7 +366,7 @@ describe('#373 (V65) — under the alarm the ratio still recruits fighters', () 
   });
 
   it('recruited shelterers with no intruder and no rally become sentries at their posts', () => {
-    const n = nest(V65);
+    const n = nest();
     const { world, ax } = n;
     addChamber(n, ax + 10, 2, 3, 3);
     const colony = world.colonies[P]!;
@@ -404,14 +383,8 @@ describe('#373 (V65) — under the alarm the ratio still recruits fighters', () 
     }
   });
 
-  it('pinned V64: under the alarm nobody is recruited', () => {
-    const { world, ids } = recruitWorld(V64);
-    tick(world, []);
-    for (const id of ids) expect(world.ants.task[id]).not.toBe(AntTask.Fighting);
-  });
-
   it('the new fighters join the defence: with an intruder below they hunt it, and it dies', () => {
-    const { world, ids } = recruitWorld(V65);
+    const { world, ids } = recruitWorld();
     const ent = world.colonies[P]!.entrances.find((e) => e.isOpen)!;
     const foe = intruder(world, ent.surfaceTileX - 6, TUNNEL_Y);
     let dead = -1;
@@ -430,26 +403,20 @@ describe('#373 (V65) — under the alarm the ratio still recruits fighters', () 
 
 describe('#373 (V65) — shelterers retreat from invaders in the nest', () => {
   it('to the chamber FARTHEST from the invaders, not the nearer one', () => {
-    for (const version of [V64, V65]) {
-      const n = nest(version);
-      const { world, ax } = n;
-      const near = addChamber(n, ax - 4, 4, 3, 2); // just below the tunnel, west
-      const far = addChamber(n, ax + 10, 2, 3, 3);
-      // The intruder is west of the shaft: the east chamber is the farther.
-      intruder(world, ax - 8, TUNNEL_Y);
-      const id = shelterer(world, ax, 0, world.tick + SHELTER_COOLDOWN_TICKS);
-      for (let t = 0; t < 60; t++) tick(world, []);
-      if (version === V65) {
-        expect(inChamber(world, id, far)).toBe(true);
-        expect(inChamber(world, id, near)).toBe(false);
-      } else {
-        expect([tileX(world, id), tileY(world, id)]).toEqual([ax, 0]);
-      }
-    }
+    const n = nest();
+    const { world, ax } = n;
+    const near = addChamber(n, ax - 4, 4, 3, 2); // just below the tunnel, west
+    const far = addChamber(n, ax + 10, 2, 3, 3);
+    // The intruder is west of the shaft: the east chamber is the farther.
+    intruder(world, ax - 8, TUNNEL_Y);
+    const id = shelterer(world, ax, 0, world.tick + SHELTER_COOLDOWN_TICKS);
+    for (let t = 0; t < 60; t++) tick(world, []);
+    expect(inChamber(world, id, far)).toBe(true);
+    expect(inChamber(world, id, near)).toBe(false);
   });
 
   it('and away from them when they come from the other side', () => {
-    const n = nest(V65);
+    const n = nest();
     const { world, ax } = n;
     const west = addChamber(n, ax - 8, 4, 3, 2);
     const east = addChamber(n, ax + 10, 2, 3, 3);
@@ -462,7 +429,7 @@ describe('#373 (V65) — shelterers retreat from invaders in the nest', () => {
 
   it('two chambers equally far: the one listed first', () => {
     for (const order of ['eastFirst', 'westFirst'] as const) {
-      const n = nest(V65);
+      const n = nest();
       const { world, ax } = n;
       // Mirror images about the shaft; the intruder at the foot of a dead end
       // straight below it.
@@ -481,7 +448,7 @@ describe('#373 (V65) — shelterers retreat from invaders in the nest', () => {
   });
 
   it('a shelterer already farther from the invaders than any chamber stays put', () => {
-    const n = nest(V65);
+    const n = nest();
     const { world, ax, ay } = n;
     // A second entrance B far east of the shaft, joined to the tunnel; the only
     // chamber lies between the intruder and B.
@@ -503,26 +470,27 @@ describe('#373 (V65) — shelterers retreat from invaders in the nest', () => {
   });
 
   it('workers not sheltering (a wanderer in a chamber near the invaders) and the queen do not move for it', () => {
-    const run = (version: number): string[] => {
-      const n = nest(version);
-      const { world, ax } = n;
-      addChamber(n, ax - 4, 4, 3, 2);
-      addChamber(n, ax + 10, 2, 3, 3);
-      intruder(world, ax - 8, TUNNEL_Y);
-      const wanderer = spawn(world, P, ax - 3, 4, Zone.Underground);
-      const queen = world.colonies[P]!.queenEntityId;
-      const frames: string[] = [];
-      for (let t = 0; t < 60; t++) {
-        tick(world, []);
-        frames.push(`${fingerprint(world, wanderer)}|${fingerprint(world, queen)}`);
-      }
-      return frames;
-    };
-    expect(run(V65)).toEqual(run(V64));
+    const n = nest();
+    const { world, ax } = n;
+    addChamber(n, ax - 4, 4, 3, 2);
+    const far = addChamber(n, ax + 10, 2, 3, 3);
+    intruder(world, ax - 8, TUNNEL_Y);
+    const wanderer = spawn(world, P, ax - 3, 4, Zone.Underground);
+    const queen = world.colonies[P]!.queenEntityId;
+    tick(world, []);
+    const queenAt = fingerprint(world, queen);
+    for (let t = 0; t < 60; t++) {
+      // Never a shelterer, so never on the retreat to the chamber farthest from the
+      // invader; the queen stays where she is.
+      expect(world.ants.fleeShelterUntilTick[wanderer]).toBe(-1);
+      expect(inChamber(world, wanderer, far)).toBe(false);
+      expect(fingerprint(world, queen)).toBe(queenAt);
+      tick(world, []);
+    }
   });
 
   it('each connected part of the nest to its own farthest chamber; a part with no intruder holds', () => {
-    const n = nest(V65);
+    const n = nest();
     const { world, ax, ay } = n;
     // Part 2: a separate shaft + tunnel at depth 8 under entrance B, not joined.
     const bx = ax + 30;
@@ -552,22 +520,20 @@ describe('#373 (V65) — shelterers retreat from invaders in the nest', () => {
   });
 
   it('with the invaders between the shaft and the chamber it holds', () => {
-    for (const version of [V64, V65]) {
-      const n = nest(version);
-      const { world, ax } = n;
-      const grid = world.undergroundGrids[P]!;
-      for (let x = ax + 13; x <= ax + 20; x++) ugSet(grid, x, TUNNEL_Y, UndergroundTileState.Open);
-      addChamber(n, ax + 18, 2, 3, 3);
-      intruder(world, ax + 5, TUNNEL_Y); // in the corridor, on the way to the chamber
-      const id = shelterer(world, ax, 0, world.tick + SHELTER_COOLDOWN_TICKS);
-      for (let t = 0; t < 60; t++) tick(world, []);
-      expect(world.ants.alive[id]).toBe(1);
-      expect([tileX(world, id), tileY(world, id)]).toEqual([ax, 0]);
-    }
+    const n = nest();
+    const { world, ax } = n;
+    const grid = world.undergroundGrids[P]!;
+    for (let x = ax + 13; x <= ax + 20; x++) ugSet(grid, x, TUNNEL_Y, UndergroundTileState.Open);
+    addChamber(n, ax + 18, 2, 3, 3);
+    intruder(world, ax + 5, TUNNEL_Y); // in the corridor, on the way to the chamber
+    const id = shelterer(world, ax, 0, world.tick + SHELTER_COOLDOWN_TICKS);
+    for (let t = 0; t < 60; t++) tick(world, []);
+    expect(world.ants.alive[id]).toBe(1);
+    expect([tileX(world, id), tileY(world, id)]).toEqual([ax, 0]);
   });
 
   it('a shelterer an invader comes up beside steps away from it, and on to the chamber', () => {
-    const n = nest(V65);
+    const n = nest();
     const { world, ax } = n;
     const far = addChamber(n, ax + 10, 2, 3, 3);
     // Mid-corridor, the invader one tile behind it (west), the way ahead clear.
@@ -579,7 +545,7 @@ describe('#373 (V65) — shelterers retreat from invaders in the nest', () => {
   });
 
   it('shelterers stopped in a one-wide tunnel are not bumped back and forth', () => {
-    const n = nest(V65);
+    const n = nest();
     const { world, ax } = n;
     // A loop: a second shaft B joined to the tunnel; the only chamber is nearer the
     // invader than B's shaft, so shelterers at B stay put, stacked on its shaft.
@@ -601,7 +567,7 @@ describe('#373 (V65) — shelterers retreat from invaders in the nest', () => {
   });
 
   it('several shelterers file down a one-wide shaft past a friend standing in it', () => {
-    const n = nest(V65);
+    const n = nest();
     const { world, ax } = n;
     const far = addChamber(n, ax + 10, 2, 3, 3);
     world.colonies[P]!.alarmActive = true;
@@ -617,7 +583,7 @@ describe('#373 (V65) — shelterers retreat from invaders in the nest', () => {
   });
 
   it('a part of the nest with an intruder but no chamber: the shelterer holds at the shaft top', () => {
-    const n = nest(V65);
+    const n = nest();
     const { world, ax } = n;
     intruder(world, ax - 6, TUNNEL_Y);
     const id = shelterer(world, ax, 0, world.tick + SHELTER_COOLDOWN_TICKS);
@@ -625,45 +591,39 @@ describe('#373 (V65) — shelterers retreat from invaders in the nest', () => {
     expect([tileX(world, id), tileY(world, id)]).toEqual([ax, 0]);
   });
 
-  it('a retreating shelterer does not poke out while the nest is invaded (V64 does)', () => {
-    for (const version of [V64, V65]) {
-      const n = nest(version);
-      const { world, ax } = n;
-      addChamber(n, ax + 10, 2, 3, 3);
-      intruder(world, ax - 6, TUNNEL_Y);
-      // Alarm off, the timer about to run out, the surface quiet: V34 releases it.
-      const id = shelterer(world, ax, 0, world.tick + 1);
-      for (let t = 0; t < 3; t++) tick(world, []);
-      if (version === V65) {
-        expect(world.ants.fleeShelterUntilTick[id]).toBeGreaterThan(world.tick);
-        expect(world.ants.zone[id]).toBe(Zone.Underground);
-        expect(tileY(world, id)).toBeGreaterThan(0);
-      } else {
-        expect(world.ants.fleeShelterUntilTick[id]).toBe(-1);
-      }
-    }
+  it('a retreating shelterer does not poke out while the nest is invaded', () => {
+    const n = nest();
+    const { world, ax } = n;
+    addChamber(n, ax + 10, 2, 3, 3);
+    intruder(world, ax - 6, TUNNEL_Y);
+    // Alarm off, the timer about to run out, the surface quiet: the V34 poke-out
+    // would release it.
+    const id = shelterer(world, ax, 0, world.tick + 1);
+    for (let t = 0; t < 3; t++) tick(world, []);
+    expect(world.ants.fleeShelterUntilTick[id]).toBeGreaterThan(world.tick);
+    expect(world.ants.zone[id]).toBe(Zone.Underground);
+    expect(tileY(world, id)).toBeGreaterThan(0);
   });
 
-  it('a shelterer at the shaft top with nowhere to retreat pokes out exactly as at V64', () => {
-    const run = (version: number): string[] => {
-      const n = nest(version);
-      const { world, ax } = n;
-      intruder(world, ax - 6, TUNNEL_Y); // no chamber: nowhere to retreat
-      const id = shelterer(world, ax, 0, world.tick + 1);
-      const frames: string[] = [];
-      for (let t = 0; t < 20; t++) {
-        tick(world, []);
-        frames.push(fingerprint(world, id));
-      }
-      return frames;
-    };
-    const v65 = run(V65);
-    expect(v65).toEqual(run(V64));
-    expect(v65.some((f) => f.split(',')[6] === '-1')).toBe(true); // it did poke out
+  it('a shelterer at the shaft top with nowhere to retreat pokes out when its timer runs out', () => {
+    const n = nest();
+    const { world, ax, ay } = n;
+    intruder(world, ax - 6, TUNNEL_Y); // no chamber: nowhere to retreat
+    const id = shelterer(world, ax, 0, world.tick + 1);
+    tick(world, []);
+    // At the shaft top, sheltering, until its timer is due...
+    expect(world.ants.zone[id]).toBe(Zone.Underground);
+    expect([tileX(world, id), tileY(world, id)]).toEqual([ax, 0]);
+    expect(world.ants.fleeShelterUntilTick[id]).toBeGreaterThan(0);
+    // ...then the V34 poke-out lets it up its own shaft: no retreat holds it below.
+    tick(world, []);
+    expect(world.ants.zone[id]).toBe(Zone.Surface);
+    expect([tileX(world, id), tileY(world, id)]).toEqual([ax, ay]);
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(-1);
   });
 
   it('the way to the chamber keeps clear of an invader beside it, not only on it', () => {
-    const n = nest(V65);
+    const n = nest();
     const { world, ax } = n;
     const grid = world.undergroundGrids[P]!;
     // The invader in a one-tile niche just off the corridor, the chamber beyond it
@@ -680,7 +640,7 @@ describe('#373 (V65) — shelterers retreat from invaders in the nest', () => {
 
   it('once the nest is clear a retreated shelterer stops sheltering where it stands', () => {
     for (const alarm of [true, false]) {
-      const n = nest(V65);
+      const n = nest();
       const { world, ax } = n;
       const far = addChamber(n, ax + 10, 2, 3, 3);
       world.colonies[P]!.alarmActive = alarm;
@@ -710,7 +670,7 @@ describe('#373 (V65) — shelterers retreat from invaders in the nest', () => {
   });
 
   it('a retreat field is read only on the tick it was built', () => {
-    const n = nest(V65);
+    const n = nest();
     const { world, ax } = n;
     addChamber(n, ax + 10, 2, 3, 3);
     intruder(world, ax - 6, TUNNEL_Y);
@@ -727,35 +687,31 @@ describe('#373 (V65) — shelterers retreat from invaders in the nest', () => {
     expect([world.ants.posX[id], world.ants.posY[id]]).not.toEqual([x, y]);
   });
 
-  it('pinned V64: a shelterer below the shaft-top row with no open entrance at its column stays sheltered', () => {
-    const n = nest(V64);
-    const { world } = n;
-    for (const e of world.colonies[P]!.entrances) e.isOpen = false;
-    const id = shelterer(world, 40, 20, 1);
-    world.tick = 200;
-    tickIdleReserveAndFlee(world);
-    expect(world.ants.fleeShelterUntilTick[id]).toBe(200 + SHELTER_COOLDOWN_TICKS);
-  });
-
-  it('with no intruder inside, alarm shelterers wait at the shaft top exactly as at V64', () => {
-    const run = (version: number): string[] => {
-      const n = nest(version);
-      const { world, ax, ay } = n;
-      addChamber(n, ax + 10, 2, 3, 3);
-      world.colonies[P]!.alarmActive = true;
-      spawn(world, E, ax - 6, ay, Zone.Surface, { task: AntTask.Fighting, speed: 0 });
-      const ids = [
-        shelterer(world, ax, 0, world.tick + 5),
-        spawn(world, P, ax + 4, ay, Zone.Surface),
-        spawn(world, P, ax + 11, 3, Zone.Underground),
-      ];
-      const frames: string[] = [];
-      for (let t = 0; t < 250; t++) {
-        tick(world, []);
-        frames.push(ids.map((i) => fingerprint(world, i)).join('|'));
+  it('with no intruder inside, alarm shelterers wait at the shaft top', () => {
+    const n = nest();
+    const { world, ax, ay } = n;
+    const ch = addChamber(n, ax + 10, 2, 3, 3);
+    world.colonies[P]!.alarmActive = true;
+    spawn(world, E, ax - 6, ay, Zone.Surface, { task: AntTask.Fighting, speed: 0 });
+    const atShaft = shelterer(world, ax, 0, world.tick + 5);
+    const musterer = spawn(world, P, ax + 4, ay, Zone.Surface);
+    const deep = spawn(world, P, ax + 11, 3, Zone.Underground);
+    let musterDown = -1;
+    for (let t = 0; t < 250; t++) {
+      tick(world, []);
+      if (musterDown < 0 && world.ants.zone[musterer] === Zone.Underground) musterDown = t;
+      // The alarm holds the shelterer at the shaft top for the whole run; the
+      // musterer walks in and is held there with it. Neither heads for the chamber.
+      for (const id of musterDown >= 0 ? [atShaft, musterer] : [atShaft]) {
+        expect(world.ants.zone[id]).toBe(Zone.Underground);
+        expect([tileX(world, id), tileY(world, id)]).toEqual([ax, 0]);
+        expect(world.ants.fleeShelterUntilTick[id]).toBeGreaterThan(0);
       }
-      return frames;
-    };
-    expect(run(V65)).toEqual(run(V64));
+      // The worker already deep is no shelterer and stays below in its chamber.
+      expect(world.ants.fleeShelterUntilTick[deep]).toBe(-1);
+      expect(inChamber(world, deep, ch)).toBe(true);
+    }
+    expect(musterDown).toBeGreaterThanOrEqual(0);
+    expect(musterDown).toBeLessThan(20);
   });
 });
