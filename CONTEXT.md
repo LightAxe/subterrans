@@ -207,7 +207,11 @@ wounds too — up to full, so a short hunger burst heals back but a long famine 
 kills. Since **#400 (simVersion V71)** she heals only while also safe from blows and
 in her nest, like every ant (**Health**, below): a queen still on the surface, before
 she founds her nest, does not heal, and her lower max HP there gives her a shorter
-famine (276 ticks from full).
+famine (276 ticks from full). Since **#398** (a balance retune, no simVersion bump)
+she heals at the same slow rate as every ant, 1 HP every 2 s, so a badly wounded
+queen stays wounded for a while: from 7 HP she takes about 1½ minutes to heal to
+full, where she used to take about 11 s, and an attack that follows within that time
+finds her still hurt.
 The HUD's queen bar is her HP out of her max where she stands. Larvae, workers and fighters still die outright at
 their starvation tick. A starved ant leaves
 no food behind. The spider keeps its own hunger clock and eats only its kills.

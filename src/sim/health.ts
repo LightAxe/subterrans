@@ -14,10 +14,11 @@
 //   - safe: not hit in the last HEAL_SAFE_TICKS ticks (`ants.lastHitTick`,
 //     `spider.lastHitTick`, stamped by combat.ts when a blow lands).
 // Ants (workers, fighters, nurses and the queen) heal only on their home ground,
-// 1 HP on each tick that is a multiple of their interval (ANT_HEAL_INTERVAL_TICKS,
-// QUEEN_HEAL_INTERVAL_TICKS). The spider has no home: it heals anywhere, every
-// SPIDER_HEAL_INTERVAL_TICKS. Brood (eggs and larvae) neither heal nor clamp: they
-// never leave the nest, and an egg is laid at its full home HP.
+// 1 HP on each tick that is a multiple of their interval (ANT_HEAL_INTERVAL_TICKS;
+// the queen's QUEEN_HEAL_INTERVAL_TICKS is the same rate since #398, so from 7 HP
+// she takes about 1½ minutes to heal to full). The spider has no home: it heals
+// anywhere, every SPIDER_HEAL_INTERVAL_TICKS. Brood (eggs and larvae) neither heal
+// nor clamp: they never leave the nest, and an egg is laid at its full home HP.
 //
 // Step 16f of tick(): after movement (so a step out of the nest has already lowered
 // an ant's max) and before combat (so the fight sees the clamped HP); the fed check
