@@ -7,6 +7,7 @@ import {
   createQueenDangerState,
   stepQueenDanger,
   advanceQueenDanger,
+  noteQueenHit,
   noteQueenHp,
   QUEEN_DANGER_REARM_TICKS,
   QUEEN_DANGER_REARM_UNHURT_TICKS,
@@ -520,27 +521,18 @@ describe('#416 advanceQueenDanger against the sim: re-arms after 30 s unhurt, wh
   }, 30_000);
 });
 
-describe('#416 review: harm inside a multi-tick frame (seen before every sim tick)', () => {
+describe('#416 review: harm inside a frame or a tick (seen before every sim tick)', () => {
   beforeEach(() => resetCaptions());
 
-  it('a loss seen between frames (noteQueenHp) is harm, though a heal hides it by the frame', () => {
-    const s = createQueenDangerState();
-    frame(s, 30, true, 100, false);
-    noteQueenHp(s, 29, 101); // a drain
-    noteQueenHp(s, 29, 102);
-    noteQueenHp(s, 30, 103); // a meal and a heal tick
-    expect(stepQueenDanger(s, 30, true, false, 104)).toEqual({ hurt: true, rearm: false });
-    expect(s.lastHarmTick).toBe(101); // dated to the drain, not the frame
-    expect(stepQueenDanger(s, 30, true, false, 105).hurt).toBe(false); // reported once
-    // And the 30 s run from the drain.
-    expect(hold(s, 30, true, false, 106, 101 + QUEEN_DANGER_REARM_UNHURT_TICKS + 5)).toEqual([
-      101 + QUEEN_DANGER_REARM_UNHURT_TICKS,
-    ]);
-  });
-
-  it('a drain, a meal and a heal inside one frame: dated to the drain, so no early re-arm', () => {
-    // GameScene's wiring without Phaser: the game loop with beforeSimTick as its
-    // onBeforeTick, then advanceQueenDanger once per render frame.
+  /**
+   * GameScene's wiring without Phaser: the game loop with beforeSimTick as its
+   * onBeforeTick, then advanceQueenDanger once per render frame. The player's queen is
+   * staged in her nest at full home HP; the stores are full except on sim ticks in
+   * [unfedFrom, unfedTo]; and on each sim tick in `strikes` a 1-HP blow lands on her
+   * after the tick's own steps (fixture: as combat.ts applyDamage does at step 17,
+   * after healing at 16f — lower HP, stamp lastHitTick with that sim tick).
+   */
+  function loopHarness() {
     const world = createScenario(7, 'Normal');
     const colony = world.colonies[PLAYER_COLONY_ID]!;
     const q = stageQueenInNest(world, colony);
@@ -548,13 +540,19 @@ describe('#416 review: harm inside a multi-tick frame (seen before every sim tic
     const s = createQueenDangerState();
     const prev = createScenario(7, 'Normal');
     const rampage = createRampageCaptionState();
-    let unfedFrom = -1; // sim ticks [unfedFrom, unfedTo] run with the stores empty
-    let unfedTo = -1;
+    const food = { unfedFrom: -1, unfedTo: -1 };
+    const strikes = new Set<number>();
     const loop = createGameLoop(
       (w, cmds) => {
-        const empty = w.tick >= unfedFrom && w.tick <= unfedTo;
+        const simTick = w.tick;
+        const empty = simTick >= food.unfedFrom && simTick <= food.unfedTo;
         setColonyFoodForTest(w, colony, empty ? 0 : 2048);
-        return tick(w, cmds);
+        const outcome = tick(w, cmds);
+        if (strikes.has(simTick)) {
+          w.ants.hp[q] = w.ants.hp[q]! - 1;
+          w.ants.lastHitTick[q] = simTick;
+        }
+        return outcome;
       },
       world,
       { onBeforeTick: (w) => beforeSimTick(w, [], rampage, PLAYER_COLONY_ID, prev, s) },
@@ -571,39 +569,130 @@ describe('#416 review: harm inside a multi-tick frame (seen before every sim tic
     const runTo = (t: number): void => {
       while (world.tick < t) frameOf(1);
     };
-
     runTo(100); // past the round-start grace
     world.ants.hp[q] = 20; // fixture: a heavy blow (combat.ts applyDamage)
     world.ants.lastHitTick[q] = world.tick - 1;
     frameOf(1);
     expect(shown).toHaveLength(1);
-    const hit = s.lastHarmTick!; // the fixture's own tick (a sim blow is seen a tick later)
+    const hit = s.lastHarmTick!;
+    expect(hit).toBe(world.tick - 1); // seen before the next sim tick
+    /** The first heal tick at least `after` ticks past `from`. */
+    const healTickAfter = (from: number, after: number): number =>
+      (Math.floor((from + after) / QUEEN_HEAL_INTERVAL_TICKS) + 1) * QUEEN_HEAL_INTERVAL_TICKS;
+    return {
+      world,
+      q,
+      s,
+      food,
+      strikes,
+      shown,
+      hit,
+      frameOf,
+      runTo,
+      healTickAfter,
+      pulses: () => pulses,
+    };
+  }
+
+  it('a loss seen between frames (noteQueenHp) is harm, though a heal hides it by the frame', () => {
+    const s = createQueenDangerState();
+    frame(s, 30, true, 100, false);
+    noteQueenHp(s, 29, 101); // a drain
+    noteQueenHp(s, 29, 102);
+    noteQueenHp(s, 30, 103); // a meal and a heal tick
+    expect(stepQueenDanger(s, 30, true, false, 104)).toEqual({ hurt: true, rearm: false });
+    expect(s.lastHarmTick).toBe(101); // dated to the drain, not the frame
+    expect(stepQueenDanger(s, 30, true, false, 105).hurt).toBe(false); // reported once
+    // And the 30 s run from the drain.
+    expect(hold(s, 30, true, false, 106, 101 + QUEEN_DANGER_REARM_UNHURT_TICKS + 5)).toEqual([
+      101 + QUEEN_DANGER_REARM_UNHURT_TICKS,
+    ]);
+  });
+
+  it('a new last-hit tick (noteQueenHit) is harm, dated a tick after the blow, though her HP shows none', () => {
+    const s = createQueenDangerState();
+    noteQueenHit(s, 40); // the first look only records it (an old blow)
+    frame(s, 30, true, 100, false);
+    expect(s.lastHarmTick).toBeNull();
+    noteQueenHit(s, 40); // unchanged: no new blow
+    expect(stepQueenDanger(s, 30, true, false, 101).hurt).toBe(false);
+    noteQueenHit(s, 150); // a blow on sim tick 150, its HP healed back in the same tick
+    expect(stepQueenDanger(s, 30, true, false, 151)).toEqual({ hurt: true, rearm: false });
+    expect(s.lastHarmTick).toBe(151);
+    noteQueenHit(s, 150);
+    expect(stepQueenDanger(s, 30, true, false, 152).hurt).toBe(false); // reported once
+    expect(hold(s, 30, true, false, 153, 151 + QUEEN_DANGER_REARM_UNHURT_TICKS + 5)).toEqual([
+      151 + QUEEN_DANGER_REARM_UNHURT_TICKS,
+    ]);
+  });
+
+  it('a drain, a meal and a heal inside one frame: dated to the drain, so no early re-arm', () => {
+    const h = loopHarness();
     // A heal tick H long after the blow (she is safe and healing again). The stores
     // run empty for the QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS sim ticks up to D = H - 2,
     // so she is drained 1 HP on D, eats on H - 1 and H, and heals 1 HP on H.
-    const H = (Math.floor((hit + 300) / QUEEN_HEAL_INTERVAL_TICKS) + 1) * QUEEN_HEAL_INTERVAL_TICKS;
+    const H = h.healTickAfter(h.hit, 300);
     const D = H - 2;
-    unfedFrom = D - QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS + 1;
-    unfedTo = D;
-    runTo(H - MAX_CATCHUP_TICKS + 1);
-    const hpBefore = world.ants.hp[q];
+    h.food.unfedFrom = D - QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS + 1;
+    h.food.unfedTo = D;
+    h.runTo(H - MAX_CATCHUP_TICKS + 1);
+    const hpBefore = h.world.ants.hp[h.q];
     expect(hpBefore).toBeLessThan(QUEEN_HP_HOME - 5);
-    frameOf(MAX_CATCHUP_TICKS); // one frame: sim ticks H - 4 .. H
-    expect(world.tick).toBe(H + 1);
-    expect(world.ants.hp[q]).toBe(hpBefore); // the frame's end hides the drain…
-    expect(s.lastHarmTick).toBe(D + 1); // …but it was seen, before sim tick D + 1
-    expect(pulses).toBe(2);
-    expect(shown).toHaveLength(1); // same danger spell
+    h.frameOf(MAX_CATCHUP_TICKS); // one frame: sim ticks H - 4 .. H
+    expect(h.world.tick).toBe(H + 1);
+    expect(h.world.ants.hp[h.q]).toBe(hpBefore); // the frame's end hides the drain…
+    expect(h.s.lastHarmTick).toBe(D + 1); // …but it was seen, before sim tick D + 1
+    expect(h.pulses()).toBe(2);
+    expect(h.shown).toHaveLength(1); // same danger spell
     // No re-arm 30 s after the blow…
-    runTo(hit + QUEEN_DANGER_REARM_UNHURT_TICKS + 1);
-    expect(s.lastHarmTick).toBe(D + 1);
+    h.runTo(h.hit + QUEEN_DANGER_REARM_UNHURT_TICKS + 1);
+    expect(h.s.lastHarmTick).toBe(D + 1);
     // …only 30 s after the hidden drain, while she is still wounded.
-    runTo(D + 1 + QUEEN_DANGER_REARM_UNHURT_TICKS - 1);
-    expect(s.lastHarmTick).toBe(D + 1);
-    frameOf(1);
-    expect(s.lastHarmTick).toBeNull();
-    expect(world.ants.hp[q]).toBeLessThan(QUEEN_HP_HOME);
-    expect(world.ants.alive[q]).toBe(1);
+    h.runTo(D + 1 + QUEEN_DANGER_REARM_UNHURT_TICKS - 1);
+    expect(h.s.lastHarmTick).toBe(D + 1);
+    h.frameOf(1);
+    expect(h.s.lastHarmTick).toBeNull();
+    expect(h.world.ants.hp[h.q]).toBeLessThan(QUEEN_HP_HOME);
+    expect(h.world.ants.alive[h.q]).toBe(1);
+    // #227: a long run of full-scenario ticks — explicit generous timeout so the local
+    // coverage gate passes under v8 instrumentation.
+  }, 30_000);
+
+  it('a heal and a 1-HP blow in one tick: her HP is unchanged, yet it is harm — pulsed, dated, announced when armed', () => {
+    const h = loopHarness();
+    // A heal tick H long after the blow: she heals 1 HP at step 16f, then a 1-HP blow
+    // lands (a worker's, COMBAT_DAMAGE_WORKER) — the tick leaves her HP as it was.
+    const H = h.healTickAfter(h.hit, 300);
+    h.strikes.add(H);
+    h.runTo(H);
+    const hpBefore = h.world.ants.hp[h.q];
+    expect(hpBefore).toBeLessThan(QUEEN_HP_HOME - 5);
+    h.frameOf(1); // sim tick H
+    expect(h.world.ants.hp[h.q]).toBe(hpBefore); // no HP lost across the tick…
+    expect(h.world.ants.lastHitTick[h.q]).toBe(H);
+    expect(h.s.lastHarmTick).toBe(H + 1); // …but the blow is harm, seen after it
+    expect(h.pulses()).toBe(2); // pulsed for the new attack
+    expect(h.shown).toHaveLength(1); // not re-armed yet: same danger spell
+    // No re-arm 30 s after the first blow…
+    h.runTo(h.hit + QUEEN_DANGER_REARM_UNHURT_TICKS + 1);
+    expect(h.s.lastHarmTick).toBe(H + 1);
+    // …only 30 s after the hidden one, while she is still wounded.
+    h.runTo(H + 1 + QUEEN_DANGER_REARM_UNHURT_TICKS - 1);
+    expect(h.s.lastHarmTick).toBe(H + 1);
+    h.frameOf(1);
+    expect(h.s.lastHarmTick).toBeNull();
+    expect(h.world.ants.hp[h.q]).toBeLessThan(QUEEN_HP_HOME);
+    // Re-armed: the next hidden blow is announced.
+    const H2 = h.healTickAfter(h.world.tick, 0);
+    h.strikes.add(H2);
+    h.runTo(H2);
+    const hpBefore2 = h.world.ants.hp[h.q];
+    expect(hpBefore2).toBeLessThan(QUEEN_HP_HOME); // still wounded: she heals on H2
+    h.frameOf(1); // sim tick H2
+    expect(h.world.ants.hp[h.q]).toBe(hpBefore2);
+    expect(h.shown).toEqual([h.hit + 1, H2 + 1]);
+    expect(h.pulses()).toBe(3);
+    expect(h.world.ants.alive[h.q]).toBe(1);
     // #227: a long run of full-scenario ticks — explicit generous timeout so the local
     // coverage gate passes under v8 instrumentation.
   }, 30_000);

@@ -21,18 +21,20 @@
 //     that time unannounced. The same goes for a famine: once she eats again, a
 //     queen still wounded by it re-arms 30 s after its last drain, where up to #416
 //     she had to heal back to full first.
-// "Lost no HP" counts every HP loss this tracker sees: a blow (what the sim stamps
-// in ants.lastHitTick) and a starvation drain (which it does not stamp). So 30 s of
-// calm means no fight and no famine, and a fight or famine that keeps hurting her
-// never re-arms the caption.
+// "Lost no HP" means no HARM: every HP loss this tracker sees (a starvation drain,
+// which the sim does not stamp as a hit) and every blow, read from the sim's
+// ants.lastHitTick even when her HP shows none (#416 review: health.ts heals at
+// step 16f, before combat, so a heal tick and a 1-HP blow in one tick cancel out).
+// So 30 s of calm means no fight and no famine, and a fight or famine that keeps
+// hurting her never re-arms the caption.
 //
-// It sees her HP after EVERY sim tick, not just once a frame (#416 review): the game
-// loop runs up to MAX_CATCHUP_TICKS ticks in one render frame (4x speed, a stalled
+// It looks after EVERY sim tick, not just once a frame (#416 review): the game loop
+// runs up to MAX_CATCHUP_TICKS ticks in one render frame (4x speed, a stalled
 // frame), and inside one of them a drain, her next meal and a heal tick can leave
 // her HP where the last frame saw it. sim-tick-hook.ts beforeSimTick calls
 // noteQueenDangerTick before each tick (the world as the previous tick left it) and
-// the frame step observes the frame's last tick, so every loss is seen, dated to
-// the world tick it was first visible at, and reported by the next frame step.
+// the frame step observes the frame's last tick, so all harm is seen, dated to the
+// world tick it was first visible at, and reported by the next frame step.
 //
 // Render-side session state only; nothing is saved. Pure + Phaser-free so it is
 // unit-testable; GameScene owns the state and calls `advanceQueenDanger` each frame.
@@ -65,25 +67,28 @@ export const QUEEN_DANGER_REARM_UNHURT_TICKS = 600;
 export interface QueenDangerState {
   /** Queen HP at the previous observation (a sim tick or a frame); null before the first. */
   prevHp: number | null;
+  /** Her ants.lastHitTick at the previous observation; null before the first. */
+  prevLastHitTick: number | null;
   /**
-   * World tick her most recent HP loss was first seen at (one past the sim tick that
-   * dealt it), or null if none since the last re-arm.
+   * World tick her most recent harm (an HP loss or a blow) was first seen at — one
+   * past the sim tick that dealt it — or null if none since the last re-arm.
    */
   lastHarmTick: number | null;
   /**
-   * She lost HP since the last frame step: the next one reports it as `hurt` and
-   * clears it. (A frame that ends the round skips the frame step; every new round
-   * or loaded save starts from createQueenDangerState, GameScene.resetSessionState.)
+   * She was harmed (an HP loss or a new blow) since the last frame step: the next
+   * one reports it as `hurt` and clears it. (A frame that ends the round skips the
+   * frame step; every new round or loaded save starts from createQueenDangerState,
+   * GameScene.resetSessionState.)
    */
   hurtSinceFrame: boolean;
 }
 
 export function createQueenDangerState(): QueenDangerState {
-  return { prevHp: null, lastHarmTick: null, hurtSinceFrame: false };
+  return { prevHp: null, prevLastHitTick: null, lastHarmTick: null, hurtSinceFrame: false };
 }
 
 export interface QueenDangerStep {
-  /** She lost HP since the previous frame (combat or, from V66, starvation). */
+  /** She was harmed since the previous frame: a blow, or (from V66) a starvation drain. */
   readonly hurt: boolean;
   /** The danger caption may show again: call untrigger('queenDamage'). */
   readonly rearm: boolean;
@@ -103,9 +108,26 @@ export function noteQueenHp(state: QueenDangerState, hp: number, tick: number): 
 }
 
 /**
- * #416 review — sim-tick-hook.ts beforeSimTick's observation of `colonyId`'s queen
- * HP before each sim tick (noteQueenHp), so a loss that a later tick of the same
- * render frame hides (a drain, then a meal and a heal tick) is still seen.
+ * #416 review — observe the queen's last-hit clock, `lastHitTick` (ants.lastHitTick:
+ * the sim tick of her latest blow, stamped by combat.ts applyDamage only for a
+ * damaging blow; -1 = never). A new value is harm, dated lastHitTick + 1 (the world
+ * tick the blow is first visible at, as for an HP drop) and reported by the next frame
+ * step, even when her HP shows none: health.ts heals at step 16f, before combat, so a
+ * heal tick and a 1-HP blow in the same tick leave her HP unchanged.
+ */
+export function noteQueenHit(state: QueenDangerState, lastHitTick: number): void {
+  if (state.prevLastHitTick !== null && lastHitTick > state.prevLastHitTick) {
+    const seen = lastHitTick + 1;
+    state.lastHarmTick = state.lastHarmTick === null ? seen : Math.max(state.lastHarmTick, seen);
+    state.hurtSinceFrame = true;
+  }
+  state.prevLastHitTick = lastHitTick;
+}
+
+/**
+ * #416 review — sim-tick-hook.ts beforeSimTick's look at `colonyId`'s queen before each
+ * sim tick (noteQueenHit, noteQueenHp), so harm that a later tick of the same render
+ * frame hides (a drain, then a meal and a heal tick) is still seen.
  */
 export function noteQueenDangerTick(
   state: QueenDangerState,
@@ -114,16 +136,19 @@ export function noteQueenDangerTick(
 ): void {
   const colony = world.colonies[colonyId];
   if (colony === undefined) return;
-  noteQueenHp(state, world.ants.hp[colony.queenEntityId] ?? 0, world.tick);
+  const q = colony.queenEntityId;
+  noteQueenHit(state, world.ants.lastHitTick[q] ?? -1);
+  noteQueenHp(state, world.ants.hp[q] ?? 0, world.tick);
 }
 
 /**
  * Advance the tracker by one render frame. `hp` is the queen's HP now, `fed`
  * whether she ate on the last tick, `healed` whether she is back at her full max HP,
- * `tick` the world tick. `hurt` is any HP loss seen since the previous frame step —
- * by this frame's observation or a per-tick one (noteQueenHp). Re-arms (once per HP
- * loss) when she is fed and has lost no HP for QUEEN_DANGER_REARM_UNHURT_TICKS, or
- * for QUEEN_DANGER_REARM_TICKS if she is also healed.
+ * `tick` the world tick. `hurt` is any harm seen since the previous frame step — by
+ * this frame's HP observation or an earlier one (noteQueenHp, noteQueenHit). Re-arms
+ * (once per harm) when she is fed and unharmed for QUEEN_DANGER_REARM_UNHURT_TICKS,
+ * or for QUEEN_DANGER_REARM_TICKS if she is also healed. (advanceQueenDanger notes
+ * her last-hit clock first.)
  */
 export function stepQueenDanger(
   state: QueenDangerState,
@@ -150,7 +175,7 @@ export function stepQueenDanger(
 
 /** What GameScene should show this frame for the queen's danger. */
 export interface QueenDangerFrame {
-  /** Flash the queen-damage pulse (she lost HP, past the round-start grace). */
+  /** Flash the queen-damage pulse (she was harmed, past the round-start grace). */
   readonly pulse: boolean;
   /** The danger caption text to show, or null. */
   readonly caption: string | null;
@@ -158,10 +183,11 @@ export interface QueenDangerFrame {
 
 /**
  * GameScene's per-frame queen-danger step for `colony` (the player's): reads her
- * HP, whether she ate on the last tick and whether she is back at her full max HP
- * (V66), re-arms the caption once the danger has passed (stepQueenDanger: untrigger),
- * and on an HP loss past QUEEN_DAMAGE_SUPPRESS_TICKS asks for the pulse and the
- * caption (checkAndTrigger, so it shows once per danger spell).
+ * last-hit clock and HP, whether she ate on the last tick and whether she is back at
+ * her full max HP (V66), re-arms the caption once the danger has passed
+ * (stepQueenDanger: untrigger), and on harm (an HP loss or a new blow) past
+ * QUEEN_DAMAGE_SUPPRESS_TICKS asks for the pulse and the caption (checkAndTrigger, so
+ * it shows once per danger spell).
  */
 export function advanceQueenDanger(
   state: QueenDangerState,
@@ -169,6 +195,7 @@ export function advanceQueenDanger(
   colony: ColonyRecord,
 ): QueenDangerFrame {
   const q = colony.queenEntityId;
+  noteQueenHit(state, world.ants.lastHitTick[q] ?? -1);
   const hp = world.ants.hp[q] ?? 0;
   const fed =
     isAlive(world.ants, q) &&
