@@ -95,8 +95,7 @@ export interface SetRallyPointCommand extends SimCommandBase {
   readonly tileY: number;
   /** #352 (V60) — the raid type the rally carries (what fighters do when it is on
    *  an enemy entrance). Absent = Loot, so every older command and every AI rally
-   *  loots; a present value that is not a RaidType drops the command. Ignored
-   *  below V60. */
+   *  loots; a present value that is not a RaidType drops the command. */
   readonly raidType?: RaidType;
 }
 

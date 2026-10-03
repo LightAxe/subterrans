@@ -14,7 +14,7 @@ vi.mock('../constants.js', async (importOriginal) => {
 });
 
 import { eggReserveFp } from './lifecycle-system.js';
-import { createWorldState, SIM_VERSION_V70_EGG_RESERVE } from '../types.js';
+import { createWorldState } from '../types.js';
 import { createColonyRecord } from './colony-store.js';
 import { initAnt } from '../ant/ant-store.js';
 import { AntTask } from '../enums.js';
@@ -34,7 +34,6 @@ describe('#395 (V70) — the reserve reads each worker’s own profile (a distin
     expect(WORKER_HUNGER.mealFp).toBe(WORKER_MEAL_FP);
 
     const world = createWorldState(42, 64);
-    world.simVersion = SIM_VERSION_V70_EGG_RESERVE;
     const queenId = world.nextEntityId++;
     initAnt(world.ants, queenId, { colonyId: 1, posX: 0, posY: 0, zone: Zone.Underground });
     const colony = createColonyRecord(1, queenId);

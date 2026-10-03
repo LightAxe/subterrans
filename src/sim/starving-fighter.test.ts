@@ -4,7 +4,7 @@
 // sight, or its colony's spider order held it, and a fighter held in an on-and-off
 // fight away from home starved there. From V58 a fighter away from home that is
 // starving (FIGHTER_STARVING_TICKS since its last meal, empty-handed) walks home by
-// the D11 walk-home anyway. Every case is pinned at V57 (unchanged) and V58.
+// the D11 walk-home anyway.
 //
 // Driven through updateFightAntTargets (step 10c) and tick() on createScenario
 // worlds, like fighter-hunger.test.ts, which pins the V51 walk-home itself.
@@ -15,7 +15,6 @@ import { createScenario } from './scenario.js';
 import {
   allocateEntityId,
   LATEST_SIM_VERSION,
-  SIM_VERSION_V57_ROUTED_TO_ENTRANCE,
   SIM_VERSION_V58_STARVING_FIGHTER_EATS,
   type WorldState,
 } from './types.js';
@@ -40,7 +39,6 @@ import {
   WORKER_LIFESPAN_TICKS,
 } from './constants.js';
 
-const V57 = SIM_VERSION_V57_ROUTED_TO_ENTRANCE;
 const V58 = SIM_VERSION_V58_STARVING_FIGHTER_EATS;
 /** Hungry but not yet starving. */
 const HUNGRY = FIGHTER_WALK_HOME_HUNGER_TICKS + 10;
@@ -50,9 +48,8 @@ const STARVING = FIGHTER_STARVING_TICKS + 10;
 const UNKILLABLE_HP = 1_000_000;
 
 /** A quiet world (no spider, no AI operations) with a well-stocked player pool. */
-function quietWorld(ver: number, keepSpider = false): WorldState {
+function quietWorld(keepSpider = false): WorldState {
   const world = createScenario(7, 'Normal');
-  world.simVersion = ver;
   if (!keepSpider) world.spider = null;
   world.aiState = [];
   setPoolFoodForTest(world, world.colonies[PLAYER_COLONY_ID]!, 2000);
@@ -127,8 +124,8 @@ function addEnemy(world: WorldState, x: number, y: number, zone: Zone, grid = 0)
 }
 
 /** A player fighter at a rally 40 tiles from home, `sinceMeal` after its last meal. */
-function atDistantRally(ver: number, sinceMeal: number, keepSpider = false) {
-  const world = quietWorld(ver, keepSpider);
+function atDistantRally(sinceMeal: number, keepSpider = false) {
+  const world = quietWorld(keepSpider);
   const rally = distantTile(world, 40);
   world.colonies[PLAYER_COLONY_ID]!.rallyPoint = { tileX: rally.x, tileY: rally.y };
   const id = addFighter(world, rally.x, rally.y, sinceMeal);
@@ -150,21 +147,18 @@ describe('#363 — the starving threshold (V58)', () => {
     expect(FIGHTER_STARVING_TICKS).toBeLessThan(FIGHTER_STARVE_AFTER_TICKS);
   });
 
-  it('fighterIsStarving: from FIGHTER_STARVING_TICKS, empty-handed, V58 only', () => {
-    const { world, id } = atDistantRally(V58, FIGHTER_STARVING_TICKS - 1);
+  it('fighterIsStarving: from FIGHTER_STARVING_TICKS, empty-handed', () => {
+    const { world, id } = atDistantRally(FIGHTER_STARVING_TICKS - 1);
     expect(fighterIsHungry(world, id)).toBe(true);
     expect(fighterIsStarving(world, id)).toBe(false);
     world.ants.lastMealTick[id] = world.tick - FIGHTER_STARVING_TICKS;
     expect(fighterIsStarving(world, id)).toBe(true);
     world.ants.foodCarrying[id] = 1; // it can eat from its load
     expect(fighterIsStarving(world, id)).toBe(false);
-    world.ants.foodCarrying[id] = 0;
-    world.simVersion = V57;
-    expect(fighterIsStarving(world, id)).toBe(false);
   });
 
   it('a fighter in a duel turns for home exactly at FIGHTER_STARVING_TICKS', () => {
-    const { world, id } = atDistantRally(V58, FIGHTER_STARVING_TICKS - 1);
+    const { world, id } = atDistantRally(FIGHTER_STARVING_TICKS - 1);
     world.ants.combatOpponentId[id] = -2; // paired with the spider
     updateFightAntTargets(world);
     expect(fighterWalksHomeToEat(world, id)).toBe(false);
@@ -176,59 +170,41 @@ describe('#363 — the starving threshold (V58)', () => {
 });
 
 describe('#363 — on the surface, a starving fighter drops the fight', () => {
-  for (const [ver, walks] of [
-    [V57, false],
-    [V58, true],
-  ] as const) {
-    it(`in a duel (the spider's or an ant's): ${walks ? 'walks home' : 'stays'} at V${ver}`, () => {
-      for (const opp of [-2, 0]) {
-        const { world, id } = atDistantRally(ver, STARVING);
-        world.ants.combatOpponentId[id] = opp;
-        updateFightAntTargets(world);
-        expect(fighterWalksHomeToEat(world, id)).toBe(walks);
-      }
-    });
-
-    it(`with an enemy ant in sight: ${walks ? 'walks home' : 'chases it'} at V${ver}`, () => {
-      const { world, id, rally } = atDistantRally(ver, STARVING);
-      addEnemy(world, rally.x + 2, rally.y, Zone.Surface);
+  it(`in a duel (the spider's or an ant's): walks home`, () => {
+    for (const opp of [-2, 0]) {
+      const { world, id } = atDistantRally(STARVING);
+      world.ants.combatOpponentId[id] = opp;
       updateFightAntTargets(world);
-      expect(fighterWalksHomeToEat(world, id)).toBe(walks);
-      expect(targetTile(world, id)).toEqual(
-        walks ? playerEntrance(world) : { x: rally.x + 2, y: rally.y },
-      );
-    });
+      expect(fighterWalksHomeToEat(world, id)).toBe(true);
+    }
+  });
 
-    it(`under its colony's spider order: ${walks ? 'walks home' : 'goes at the spider'} at V${ver} (full tick)`, () => {
-      const { world, id, rally } = atDistantRally(ver, STARVING, true);
-      expect(world.spider).not.toBeNull();
-      // The spider well out of the fighter's sight, so only the order sends it there.
-      const sp = distantTile(world, 20);
-      world.spider!.posX = (sp.x << FP_SHIFT) + (FP_ONE >> 1);
-      world.spider!.posY = (sp.y << FP_SHIFT) + (FP_ONE >> 1);
-      expect(Math.abs(sp.x - rally.x) + Math.abs(sp.y - rally.y)).toBeGreaterThan(
-        FIGHT_AGGRO_RADIUS,
-      );
-      world.spiderPriorityColonyId = PLAYER_COLONY_ID;
-      tick(world, []);
-      expect(world.spiderPriorityColonyId).toBe(PLAYER_COLONY_ID);
-      expect(fighterWalksHomeToEat(world, id)).toBe(walks);
-      // Step 10d (after 10c) leaves the walker's target on its entrance; otherwise
-      // it aims at the spider's tile as 10d saw it (the spider moves later in the
-      // tick, at most one tile).
-      const tgt = targetTile(world, id);
-      if (walks) {
-        expect(tgt).toEqual(playerEntrance(world));
-      } else {
-        const spX = world.spider!.posX >> FP_SHIFT;
-        const spY = world.spider!.posY >> FP_SHIFT;
-        expect(Math.abs(tgt.x - spX) + Math.abs(tgt.y - spY)).toBeLessThanOrEqual(1);
-      }
-    });
-  }
+  it('with an enemy ant in sight: walks home', () => {
+    const { world, id, rally } = atDistantRally(STARVING);
+    addEnemy(world, rally.x + 2, rally.y, Zone.Surface);
+    updateFightAntTargets(world);
+    expect(fighterWalksHomeToEat(world, id)).toBe(true);
+    expect(targetTile(world, id)).toEqual(playerEntrance(world));
+  });
 
-  it('a hungry fighter short of starving still fights first at V58', () => {
-    const { world, id, rally } = atDistantRally(V58, HUNGRY);
+  it(`under its colony's spider order: walks home (full tick)`, () => {
+    const { world, id, rally } = atDistantRally(STARVING, true);
+    expect(world.spider).not.toBeNull();
+    // The spider well out of the fighter's sight, so only the order sends it there.
+    const sp = distantTile(world, 20);
+    world.spider!.posX = (sp.x << FP_SHIFT) + (FP_ONE >> 1);
+    world.spider!.posY = (sp.y << FP_SHIFT) + (FP_ONE >> 1);
+    expect(Math.abs(sp.x - rally.x) + Math.abs(sp.y - rally.y)).toBeGreaterThan(FIGHT_AGGRO_RADIUS);
+    world.spiderPriorityColonyId = PLAYER_COLONY_ID;
+    tick(world, []);
+    expect(world.spiderPriorityColonyId).toBe(PLAYER_COLONY_ID);
+    expect(fighterWalksHomeToEat(world, id)).toBe(true);
+    // Step 10d (after 10c) leaves the walker's target on its entrance.
+    expect(targetTile(world, id)).toEqual(playerEntrance(world));
+  });
+
+  it('a hungry fighter short of starving still fights first', () => {
+    const { world, id, rally } = atDistantRally(HUNGRY);
     world.ants.combatOpponentId[id] = -2;
     updateFightAntTargets(world);
     expect(fighterWalksHomeToEat(world, id)).toBe(false);
@@ -244,7 +220,7 @@ describe('#363 — on the surface, a starving fighter drops the fight', () => {
   });
 
   it('a starving fighter carrying food eats from its load and keeps fighting', () => {
-    const { world, id } = atDistantRally(V58, STARVING);
+    const { world, id } = atDistantRally(STARVING);
     world.ants.foodCarrying[id] = 1;
     world.ants.combatOpponentId[id] = -2;
     updateFightAntTargets(world);
@@ -252,7 +228,7 @@ describe('#363 — on the surface, a starving fighter drops the fight', () => {
   });
 
   it('at home, a starving fighter in a duel stays in it (it is where it eats)', () => {
-    const world = quietWorld(V58);
+    const world = quietWorld();
     const colony = world.colonies[PLAYER_COLONY_ID]!;
     const ent = playerEntrance(world);
     const rally = distantTile(world, 40);
@@ -268,7 +244,7 @@ describe('#363 — on the surface, a starving fighter drops the fight', () => {
     // Starving, one tile past home range, with an unkillable enemy standing just
     // inside it. Home could not feed it, so it neither walks home nor turns back
     // and forth across the home-range edge: it goes at the enemy, every tick.
-    const world = quietWorld(V58);
+    const world = quietWorld();
     const colony = world.colonies[PLAYER_COLONY_ID]!;
     const ent = playerEntrance(world);
     const rally = distantTile(world, 40);
@@ -297,7 +273,7 @@ describe('#363 — on the surface, a starving fighter drops the fight', () => {
   });
 
   it('with no OPEN entrance of its own, it keeps to its ordinary routing', () => {
-    const world = quietWorld(V58);
+    const world = quietWorld();
     const colony = world.colonies[PLAYER_COLONY_ID]!;
     const rally = distantTile(world, 40);
     colony.rallyPoint = { tileX: rally.x, tileY: rally.y };
@@ -308,51 +284,51 @@ describe('#363 — on the surface, a starving fighter drops the fight', () => {
     expect(fighterWalksHomeToEat(world, id)).toBe(false);
   });
 
-  it('held in an endless duel, it starves at V57 and walks home and eats at V58 (full ticks)', () => {
-    for (const ver of [V57, V58]) {
-      // Hungry, 100 ticks short of starving. An unkillable enemy worker is put back
-      // on the fighter's tile every tick: a fight it never wins or walks away from
-      // (combat first) until it starves.
-      const { world, id } = atDistantRally(ver, FIGHTER_STARVING_TICKS - 100);
+  it('held in an endless duel, it walks home and eats before it starves (full ticks)', () => {
+    // Hungry, 100 ticks short of starving. An unkillable enemy worker is put back
+    // on the fighter's tile every tick: a fight it never wins, and (combat first)
+    // never walks away from until it is starving.
+    const { world, id } = atDistantRally(FIGHTER_STARVING_TICKS - 100);
+    world.ants.hp[id] = UNKILLABLE_HP;
+    const eid = addEnemy(world, 0, 0, Zone.Surface);
+    world.ants.hp[eid] = UNKILLABLE_HP;
+    world.ants.speed[eid] = 0; // it stands where it is put
+    const lastBefore = world.ants.lastMealTick[id]!;
+    let dueled = 0;
+    let walkedHome = 0;
+    let firstWalkSinceMeal = -1;
+    let ate = false;
+    for (let t = 0; t < FIGHTER_STARVE_AFTER_TICKS && world.ants.alive[id] === 1 && !ate; t++) {
+      world.ants.posX[eid] = world.ants.posX[id]!;
+      world.ants.posY[eid] = world.ants.posY[id]!;
+      world.ants.lastMealTick[eid] = world.tick;
+      // #400 (V71): restore "unkillable" past step 16f's max-HP clamp each tick.
       world.ants.hp[id] = UNKILLABLE_HP;
-      const eid = addEnemy(world, 0, 0, Zone.Surface);
       world.ants.hp[eid] = UNKILLABLE_HP;
-      world.ants.speed[eid] = 0; // it stands where it is put
-      const lastBefore = world.ants.lastMealTick[id]!;
-      let dueled = 0;
-      let walkedHome = 0;
-      let ate = false;
-      for (let t = 0; t < FIGHTER_STARVE_AFTER_TICKS && world.ants.alive[id] === 1 && !ate; t++) {
-        world.ants.posX[eid] = world.ants.posX[id]!;
-        world.ants.posY[eid] = world.ants.posY[id]!;
-        world.ants.lastMealTick[eid] = world.tick;
-        // #400 (V71): restore "unkillable" past step 16f's max-HP clamp each tick.
-        world.ants.hp[id] = UNKILLABLE_HP;
-        world.ants.hp[eid] = UNKILLABLE_HP;
-        tick(world, []);
-        if (fighterWalksHomeToEat(world, id)) walkedHome++;
-        if (world.ants.combatOpponentId[id] === eid) dueled++;
-        ate = world.ants.lastMealTick[id] !== lastBefore;
+      tick(world, []);
+      if (world.ants.combatOpponentId[id] === eid) dueled++;
+      if (fighterWalksHomeToEat(world, id)) {
+        if (walkedHome === 0) firstWalkSinceMeal = world.tick - lastBefore;
+        walkedHome++;
       }
-      if (ver === V57) {
-        expect(dueled).toBeGreaterThan(100);
-        expect(walkedHome).toBe(0);
-        expect(world.ants.alive[id]).toBe(0); // starved in the duel
-        expect(ate).toBe(false);
-      } else {
-        expect(walkedHome).toBeGreaterThan(0); // it ate because it walked home
-        expect(world.ants.alive[id]).toBe(1);
-        expect(ate).toBe(true);
-        expect(world.tick - lastBefore).toBeLessThan(FIGHTER_STARVE_AFTER_TICKS);
-      }
+      ate = world.ants.lastMealTick[id] !== lastBefore;
     }
+    // Held in the duel for the 100 ticks until it starves (combat first while only
+    // hungry), and not one tick sooner: the fixture does hold it. (world.tick has
+    // advanced past the tick it turned on, hence the + 1.)
+    expect(dueled).toBeGreaterThan(90);
+    expect(firstWalkSinceMeal).toBe(FIGHTER_STARVING_TICKS + 1);
+    expect(walkedHome).toBeGreaterThan(0); // it ate because it walked home
+    expect(world.ants.alive[id]).toBe(1);
+    expect(ate).toBe(true);
+    expect(world.tick - lastBefore).toBeLessThan(FIGHTER_STARVE_AFTER_TICKS);
   }, 30_000);
 });
 
 describe('#363 — below ground in an enemy nest, a starving invader leaves from a fight', () => {
   /** A player fighter below ground in the ENEMY nest, at the foot of its open shaft. */
-  function invader(ver: number, sinceMeal: number) {
-    const world = quietWorld(ver);
+  function invader(sinceMeal: number) {
+    const world = quietWorld();
     const enemy = world.colonies[ENEMY_COLONY_ID]!;
     const ent = enemy.entrances.find((e) => e.isOpen)!;
     world.colonies[PLAYER_COLONY_ID]!.rallyPoint = {
@@ -365,31 +341,26 @@ describe('#363 — below ground in an enemy nest, a starving invader leaves from
     return { world, id, shaftX: ent.surfaceTileX };
   }
 
-  for (const [ver, leaves] of [
-    [V57, false],
-    [V58, true],
-  ] as const) {
-    it(`in a duel: ${leaves ? 'leaves' : 'stays'} at V${ver}`, () => {
-      const { world, id } = invader(ver, STARVING);
-      world.ants.combatOpponentId[id] = 0;
-      updateFightAntTargets(world);
-      expect(fighterWalksHomeToEat(world, id)).toBe(leaves);
-    });
+  it('in a duel: leaves', () => {
+    const { world, id } = invader(STARVING);
+    world.ants.combatOpponentId[id] = 0;
+    updateFightAntTargets(world);
+    expect(fighterWalksHomeToEat(world, id)).toBe(true);
+  });
 
-    it(`with an enemy within FIGHT_AGGRO_RADIUS: ${leaves ? 'leaves' : 'stays'} at V${ver}`, () => {
-      const { world, id, shaftX } = invader(ver, STARVING);
-      const grid = world.undergroundGrids[ENEMY_COLONY_ID]!;
-      for (let y = 0; y <= 2 + FIGHT_AGGRO_RADIUS; y++) {
-        ugSet(grid, shaftX, y, UndergroundTileState.Open);
-      }
-      addEnemy(world, shaftX, 1 + FIGHT_AGGRO_RADIUS, Zone.Underground, ENEMY_COLONY_ID);
-      updateFightAntTargets(world);
-      expect(fighterWalksHomeToEat(world, id)).toBe(leaves);
-    });
-  }
+  it('with an enemy within FIGHT_AGGRO_RADIUS: leaves', () => {
+    const { world, id, shaftX } = invader(STARVING);
+    const grid = world.undergroundGrids[ENEMY_COLONY_ID]!;
+    for (let y = 0; y <= 2 + FIGHT_AGGRO_RADIUS; y++) {
+      ugSet(grid, shaftX, y, UndergroundTileState.Open);
+    }
+    addEnemy(world, shaftX, 1 + FIGHT_AGGRO_RADIUS, Zone.Underground, ENEMY_COLONY_ID);
+    updateFightAntTargets(world);
+    expect(fighterWalksHomeToEat(world, id)).toBe(true);
+  });
 
-  it('in a famine a starving invader stays in its duel at V58', () => {
-    const { world, id } = invader(V58, STARVING);
+  it('in a famine a starving invader stays in its duel', () => {
+    const { world, id } = invader(STARVING);
     setPoolFoodForTest(world, world.colonies[PLAYER_COLONY_ID]!, 0);
     world.ants.combatOpponentId[id] = 0;
     updateFightAntTargets(world);
@@ -397,7 +368,7 @@ describe('#363 — below ground in an enemy nest, a starving invader leaves from
   });
 
   it('climbing out into an enemy on the entrance, it walks home through it and does not drop back in', () => {
-    const { world, id } = invader(V58, STARVING);
+    const { world, id } = invader(STARVING);
     world.ants.hp[id] = UNKILLABLE_HP;
     const enemy = world.colonies[ENEMY_COLONY_ID]!;
     const ent = enemy.entrances.find((e) => e.isOpen)!;
@@ -435,9 +406,20 @@ describe('#363 — below ground in an enemy nest, a starving invader leaves from
     expect(ate).toBe(true);
   });
 
-  it('a hungry invader short of starving still stays in its duel at V58', () => {
-    const { world, id } = invader(V58, HUNGRY);
+  it('a hungry invader short of starving still stays in its duel', () => {
+    const { world, id } = invader(HUNGRY);
     world.ants.combatOpponentId[id] = 0;
+    updateFightAntTargets(world);
+    expect(fighterWalksHomeToEat(world, id)).toBe(false);
+  });
+
+  it('a hungry invader short of starving still stays with an enemy within FIGHT_AGGRO_RADIUS', () => {
+    const { world, id, shaftX } = invader(HUNGRY);
+    const grid = world.undergroundGrids[ENEMY_COLONY_ID]!;
+    for (let y = 0; y <= 2 + FIGHT_AGGRO_RADIUS; y++) {
+      ugSet(grid, shaftX, y, UndergroundTileState.Open);
+    }
+    addEnemy(world, shaftX, 1 + FIGHT_AGGRO_RADIUS, Zone.Underground, ENEMY_COLONY_ID);
     updateFightAntTargets(world);
     expect(fighterWalksHomeToEat(world, id)).toBe(false);
   });

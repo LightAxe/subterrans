@@ -12,14 +12,7 @@
 //   6. Version-gated: bumping SAVE_FORMAT_VERSION invalidates old saves (intentional for beta)
 
 import type { WorldState, EntityId, AIStateRecord, SpiderState } from '../sim/types.js';
-import {
-  LATEST_SIM_VERSION,
-  SIM_VERSION_V71_HEALTH_MODEL,
-  SIM_VERSION_V51_UNIFIED_HUNGER,
-  SIM_VERSION_V66_QUEEN_STARVES_HP,
-  SIM_VERSION_V52_RAIDING,
-  SIM_VERSION_V60_RAID_ORDERS,
-} from '../sim/types.js';
+import { LATEST_SIM_VERSION, SIM_VERSION_V71_HEALTH_MODEL } from '../sim/types.js';
 import { AI_MAX_OPERATION_FIGHTERS, SPIDER_HUNT_INTERVAL_TICKS } from '../sim/constants.js';
 import type { AntComponents } from '../sim/ant/ant-store.js';
 import {
@@ -73,7 +66,7 @@ import { FP_SHIFT } from '../sim/fixed.js';
 import { AntTask, ChamberType, FightingSubState, RaidType, isRaidType } from '../sim/enums.js';
 import { livePileTiles } from '../sim/food/food-api.js';
 import { Zone } from '../sim/terrain.js';
-import { FIGHTER_HUNGER, LARVA_HUNGER, QUEEN_HUNGER, WORKER_HUNGER } from '../sim/hunger.js';
+import { FIGHTER_HUNGER, LARVA_HUNGER, WORKER_HUNGER } from '../sim/hunger.js';
 import { antMaxHp } from '../sim/health.js';
 import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 import {
@@ -718,7 +711,7 @@ interface SerializedColony {
   /** C1 (V42) — colony alarm stance. Absent on pre-V42 saves → false on load. */
   alarmActive?: boolean;
   /** #352 (V60) — the rally's raid type (RaidType). Written only when it is not
-   *  Loot, so a pre-V60 save (always Loot) is unchanged; absent → Loot on load. */
+   *  Loot; absent → Loot on load. */
   raidType?: number;
   eggIntervalNumerator: number;
 }
@@ -1067,8 +1060,8 @@ function serializeColony(c: ColonyRecord): SerializedColony {
     priorityFoodPileId: c.priorityFoodPileId,
     alarmActive: c.alarmActive,
     eggIntervalNumerator: c.eggIntervalNumerator,
-    // #352 (V60): only a non-Loot raid type is written (a pre-V60 world is always
-    // Loot), so every older save and every Loot colony serializes byte-identically.
+    // #352 (V60): only a non-Loot raid type is written, so every Loot colony
+    // serializes as it did before raid orders existed.
     ...(c.raidType !== RaidType.Loot ? { raidType: c.raidType } : {}),
   };
 }
@@ -1379,9 +1372,8 @@ function validateAntColumns(saved: SerializedAnts, capacity: number): void {
     ['colonyId', saved.colonyId, byte],
     ['task', saved.task, enumMax(4)],
     // 5 = FightingSubState.Hauling (#290 PR 5, V52), the largest sub-state any
-    // task writes. Looting 4 / Hauling 5 were reserved at V50 and are written from
-    // V52 only: the assembled-world check below rejects them in an older save, and
-    // on a non-fighter.
+    // task writes. Looting 4 / Hauling 5 are written on a fighter only: the
+    // assembled-world check below rejects them on a non-fighter.
     ['subTask', saved.subTask, enumMax(5)],
     ['speed', saved.speed, finiteInt],
     ['foodCarrying', saved.foodCarrying, finiteInt],
@@ -1947,13 +1939,6 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
       throw new Error(`Invalid colonies key: ${cidStr}`);
     }
     colonies[Number(cidStr)] = deserializeColony(sc);
-    // #352 — only a V60+ world ever sets a raid type other than Loot.
-    if (
-      validatedSimVersion < SIM_VERSION_V60_RAID_ORDERS &&
-      colonies[Number(cidStr)]!.raidType !== RaidType.Loot
-    ) {
-      throw new Error(`Invalid colony.raidType before V60: ${String(sc.raidType)}`);
-    }
   }
   const undergroundGrids: Record<ColonyId, UndergroundGrid> = {};
   for (const [cidStr, sg] of Object.entries(s.undergroundGrids)) {
@@ -2162,13 +2147,12 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     difficulty: s.difficulty === 'Easy' || s.difficulty === 'Hard' ? s.difficulty : 'Normal',
   };
 
-  // #290 PR 5 — the raid sub-states Looting (4) and Hauling (5) exist from V52
-  // only, and only on a fighter. (The column check above admits up to 5.)
-  const raidSubStates = world.simVersion >= SIM_VERSION_V52_RAIDING;
+  // #290 PR 5 (V52) — the raid sub-states Looting (4) and Hauling (5) exist only on
+  // a fighter. (The column check above admits up to 5.)
   for (let id = 0; id < world.ants.alive.length; id++) {
     const sub = world.ants.subTask[id]!;
     if (sub < FightingSubState.Looting) continue;
-    if (!raidSubStates || world.ants.task[id] !== AntTask.Fighting) {
+    if (world.ants.task[id] !== AntTask.Fighting) {
       throw new Error(
         `Invalid ants.subTask[${id}]: ${sub} (task ${world.ants.task[id]}) at simVersion ${world.simVersion}`,
       );
@@ -2192,8 +2176,6 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   // (health.ts antMaxHp) — QUEEN_HP_HOME in her nest (a window of 300, her
   // starve-after), COMBAT_HP_QUEEN on the surface before she founds it. (The surface
   // window relies on a queen never going back up once she is in her nest.)
-  const workersEat = world.simVersion >= SIM_VERSION_V51_UNIFIED_HUNGER;
-  const queenStarvesByHp = world.simVersion >= SIM_VERSION_V66_QUEEN_STARVES_HP;
   // #400 (V71) — a blow lands during a tick, so between ticks no ant's last hit is
   // later than tick − 1 (dead slots included: their stamp is from before they died).
   const allocated = Math.min(world.nextEntityId, world.ants.lastHitTick.length);
@@ -2212,9 +2194,7 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     const eaters: Array<[number, number, string]> = [
       [
         c.queenEntityId,
-        queenStarvesByHp
-          ? antMaxHp(world, c.queenEntityId) * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS
-          : QUEEN_HUNGER.starveAfterTicks,
+        antMaxHp(world, c.queenEntityId) * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
         'queen',
       ],
       ...c.larvae.map((id): [number, number, string] => [
@@ -2222,11 +2202,7 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
         LARVA_HUNGER.starveAfterTicks,
         'larva',
       ]),
-      ...(workersEat ? c.workers : []).map((id): [number, number, string] => [
-        id,
-        workerStarveAfter,
-        'worker',
-      ]),
+      ...c.workers.map((id): [number, number, string] => [id, workerStarveAfter, 'worker']),
     ];
     // #375 / #400 — the queen window above holds only while her HP never exceeds her
     // max where she stands. #400 (V71): between ticks no adult is above it (health.ts

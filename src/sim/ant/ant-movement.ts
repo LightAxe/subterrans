@@ -39,11 +39,7 @@ import {
   surfaceGoalDistance,
 } from '../surface-routing.js';
 import { UndergroundTileState, Zone, ugGet, type UndergroundGrid } from '../terrain.js';
-import {
-  SIM_VERSION_V52_RAIDING,
-  SIM_VERSION_V62_AI_NEST_DEFENCE,
-  type WorldState,
-} from '../types.js';
+import { SIM_VERSION_V62_AI_NEST_DEFENCE, type WorldState } from '../types.js';
 import {
   pickInvaderUndergroundStep,
   pickNearestHostileUnderground,
@@ -921,7 +917,7 @@ export function tickAntMovement(
         // `isRecallingFromForeign` / `skipAscent` predicate in the surface-ascent block
         // later in tickAntMovement.
         // V51 (#290 PR 4, D11): a hungry invader step 10c sent home to eat leaves
-        // the same way (fighterWalksHomeToEat is false below V51).
+        // the same way.
         const isRecalling =
           fighterIsRecalled(world, id) ||
           fighterWalksHomeToEat(world, id) ||
@@ -984,9 +980,9 @@ export function tickAntMovement(
         } else {
           // #364 (V59): with no step-10e aim, hunt the nearest hostile BY PATH whose
           // tile is not saturated (its colony does not already hold the duel
-          // there); the policy lives in invader-retarget.ts. None reachable (or
-          // below V59): hunt as before.
-          const aimed = world.simVersion >= SIM_VERSION_V52_RAIDING && ants.targetPosX[id] !== -1;
+          // there); the policy lives in invader-retarget.ts. None reachable: hunt
+          // as before.
+          const aimed = ants.targetPosX[id] !== -1;
           const huntStep = aimed
             ? NO_FREE_HOSTILE
             : invaderHuntStep(world, id, gridColonyId, claimsNoTile);
@@ -997,8 +993,7 @@ export function tickAntMovement(
           } else {
             // V52 (#290 PR 5): step 10e aimed a raider stopped by a hostile in reach
             // at THAT hostile (target set only by 10e; step 10c clears an invader's
-            // target every tick; the read is also gated on V52, so a V51 world never
-            // depends on that tick order). Scalars, not an
+            // target every tick). Scalars, not an
             // object literal: this runs per fighter per tick (hot-loop rule).
             let haveHostile = false;
             let hostileX = 0;
@@ -2107,12 +2102,8 @@ function resolveSameColonyOccupancy(world: WorldState): void {
 
     // V52 (#290 PR 5): below ground the work sites are those of the NEST the ant
     // stands in (raiders stacking in an enemy FoodStorage chamber are exempt the
-    // way foragers are at home). Earlier worlds read the ant's own colony's
-    // chambers and shafts at foreign-grid coordinates; kept for replay.
-    const exemptColonyId =
-      zone === Zone.Underground && world.simVersion >= SIM_VERSION_V52_RAIDING
-        ? rawGridColonyId
-        : colonyId;
+    // way foragers are at home).
+    const exemptColonyId = zone === Zone.Underground ? rawGridColonyId : colonyId;
     if (isOccupancyExempt(world, exemptColonyId, zone, tileX, tileY)) continue;
 
     // Issue #108 (v13+) — zero the gridColonyId portion of the key when

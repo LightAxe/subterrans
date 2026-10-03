@@ -28,7 +28,7 @@
 // friends; else it walks to the nearest QUEUE by path (a saturated hostile's
 // tile, or the tile beside one a friend's claim keeps it off); else, with hostiles
 // only beyond its friends, it holds. Only with no hostile the tunnels reach at all
-// does it hunt as before V59 (the nearest by Manhattan, the wall-aware step).
+// does it fall back to the pre-V59 hunt (the nearest by Manhattan, the wall-aware step).
 //
 // Cost: two passes over the ants (friends, then hostiles) and one BFS that stops
 // at the first free hostile — in place of V58's one pass and one BFS to the target
@@ -39,7 +39,7 @@ import { AntTask } from '../enums.js';
 import { FP_SHIFT } from '../fixed.js';
 import { getScratch } from '../scratch.js';
 import { Zone } from '../terrain.js';
-import { SIM_VERSION_V59_INVADER_RETARGET, type WorldState } from '../types.js';
+import type { WorldState } from '../types.js';
 import {
   DIR_DX,
   DIR_DY,
@@ -50,7 +50,7 @@ import {
   tileSaturated,
 } from './ant-motion.js';
 
-/** invaderHuntStep's result when the tunnels reach no hostile at all (or below V59). */
+/** invaderHuntStep's result when the tunnels reach no hostile at all. */
 export const NO_FREE_HOSTILE = -1;
 
 /**
@@ -63,7 +63,7 @@ export const NO_FREE_HOSTILE = -1;
  * friends: (0, 0) when the tunnels reach a free one beyond them; else a step toward
  * the nearest queue by path (0, 0 beside it); else (0, 0) when hostiles lie only
  * beyond its friends. NO_FREE_HOSTILE when the tunnels reach no hostile at all,
- * the nest has no grid, or below V59. `claimsNoTile` is the occupancy pass's
+ * or the nest has no grid. `claimsNoTile` is the occupancy pass's
  * per-ant rule (ant-movement.ts): a friend it holds for neither bumps nor blocks.
  * #371 (V62): a tunnel defender hunting invaders in its own nest calls it too, with
  * `defenderRule` (stampFriendTiles): a nestmate holds a tile only if it is a
@@ -76,7 +76,6 @@ export function invaderHuntStep(
   claimsNoTile: (world: WorldState, id: number) => boolean,
   defenderRule = false,
 ): number {
-  if (world.simVersion < SIM_VERSION_V59_INVADER_RETARGET) return NO_FREE_HOSTILE;
   const grid = world.undergroundGrids[gridColonyId];
   if (grid === undefined) return NO_FREE_HOSTILE;
 

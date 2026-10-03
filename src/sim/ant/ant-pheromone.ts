@@ -7,7 +7,7 @@ import { FP_SHIFT } from '../fixed.js';
 import { pheromoneGridKey } from '../pheromone/pheromone-store.js';
 import { depositFoodTrail } from '../pheromone/pheromone-system.js';
 import { Zone } from '../terrain.js';
-import { SIM_VERSION_V52_RAIDING, type WorldState } from '../types.js';
+import type { WorldState } from '../types.js';
 
 /**
  * Deposit food-trail pheromone for every alive, food-carrying ant.
@@ -15,7 +15,7 @@ import { SIM_VERSION_V52_RAIDING, type WorldState } from '../types.js';
  * PRD §5b carry-only rule (PHER-03): only ants with foodCarrying > 0 deposit.
  * From V52 (#290 PR 5) only FORAGERS do: a raider hauling loot home carries food
  * too, and its trail would run from the enemy's door to its own, luring its own
- * foragers onto the enemy's doorstep. (Below V52 only foragers ever carry food.)
+ * foragers onto the enemy's doorstep.
  * Deposit targets the colony's food-trail surface grid (Phase 6 hardcoded zone).
  *
  * Near-entrance suppression (09 excursion-foraging follow-up): deposits within
@@ -42,13 +42,12 @@ export function tickPheromoneDeposit(world: WorldState): void {
   // into a v10 snapshot must continue to influence v10-replay routing.
   // S0a / issue #119 — V14+ uses a stronger deposit per step.
   const depositAmount = FOOD_TRAIL_DEPOSIT_V14;
-  const foragersOnly = world.simVersion >= SIM_VERSION_V52_RAIDING;
 
   for (let id = 0; id < world.nextEntityId; id++) {
     if (ants.alive[id] !== 1) continue;
     if (ants.foodCarrying[id]! <= 0) continue;
     if (ants.zone[id] !== Zone.Surface) continue;
-    if (foragersOnly && ants.task[id] !== AntTask.Foraging) continue;
+    if (ants.task[id] !== AntTask.Foraging) continue;
 
     const colonyId = ants.colonyId[id]!;
     const tileX = ants.posX[id]! >> FP_SHIFT;

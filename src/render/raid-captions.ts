@@ -35,7 +35,6 @@
 // save's historic counters never fire a caption) and polls it each frame.
 
 import type { WorldState } from '../sim/types.js';
-import { SIM_VERSION_V52_RAIDING } from '../sim/types.js';
 import type { ColonyId, ColonyRecord } from '../sim/colony/colony-store.js';
 import type { SetRallyPointCommand, SimCommand } from '../sim/commands.js';
 import { RaidType } from '../sim/enums.js';
@@ -53,7 +52,7 @@ export const RAID_CAPTION_TEXTS: Record<RaidCaptionKind, string> = {
 
 /**
  * #352 — the text for `kind` under the raid order the colony is giving (null: no
- * raid order, or a pre-V60 world). A Deny raid's news names it; Loot keeps the
+ * raid order). A Deny raid's news names it; Loot keeps the
  * plain #290 wording, and 'spoiling' only ever fires under Spoil.
  */
 export function raidCaptionText(kind: RaidCaptionKind, order: RaidType | null): string {
@@ -232,7 +231,7 @@ export function markRaidCaptionShown(
 
 /**
  * True when (tileX, tileY) is an open entrance of a colony other than `colonyId`
- * in a world that raids (V52+) — i.e. a rally there sends `colonyId`'s fighters
+ * (raids, V52) — i.e. a rally there sends `colonyId`'s fighters
  * into that nest, where they loot its larder when nothing hostile is in reach.
  * Mirrors the sim's "rallied on this nest's entrance" test (ant-raid.ts).
  */
@@ -242,7 +241,6 @@ export function rallyTargetsEnemyEntrance(
   tileX: number,
   tileY: number,
 ): boolean {
-  if (world.simVersion < SIM_VERSION_V52_RAIDING) return false;
   for (const key of Object.keys(world.colonies)) {
     const other = world.colonies[Number(key)];
     if (other === undefined || other.colonyId === colonyId) continue;

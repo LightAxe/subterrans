@@ -8,12 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
-import {
-  allocateEntityId,
-  SIM_VERSION_V51_UNIFIED_HUNGER,
-  SIM_VERSION_V52_RAIDING,
-  type WorldState,
-} from './types.js';
+import { allocateEntityId, type WorldState } from './types.js';
 import {
   fighterMayLoot,
   dropHaulerLoad,
@@ -292,21 +287,6 @@ describe('fighterMayLoot — the raid predicate (V52)', () => {
     updateRaiders(w);
     expect(w.ants.subTask[id]).not.toBe(FightingSubState.Looting);
   });
-
-  it('is false in a V51 world, and a V51 world never raids (byte-inert rules)', () => {
-    const r = raidWorld();
-    r.world.simVersion = SIM_VERSION_V51_UNIFIED_HUNGER;
-    const id = raiderInEnemyNest(r);
-    expect(fighterMayLoot(r.world, r.player, id)).toBe(false);
-    for (let t = 0; t < 600; t++) {
-      tick(r.world, []);
-      expect(r.world.ants.subTask[id] === FightingSubState.Looting).toBe(false);
-      expect(r.world.ants.subTask[id] === FightingSubState.Hauling).toBe(false);
-      expect(r.world.ants.foodCarrying[id]).toBe(0);
-    }
-    expect(r.player.foodRaidedFp).toBe(0);
-    expect(r.enemy.foodLostToRaidsFp).toBe(0);
-  });
 });
 
 describe('the raid loop through tick() (V52)', () => {
@@ -429,20 +409,6 @@ describe('the raid loop through tick() (V52)', () => {
     expect(tileOf(w, b)).toEqual({ x: 88, y: 6 });
   });
 
-  it('… where a V51 world bumped them apart (it read the raider’s own colony’s chambers)', () => {
-    const r = raidWorld(0);
-    const w = r.world;
-    w.simVersion = SIM_VERSION_V51_UNIFIED_HUNGER;
-    rallyOn(r.player, r.enemyDoor);
-    const a = addFighter(w, P, 88, 6, E);
-    const b = addFighter(w, P, 88, 6, E);
-    w.ants.speed[a] = 0;
-    w.ants.speed[b] = 0;
-    tick(w, []);
-    expect(tileOf(w, a)).toEqual({ x: 88, y: 6 });
-    expect(tileOf(w, b)).not.toEqual({ x: 88, y: 6 });
-  });
-
   it('a cleared rally mid-haul still gets the food home', () => {
     const r = raidWorld(3000);
     const w = r.world;
@@ -550,15 +516,9 @@ describe('a hauler that dies drops its load (V52, D13)', () => {
     expect(r.player.foodRaidedFp).toBe(0);
   });
 
-  it('is inert below V52 and for an empty-handed fighter', () => {
+  it('is inert for an empty-handed fighter', () => {
     const r = raidWorld();
     const w = r.world;
-    const id = addHauler(r.world, P, 30, 6, P, 800);
-    const latest = w.simVersion;
-    w.simVersion = SIM_VERSION_V51_UNIFIED_HUNGER;
-    expect(dropHaulerLoad(w, id)).toBe(false);
-    expect(w.ants.foodCarrying[id]).toBe(800);
-    w.simVersion = latest;
     const empty = addFighter(w, P, 31, 6, P);
     expect(dropHaulerLoad(w, empty)).toBe(false);
   });
@@ -1274,23 +1234,5 @@ describe('no loot while the raider’s own stores are full (V53, D14)', () => {
     expect(fighterMayLoot(w, r.player, b)).toBe(false); // A holds the one load of room
     w.ants.subTask[a] = FightingSubState.MovingToRally; // A leaves, same tick
     expect(fighterMayLoot(w, r.player, b)).toBe(true); // rebuilt, not the pass's tally
-  });
-
-  it('a V52 world still loots with full stores (pre-V53 unchanged)', () => {
-    const r = raidWorld(3000);
-    const w = r.world;
-    w.simVersion = SIM_VERSION_V52_RAIDING;
-    const id = raiderInEnemyNest(r);
-    fillPlayerStores(r);
-    expect(fighterMayLoot(w, r.player, id)).toBe(true);
-    expect(
-      run(
-        w,
-        200,
-        () => w.ants.subTask[id] === FightingSubState.Hauling,
-        () => fillPlayerStores(r),
-      ),
-    ).toBeGreaterThan(0);
-    expect(r.player.foodRaidedFp).toBe(RAID_CARRY_FP);
   });
 });

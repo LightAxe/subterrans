@@ -52,7 +52,7 @@ import type { CommandFeedforward } from '../render/command-feedforward.js';
 import { enqueueCommand } from './command-queue.js';
 import type { RaidType } from '../sim/enums.js';
 import { requestShowContextMenu } from '../render/context-menu-state.js';
-import { enemyEntranceAt, worldHasRaidOrders } from '../sim/raid-order.js';
+import { enemyEntranceAt } from '../sim/raid-order.js';
 
 // ---------------------------------------------------------------------------
 // isEmptySurfaceTile — checks whether a tile is empty (not entrance, not food pile)
@@ -332,11 +332,10 @@ export function handleSetRallyPoint(
 
 /**
  * Open the raid menu (the five raid orders) anchored at (screenX, screenY) for the
- * surface tile (tileX, tileY), iff the surface view is up, the world has raid
- * orders (V60+) and the tile is another colony's entrance (open or closed, as a tap
- * rally accepts). Returns true iff the menu was requested. No command is emitted
- * here: UIScene enqueues the SetRallyPoint (with the chosen raid type) when the
- * player picks a row.
+ * surface tile (tileX, tileY), iff the surface view is up and the tile is another
+ * colony's entrance (open or closed, as a tap rally accepts). Returns true iff the
+ * menu was requested. No command is emitted here: UIScene enqueues the
+ * SetRallyPoint (with the chosen raid type) when the player picks a row.
  */
 export function tryOpenRaidMenu(
   world: WorldState,
@@ -348,7 +347,6 @@ export function tryOpenRaidMenu(
   playerColonyId: ColonyId = PLAYER_COLONY_ID,
 ): boolean {
   if (viewState.activeView !== 'surface') return false;
-  if (!worldHasRaidOrders(world)) return false;
   if (!isForeignColonyEntrance(world, tileX, tileY, playerColonyId)) return false;
   requestShowContextMenu(screenX, screenY, tileX, tileY, 'raid');
   return true;

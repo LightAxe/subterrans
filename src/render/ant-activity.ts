@@ -32,15 +32,14 @@
 //   - Nursing (any sub)               -> nursing
 //   - Idle (or unknown task value)    -> idle
 //
-// Hunger (#290 PR 4, V51 worlds only — before V51 workers do not eat): every
-// living worker, fighters included, whose meal is due is counted `hungry`;
-// one at 75 % or more of its starve-after is counted `starving` instead
-// (profile by task, as the sim reads it). No on-map ring — the panel only.
+// Hunger (#290 PR 4, V51): every living worker, fighters included, whose meal is
+// due is counted `hungry`; one at 75 % or more of its starve-after is counted
+// `starving` instead (profile by task, as the sim reads it). No on-map ring — the
+// panel only.
 //
 // Pure + Node-testable: no Phaser imports.
 
 import type { WorldState } from '../sim/types.js';
-import { SIM_VERSION_V51_UNIFIED_HUNGER } from '../sim/types.js';
 import { workerHungerProfile } from '../sim/hunger.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
 import { isAlive } from '../sim/ant/ant-store.js';
@@ -68,15 +67,13 @@ export interface AntActivity {
   foraging: ForagingBreakdown;
   digging: DiggingBreakdown;
   fighting: number;
-  /** Fighters looting an enemy larder (Fighting.Looting; V52 raids only). */
+  /** Fighters looting an enemy larder (Fighting.Looting; V52 raids). */
   raiding: number;
-  /** Fighters carrying raided food home (Fighting.Hauling; V52 raids only). */
+  /** Fighters carrying raided food home (Fighting.Hauling; V52 raids). */
   hauling: number;
   nursing: number;
   idle: number;
   totalWorkers: number;
-  /** V51+: workers and fighters eat, so the hunger counts below mean something. */
-  workersEat: boolean;
   /** Workers (fighters included) whose meal is due, short of `starving`. */
   hungry: number;
   /** Workers at 75 % or more of their starve-after: they die if not fed soon. */
@@ -100,20 +97,17 @@ export function computeAntActivity(world: WorldState, colony: ColonyRecord): Ant
   let workers = 0;
   let hungry = 0;
   let starving = 0;
-  const workersEat = world.simVersion >= SIM_VERSION_V51_UNIFIED_HUNGER;
 
   for (let i = 0; i < colony.workers.length; i++) {
     const id = colony.workers[i]!;
     if (!isAlive(ants, id)) continue;
     workers += 1;
 
-    if (workersEat) {
-      // Between ticks the last consumption step ran at world.tick − 1.
-      const sinceMeal = world.tick - 1 - ants.lastMealTick[id]!;
-      const profile = workerHungerProfile(world, id);
-      if (sinceMeal * 4 >= profile.starveAfterTicks * 3) starving += 1;
-      else if (sinceMeal >= profile.mealIntervalTicks) hungry += 1;
-    }
+    // Between ticks the last consumption step ran at world.tick − 1.
+    const sinceMeal = world.tick - 1 - ants.lastMealTick[id]!;
+    const profile = workerHungerProfile(world, id);
+    if (sinceMeal * 4 >= profile.starveAfterTicks * 3) starving += 1;
+    else if (sinceMeal >= profile.mealIntervalTicks) hungry += 1;
 
     const task = ants.task[id]!;
     const sub = ants.subTask[id]!;
@@ -161,7 +155,6 @@ export function computeAntActivity(world: WorldState, colony: ColonyRecord): Ant
     nursing,
     idle,
     totalWorkers: workers,
-    workersEat,
     hungry,
     starving,
   };
@@ -197,9 +190,9 @@ export function formatAntActivityLines(a: AntActivity): string[] {
     `    hauling:   ${a.hauling}`,
     `  Nursing:  ${a.nursing}`,
     `  Idle:     ${a.idle}`,
-    // V51: hunger (blank below V51, where workers do not eat).
+    // V51: hunger.
     '',
-    a.workersEat ? `  Hungry:   ${a.hungry}  starving: ${a.starving}` : '',
+    `  Hungry:   ${a.hungry}  starving: ${a.starving}`,
   ];
 }
 

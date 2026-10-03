@@ -28,7 +28,7 @@
 // Determinism: integers only, no `/`, no RNG, no module-level mutable state (all
 // buffers live in the per-world scratch arena). Fighters are visited in ascending
 // id order and take posts in that order (ranked over all the colony's fighters). Every rule is behind
-// `blockadedEntrance`, which is null below V60.
+// `blockadedEntrance`, which is null unless the colony's rally gives a Blockade.
 import type { ColonyRecord } from '../colony/colony-store.js';
 import type { NestEntrance } from '../colony/entrance.js';
 import {
@@ -49,7 +49,7 @@ import {
 } from '../scratch.js';
 import { isSurfaceTileInComponent } from '../surface-features.js';
 import { Zone } from '../terrain.js';
-import { SIM_VERSION_V60_RAID_ORDERS, type WorldState } from '../types.js';
+import type { WorldState } from '../types.js';
 import { canEnterSurfaceTile } from './ant-motion.js';
 
 /** A blockader within this many tiles (Manhattan) of its post holds there. */
@@ -59,7 +59,6 @@ const BLOCKADE_KEEP_HOLD_RADIUS_TILES = BLOCKADE_HOLD_RADIUS_TILES + 1;
 
 /** Fighter `id`'s colony is blockading an enemy entrance (V60). */
 function onBlockade(world: WorldState, id: number): boolean {
-  if (world.simVersion < SIM_VERSION_V60_RAID_ORDERS) return false;
   if (world.ants.task[id] !== AntTask.Fighting) return false;
   const colony = world.colonies[world.ants.colonyId[id]!];
   return colony !== undefined && blockadedEntrance(world, colony) !== null;
@@ -213,7 +212,6 @@ function nearestOf(world: WorldState, id: number, intruders: readonly number[]):
  *     post routed round obstacles (TO_POST). With no post at all it holds in place.
  */
 export function updateBlockaders(world: WorldState): void {
-  if (world.simVersion < SIM_VERSION_V60_RAID_ORDERS) return;
   const ants = world.ants;
   const scratch = getScratch(world).blockade;
   const mark = scratch.mark;

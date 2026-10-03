@@ -10,7 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
 import { createScenario } from './scenario.js';
-import { allocateEntityId, SIM_VERSION_V50_LOCATED_FOOD, type WorldState } from './types.js';
+import { allocateEntityId, type WorldState } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { fighterWalksHomeToEat, updateFightAntTargets } from './ant/ant-system.js';
 import { antIsAtHome, ticksSinceMeal } from './hunger.js';
@@ -334,18 +334,6 @@ describe('D11 — combat comes first', () => {
     world.spider!.posY = (rally.y << FP_SHIFT) + (FP_ONE >> 1);
     updateFightAntTargets(world);
     expect(fighterWalksHomeToEat(world, id)).toBe(true);
-  });
-
-  it('below V51 nothing walks home hungry', () => {
-    const world = quietWorld();
-    world.simVersion = SIM_VERSION_V50_LOCATED_FOOD;
-    const colony = world.colonies[PLAYER_COLONY_ID]!;
-    const rally = distantTile(world, 40);
-    colony.rallyPoint = { tileX: rally.x, tileY: rally.y };
-    const id = addFighter(world, rally.x, rally.y, FIGHTER_STARVE_AFTER_TICKS + 10);
-    updateFightAntTargets(world);
-    expect(fighterWalksHomeToEat(world, id)).toBe(false);
-    expect(world.ants.targetPosX[id]).toBe(-1); // held at its rally
   });
 });
 

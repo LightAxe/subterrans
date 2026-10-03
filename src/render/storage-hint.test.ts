@@ -25,7 +25,7 @@ import {
 } from './caption-queue.js';
 import { createScenario } from '../sim/scenario.js';
 import type { WorldState } from '../sim/types.js';
-import { allocateEntityId, SIM_VERSION_V69_FOOD_FAIRNESS } from '../sim/types.js';
+import { allocateEntityId } from '../sim/types.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
 import { eggReserveFp, eggReserveStorageShortfallFp } from '../sim/colony/lifecycle-system.js';
 import { initAnt } from '../sim/ant/ant-store.js';
@@ -61,11 +61,8 @@ const WORKER_FP = runwayFoodFp(WORKER_HUNGER, RUNWAY);
 /** createScenario(7)'s colonies start with three workers each and no chambers. */
 const START_WORKERS = 3;
 
-function scenario(simVersion?: number): { world: WorldState; colony: ColonyRecord } {
-  const world =
-    simVersion === undefined
-      ? createScenario(7, 'Normal')
-      : createScenario(7, 'Normal', simVersion);
+function scenario(): { world: WorldState; colony: ColonyRecord } {
+  const world = createScenario(7, 'Normal');
   return { world, colony: world.colonies[PLAYER_COLONY_ID]! };
 }
 
@@ -221,11 +218,6 @@ describe('eggReserveStorageShortfallFp (#395, V70)', () => {
     expect(eggReserveStorageShortfallFp(world, colony)).toBe(
       noBroodReserve(START_WORKERS) - capacity(0),
     );
-  });
-
-  it('is 0 before V70 (no egg reserve; the hint never shows on an older save)', () => {
-    const { world, colony } = scenario(SIM_VERSION_V69_FOOD_FAIRNESS);
-    expect(eggReserveStorageShortfallFp(world, colony)).toBe(0);
   });
 
   it('reads each colony alone (CLNY-08): the enemy colony the same way', () => {

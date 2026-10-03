@@ -12,7 +12,7 @@ import {
   tickQueenEggProduction,
   tickLifecycleTransitions,
 } from './lifecycle-system.js';
-import { createWorldState, SIM_VERSION_V69_FOOD_FAIRNESS } from '../types.js';
+import { createWorldState } from '../types.js';
 import { createColonyRecord } from './colony-store.js';
 import { setPoolFoodForTest } from '../food/food-test-utils.js';
 import { initAnt } from '../ant/ant-store.js';
@@ -21,7 +21,6 @@ import { Zone, createUndergroundGrid, ugSet, UndergroundTileState } from '../ter
 import { FP_SHIFT, FP_ONE } from '../fixed.js';
 import {
   QUEEN_EGG_INTERVAL_TICKS,
-  QUEEN_EGG_FOOD_THRESHOLD,
   EGG_HATCH_TICKS,
   LARVA_MATURE_TICKS,
   WORKER_BASE_SPEED,
@@ -41,8 +40,7 @@ const MAX_TEST_ENTITIES = 512;
 /**
  * Create a fresh world + colony with a live queen at position (queenX, queenY).
  * The queen entity is allocated as entity 0; the colony record references it.
- * foodStored defaults to 10_000 (well above QUEEN_EGG_FOOD_THRESHOLD, and above a lone
- * queen's V70 egg reserve, 3600 fp).
+ * foodStored defaults to 10_000 (above a lone queen's V70 egg reserve, 3600 fp).
  *
  * By default, both a Queen chamber and a Nursery chamber are pushed to
  * colony.chambers as "completed" so the 09 reproduction-gate memo unlocks
@@ -106,7 +104,7 @@ describe('tickQueenEggProduction — CLNY-01', () => {
   it('1. produces one egg at tick 0 when all gates pass', () => {
     const { world, colony } = setupWorldWithQueen();
     // #395 (V70): the stores hold exactly the egg reserve (egg-reserve.test.ts covers
-    // its boundary; the pre-V70 3-food boundary is pinned there too).
+    // its boundary).
     setPoolFoodForTest(world, colony, eggReserveFp(world, colony));
     world.tick = 0; // 0 % 300 === 0
 
@@ -120,10 +118,10 @@ describe('tickQueenEggProduction — CLNY-01', () => {
     expect(world.ants.alive[eggId]).toBe(1);
   });
 
-  it('2. does NOT produce an egg when foodStored is below threshold', () => {
-    const { world, colony } = setupWorldWithQueen(QUEEN_EGG_FOOD_THRESHOLD - 1);
-    // The 3-food boundary is a pre-V70 rule (#395): pin the world to V69.
-    world.simVersion = SIM_VERSION_V69_FOOD_FAIRNESS;
+  it('2. does NOT produce an egg when the stores are one fp short of the egg reserve', () => {
+    const { world, colony } = setupWorldWithQueen();
+    // #395 (V70): the egg reserve replaced the 3-food threshold as the food gate.
+    setPoolFoodForTest(world, colony, eggReserveFp(world, colony) - 1);
     world.tick = 0;
 
     tickQueenEggProduction(world, colony);

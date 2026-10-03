@@ -34,12 +34,7 @@
 // No Math.floor, no floats, no division operator.
 
 import type { WorldState } from '../types.js';
-import {
-  allocateEntityId,
-  INVALID_ENTITY_ID,
-  SIM_VERSION_V51_UNIFIED_HUNGER,
-  SIM_VERSION_V66_QUEEN_STARVES_HP,
-} from '../types.js';
+import { allocateEntityId, INVALID_ENTITY_ID } from '../types.js';
 import type { ColonyRecord } from './colony-store.js';
 import type { ColonyId } from './colony-store.js';
 import {
@@ -252,13 +247,7 @@ export function tickFoodConsumption(world: WorldState, colony: ColonyRecord): vo
 
   // Queen (CLNY-04). From V66 (#375) her starvation drains her HP instead.
   const queenId = colony.queenEntityId;
-  if (ants.alive[queenId] === 1) {
-    if (world.simVersion >= SIM_VERSION_V66_QUEEN_STARVES_HP) {
-      feedQueenOrDrain(world, colony, queenId);
-    } else {
-      feedOrStarve(world, colony, queenId, QUEEN_HUNGER);
-    }
-  }
+  if (ants.alive[queenId] === 1) feedQueenOrDrain(world, colony, queenId);
 
   // Larvae (CLNY-05) — same per-entity contract.
   for (let i = 0; i < colony.larvae.length; i++) {
@@ -268,13 +257,11 @@ export function tickFoodConsumption(world: WorldState, colony: ColonyRecord): vo
   }
 
   // Workers and fighters (V51, #290 PR 4) — after the queen and larvae, so the
-  // colony feeds the queen first. A V50 world never runs this loop.
-  if (world.simVersion >= SIM_VERSION_V51_UNIFIED_HUNGER) {
-    for (let i = 0; i < colony.workers.length; i++) {
-      const id = colony.workers[i]!;
-      if (ants.alive[id] !== 1) continue;
-      feedWorkerOrStarve(world, colony, id);
-    }
+  // colony feeds the queen first.
+  for (let i = 0; i < colony.workers.length; i++) {
+    const id = colony.workers[i]!;
+    if (ants.alive[id] !== 1) continue;
+    feedWorkerOrStarve(world, colony, id);
   }
 }
 

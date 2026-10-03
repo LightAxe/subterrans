@@ -497,12 +497,6 @@ describe('#371 — a 6-fighter Assault rush on the AI (seed 303 Normal)', () => 
   it('V63 (deep Queen, #374): the defence still holds', () => {
     expect(rushTrial(SIM_VERSION_V63_AI_DEEP_QUEEN, 6600)).toBeNull();
   }, 90_000);
-
-  it('V61 (pinned): the rush kills the queen within ~300 ticks', () => {
-    const died = rushTrial(SIM_VERSION_V61_AI_EARLY_STORAGE, 6600);
-    expect(died).not.toBeNull();
-    expect(died!).toBeLessThan(6100);
-  }, 90_000);
 });
 
 // -----------------------------------------------------------------------------

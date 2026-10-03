@@ -272,8 +272,8 @@ export function despawnAnt(world: WorldState, antIndex: number, death: AntDeath)
 
   // 10. #290 PR 5 (V52) — a raider hauling loot drops it, whatever killed it: on
   // the surface as a corpse pile at the death tile, in the enemy nest into the
-  // victim's pool (owner decision D13), in its own nest into its own pool. Inert
-  // below V52 (only a V52 hauler is a fighter carrying food).
+  // victim's pool (owner decision D13), in its own nest into its own pool. Only a
+  // hauler is a fighter carrying food.
   dropHaulerLoad(world, antIndex);
 }
 

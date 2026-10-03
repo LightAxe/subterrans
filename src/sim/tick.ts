@@ -3,7 +3,6 @@ import type { WorldState } from './types.js';
 import {
   allocateEntityId,
   INVALID_ENTITY_ID,
-  SIM_VERSION_V60_RAID_ORDERS,
   SIM_VERSION_V62_AI_NEST_DEFENCE,
   SIM_VERSION_V65_ALARM_INVASION,
 } from './types.js';
@@ -830,11 +829,9 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         if (!isTileCoord(cmd.tileY, SURFACE_GRID_HEIGHT)) break;
         // #352 (V60): the rally carries its raid type (absent = Loot). A present
         // value that is not a RaidType is a malformed command: dropped whole, like
-        // a bad coordinate. Below V60 the field is ignored (the colony stays Loot).
-        if (world.simVersion >= SIM_VERSION_V60_RAID_ORDERS) {
-          if (cmd.raidType !== undefined && !isRaidType(cmd.raidType)) break;
-          colony.raidType = cmd.raidType ?? RaidType.Loot;
-        }
+        // a bad coordinate.
+        if (cmd.raidType !== undefined && !isRaidType(cmd.raidType)) break;
+        colony.raidType = cmd.raidType ?? RaidType.Loot;
         colony.rallyPoint = { tileX: cmd.tileX, tileY: cmd.tileY };
         break;
       }
@@ -843,7 +840,7 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         if (colony === undefined) break;
         colony.rallyPoint = null;
         // #352 (V60): the raid type goes with the rally.
-        if (world.simVersion >= SIM_VERSION_V60_RAID_ORDERS) colony.raidType = RaidType.Loot;
+        colony.raidType = RaidType.Loot;
         break;
       }
       case 'SetAIRaidClock': {
@@ -966,8 +963,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // Step 5: Death cleanup (swap-remove dead entities; sets colony.defeated if queen dead)
     tickDeathCleanup(world, colony);
 
-    // Step 6: Queen egg production (tick-modulo + food gate: the 3-food threshold before
-    // V70, the egg reserve from V70 — #395)
+    // Step 6: Queen egg production (tick-modulo + food gate: the egg reserve, V70 — #395)
     tickQueenEggProduction(world, colony);
 
     // Step 7: Lifecycle transitions (egg→larva→worker aging + promotion)
@@ -1539,7 +1535,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // Step 10c2 (V60, #352): blockades — the surface fighters step 10c left to a
   // Blockade raid order hold posts round the enemy entrance and chase intruders
   // (ant-blockade.ts). Before 10d, so a spider priority still overrides them.
-  // Inert below V60 and for a colony not blockading.
+  // Inert for a colony not blockading.
   updateBlockaders(world);
 
   // Step 10d: spider priority fighter routing (S3).
@@ -1559,8 +1555,6 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       if (ants.colonyId[sid] !== spiderPriorityCid) continue;
       if (ants.zone[sid] !== 0) continue; // surface only; underground fighters surface first
       // #363 (V58): a starving fighter step 10c sent home to eat keeps walking home.
-      // (Unversioned: before V58 step 10c never sends a fighter of the colony under
-      // spider priority home to eat, so this never skips one.)
       if (fighterWalksHomeToEat(world, sid)) continue;
       ants.targetPosX[sid] = (spTileX << FP_SHIFT) + (FP_ONE >> 1);
       ants.targetPosY[sid] = (spTileY << FP_SHIFT) + (FP_ONE >> 1);
@@ -1576,7 +1570,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // Step 10e (V52, #290 PR 5): raids — who loots this tick, and surface haulers'
   // way home (ant-raid.ts). After 10c/10d, which leave haulers alone; before any
   // step that moves food or digs, so the stock flow field it computes is still
-  // current at step 16. Inert below V52.
+  // current at step 16.
   updateRaiders(world);
 
   // ---------------------------------------------------------------------------
@@ -1697,7 +1691,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // Step 16e (V52, #290 PR 5): raid arrival actions — a looter in an enemy
   // FoodStorage chamber takes a load, a hauler home deposits it (ant-raid.ts).
   // Right after the forager actions: the same arrival-on-the-tile verbs. Numbered
-  // 16e so the existing 16c/16d keep their names. Inert below V52.
+  // 16e so the existing 16c/16d keep their names.
   tickRaidActions(world);
 
   // ---------------------------------------------------------------------------
