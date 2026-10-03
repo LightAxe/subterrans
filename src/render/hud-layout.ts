@@ -29,6 +29,9 @@ export interface HudLayout {
   UNDERGROUND_COLONY_TOGGLE: HudRect;
   /** C1 — colony alarm toggle. Sits above the colony toggle in the right column. */
   ALARM_TOGGLE: HudRect;
+  /** #400 — the spider-order chip ("Call off spider"), shown only while the player's
+   *  spider order is in force (spider-order-chip.ts). Above the alarm toggle. */
+  SPIDER_ORDER: HudRect;
   SAVE_ICON: HudRect;
 }
 
@@ -55,6 +58,8 @@ export function buildHudLayout(layout: LayoutContext): HudLayout {
     VIEW_TOGGLE: { x: w - 168, y: h - 196, w: 128, h: 24 },
     UNDERGROUND_COLONY_TOGGLE: { x: w - 168, y: h - 220, w: 128, h: 22 },
     ALARM_TOGGLE: { x: w - 168, y: h - 246, w: 128, h: 22 },
+    // #400 — one 26px step above the alarm toggle, as the alarm sits above the colony toggle.
+    SPIDER_ORDER: { x: w - 168, y: h - 272, w: 128, h: 22 },
     SAVE_ICON: { x: w - 28, y: 8, w: 20, h: 20 },
   };
 }

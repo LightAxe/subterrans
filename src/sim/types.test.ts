@@ -17,6 +17,7 @@ import {
 } from './constants.js';
 import { RECENT_TILES_LEN } from './ant/ant-store.js';
 import { ChamberType } from './enums.js';
+import { createScenario } from './scenario.js';
 import {
   pileCount,
   pileAtTile,
@@ -451,6 +452,28 @@ describe('WorldState', () => {
         expect(dst.ants.waitingDeposit[0]).toBe(1);
         src.ants.waitingDeposit[0] = 0;
         expect(dst.ants.waitingDeposit[0]).toBe(1);
+      });
+      it('#400 (V71): ants.lastHitTick copied (the healing clock; -1 = never hit)', () => {
+        src.ants.lastHitTick[0] = 4321;
+        src.ants.lastHitTick[1] = -1;
+        dst.ants.lastHitTick[1] = 7; // a stale value in the reused destination
+        copyWorldState(src, dst);
+        expect(dst.ants.lastHitTick[0]).toBe(4321);
+        expect(dst.ants.lastHitTick[1]).toBe(-1);
+        src.ants.lastHitTick[0] = 0;
+        expect(dst.ants.lastHitTick[0]).toBe(4321);
+      });
+      it('#400 (V71): spider.lastHitTick copied into a reused destination spider', () => {
+        const a = createScenario(3, 'Normal');
+        const b = createScenario(4, 'Normal');
+        a.spider!.lastHitTick = 1234;
+        b.spider!.lastHitTick = -1;
+        copyWorldState(a, b); // both have a spider: the field-by-field reuse path
+        expect(b.spider!.lastHitTick).toBe(1234);
+        a.spider!.lastHitTick = -1;
+        b.spider!.lastHitTick = 99;
+        copyWorldState(a, b);
+        expect(b.spider!.lastHitTick).toBe(-1);
       });
       it('Issue #35: searchPauseTicks copied (pause-while-searching counter)', () => {
         src.ants.searchPauseTicks[0] = 5;

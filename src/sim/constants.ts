@@ -182,10 +182,9 @@ export const LARVA_FOOD_PER_TICK = 1;
 // the colony stores at home or from their own load away (hunger.ts).
 
 /**
- * Queen: tries to eat every tick. The V66 fed regeneration (#375,
- * QUEEN_FED_HP_REGEN_INTERVAL_TICKS) counts on it: she heals on the ticks she eats
- * that are multiples of that interval, which are regular only while she eats every
- * tick (queen-starvation-drain.test.ts pins this at 1).
+ * Queen: tries to eat every tick. #400 (V71): she counts as fed (`hungerState`) only
+ * on a tick she ate, so her healing (health.ts, QUEEN_HEAL_INTERVAL_TICKS) relies on
+ * this being 1.
  */
 export const QUEEN_MEAL_INTERVAL_TICKS = 1;
 /** Queen: fp per meal (= QUEEN_FOOD_PER_TICK). */
@@ -193,32 +192,23 @@ export const QUEEN_MEAL_FP = QUEEN_FOOD_PER_TICK;
 /**
  * Queen: dies when a meal fails this many ticks after her last meal. From V66
  * (#375) her starvation is a health drain instead (QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS);
- * a full-HP queen still dies at this tick.
+ * a queen at full home HP still dies at this tick.
  */
 export const QUEEN_STARVE_AFTER_TICKS = STARVATION_GRACE_TICKS;
 
 /**
  * #375 (V66) — while the queen cannot eat she loses 1 HP each time the ticks since
- * her last meal reach a multiple of this, and dies (starvation) at 0 HP. 10 ×
- * COMBAT_HP_QUEEN (30) = QUEEN_STARVE_AFTER_TICKS (300), so a full-HP queen starves
- * on the same tick as before V66 and a wounded one sooner (a queen at 6 HP lasts 60
- * ticks). queen-starvation-drain.test.ts pins the product; save.ts validates the
- * queen's hunger clock against it, so LOWERING this is a save wipe, not a bare
- * retune (see COMBAT_HP_QUEEN).
+ * her last meal reach a multiple of this, and dies (starvation) at 0 HP. #400 (V71)
+ * retuned it with her HP: 6 × QUEEN_HP_HOME (50, her full HP in her nest) =
+ * QUEEN_STARVE_AFTER_TICKS (300), so a queen at full health in her nest still starves
+ * on the same tick as before V66 and a wounded one sooner (a queen at 6 HP lasts 36
+ * ticks; one still on the surface, before she founds her nest, at most
+ * COMBAT_HP_QUEEN × 6 = 276).
+ * queen-starvation-drain.test.ts pins the product; save.ts validates the queen's
+ * hunger clock against it, so LOWERING this is a save wipe, not a bare retune (see
+ * COMBAT_HP_QUEEN).
  */
-export const QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS = 10;
-
-/**
- * #375 (V66) — while the queen is fed she regains 1 HP on each tick she eats whose
- * number is a multiple of this, up to COMBAT_HP_QUEEN (her max): twice the drain
- * rate, 1 → 30 HP in 145 ticks. Keyed on the ticks she eats, so it relies on
- * QUEEN_MEAL_INTERVAL_TICKS = 1. Short hunger bursts heal back; a long famine still
- * kills. Heals combat wounds too (a fighter's 4 per 5 ticks still outpaces it).
- * Tuned by the #375 AI-economy sweep (PR #386): the AI's famines run 40–90 ticks
- * with fed gaps of 60–150, and slower rates (10–200) left its queen starving 4–11
- * times per 100 Normal seeds against V65's 1.
- */
-export const QUEEN_FED_HP_REGEN_INTERVAL_TICKS = 5;
+export const QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS = 6;
 
 /** Larva: tries to eat every tick. */
 export const LARVA_MEAL_INTERVAL_TICKS = 1;
@@ -1046,11 +1036,20 @@ export const ENTRANCE_DEPOSIT_SUPPRESS_RADIUS = 3;
 // S1 — Combat math (HP / damage / cooldown)
 // ---------------------------------------------------------------------------
 
-/** S1 / D-32 — Base HP for any ant. Home-ground HP = HP_BASE + HP_HOMEGROUND_BONUS = 20. */
+/**
+ * S1 / D-32 — An ant's max HP away from home ground. #400 (V71): an ant's max HP
+ * depends on where it stands (health.ts antMaxHp): this away, this +
+ * COMBAT_HP_HOMEGROUND_BONUS (20) on its home ground (underground in its own nest).
+ */
 export const COMBAT_HP_BASE = 16 as const;
 
-/** S1 / D-32 — Extra HP buffer for ants fighting on their own colony's grid.
- *  Depletes before the base HP pool (takes damage first). */
+/**
+ * S1 / D-32 — #400 (V71): how much higher an ant's max HP is on its home ground
+ * (underground in its own colony's nest); the queen's too. Up to V70 this was a
+ * hidden HP buffer granted on an ant's first fight at home and drained before its HP.
+ * Now it is plain max HP: leaving home lowers the max (HP clamps down to it), and
+ * coming home raises it without healing.
+ */
 export const COMBAT_HP_HOMEGROUND_BONUS = 4 as const;
 
 /** S1 / D-32 — Damage dealt per strike by an ant fighting on away ground. */
@@ -1140,13 +1139,62 @@ export const COMBAT_DAMAGE_WORKER = 1 as const;
  *  Flagged TBD: queen damage/HP may be tuned in S6-Tune once playtrace data exists. */
 export const COMBAT_DAMAGE_QUEEN = 6 as const;
 
-/** Base HP for the queen. Higher than workers so it takes a coordinated group of fighters
- *  to kill her. Flagged TBD for S6-Tune. #375 (V66): her starvation window is this ×
- *  QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS, and save.ts validates a V66 queen's HP and
- *  hunger clock against it — LOWERING it (or the drain interval) would make saves fail
- *  to load: a queen above the new value, or one mid-famine past the shrunken window
- *  (a save wipe; treat as a simVersion change, not a bare retune). */
-export const COMBAT_HP_QUEEN = 30 as const;
+/**
+ * The queen's max HP away from home ground; in her nest it is this +
+ * COMBAT_HP_HOMEGROUND_BONUS (QUEEN_HP_HOME). Higher than workers so it takes a
+ * coordinated group of fighters to kill her. #400 (V71) raised it from 30 to make up
+ * for her no longer healing mid-fight (she heals only while fed and safe, health.ts),
+ * tuned on the Assault time-to-kill. Her starvation window is her max HP where she
+ * stands × QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS (QUEEN_HP_HOME × D in her nest), and
+ * save.ts validates a queen's HP and hunger clock against them — LOWERING it (or the drain interval) would make saves fail to
+ * load: a queen above the new value, or one mid-famine past the shrunken window (a
+ * save wipe; treat as a simVersion change, not a bare retune).
+ */
+export const COMBAT_HP_QUEEN = 46 as const;
+
+/** #400 (V71) — the queen's max HP in her own nest: COMBAT_HP_QUEEN + COMBAT_HP_HOMEGROUND_BONUS. */
+export const QUEEN_HP_HOME = COMBAT_HP_QUEEN + COMBAT_HP_HOMEGROUND_BONUS;
+
+// ---------------------------------------------------------------------------
+// #400 (V71) — healing: every creature heals slowly while fed and safe
+// ---------------------------------------------------------------------------
+
+/**
+ * #400 (V71) — a creature is SAFE once this many ticks have passed since it was last
+ * hit (`ants.lastHitTick`, `spider.lastHitTick`); only a safe, fed creature heals
+ * (health.ts). Longer than any lull inside one fight (a strike lands every
+ * COMBAT_COOLDOWN_TICKS), so nothing heals mid-fight.
+ */
+export const HEAL_SAFE_TICKS = 100;
+
+/**
+ * #400 (V71) — a fed, safe worker (fighters and nurses included) on its home ground
+ * regains 1 HP on each tick that is a multiple of this: 16 → 20 (coming home) in
+ * 8 s, a near-dead fighter back to full in ~40 s.
+ */
+export const ANT_HEAL_INTERVAL_TICKS = 40;
+
+/**
+ * #400 (V71) — the queen's healing: 1 HP on each tick that is a multiple of this, while
+ * she is fed (ate this tick), safe and in her nest. Twice her starvation drain rate
+ * (QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS), the ratio #375 tuned for V66's fed
+ * regeneration against the AI's famines (40–90 ticks long, 60–150 apart; PR #386), so
+ * a short hunger burst still heals back. Replaces V66's QUEEN_FED_HP_REGEN_INTERVAL_TICKS,
+ * which also healed her mid-fight.
+ */
+export const QUEEN_HEAL_INTERVAL_TICKS = 3;
+
+/**
+ * #400 (V71) — the spider's healing: 1 HP on each tick that is a multiple of this,
+ * anywhere, while it is fed (not hungry) and safe — 1 HP a second, 0 → full in 80 s.
+ * Replaces the V23 feeding heal (SPIDER_FEED_HEAL_INTERVAL_TICKS, 1 HP every 10 ticks
+ * while Feeding at its feed tile), so eating no longer heals it. Tuned on the
+ * spider-kill probes (PR for #400): at an interval of 40 or 80, fighters parked in its
+ * territory with no spider order wore it down (to 6 HP, or dead) where they did not at
+ * V70; at 20 they do no better than at V70, while a fighter group sent at it (spider priority)
+ * still kills it on 11 of 12 seeds.
+ */
+export const SPIDER_HEAL_INTERVAL_TICKS = 20;
 
 // ---------------------------------------------------------------------------
 // S2 — AI State Machine (D-20 / D-27 / D-29 / D-34)
@@ -1352,9 +1400,6 @@ export const SPIDER_RAMPAGE_REVISIT_COOLDOWN_TICKS = 1200 as const;
 /** S3 — HP threshold below which spider retreats. */
 export const SPIDER_RAMPAGE_RETREAT_HP = 20 as const;
 
-/** S3 — HP regenerated per 20 ticks during Retreating or Feeding. */
-export const SPIDER_HP_REGEN_PER_20_TICKS = 1 as const;
-
 /** S3 — Minimum ticks in Retreating before spider can return to Patrolling. */
 export const SPIDER_RETREAT_MIN_TICKS = 200 as const;
 
@@ -1408,11 +1453,13 @@ export const SPIDER_FEED_RETREAT_TILES = 10 as const;
 /** V23 — Manhattan radius at which a Fighting ant counts as "adjacent" (blocks/interrupts feed). */
 export const SPIDER_FEED_DANGER_RADIUS = 1 as const;
 
-/** V23 — Feed/heal window, measured from arrival at the feed tile. 300 ticks = 15 sim-seconds. */
+/**
+ * V23 — Feed window, measured from arrival at the feed tile. 300 ticks = 15
+ * sim-seconds. Up to V70 the spider healed while it fed; from #400 (V71) it heals
+ * only by the fed-and-safe rule (SPIDER_HEAL_INTERVAL_TICKS), so the window is just
+ * how long it sits and eats before it can hunt again.
+ */
 export const SPIDER_FEED_TICKS = 300 as const;
-
-/** V23 — While feeding at the feed tile, regen +1 HP every N ticks (~30 HP over SPIDER_FEED_TICKS). */
-export const SPIDER_FEED_HEAL_INTERVAL_TICKS = 10 as const;
 
 /**
  * V23 (#146/#147) — Manhattan tile radius within which a Fighting ant attacking the

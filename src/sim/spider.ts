@@ -12,7 +12,6 @@ import { AntTask, PheromoneType } from './enums.js';
 import { tierIndex } from './ai-state.js';
 import { getScratch } from './scratch.js';
 import {
-  SPIDER_HP_FULL,
   SPIDER_HUNT_INTERVAL_TICKS,
   SPIDER_TELEGRAPH_TICKS,
   SPIDER_STRIKE_TICKS,
@@ -31,7 +30,6 @@ import {
   SPIDER_FEED_RETREAT_TILES,
   SPIDER_FEED_DANGER_RADIUS,
   SPIDER_FEED_TICKS,
-  SPIDER_FEED_HEAL_INTERVAL_TICKS,
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
   SPIDER_EDGE_MARGIN_TILES,
@@ -897,6 +895,9 @@ export function tickSpider(world: WorldState): void {
 
     clearSpiderPairingSentinels(world);
     world.spider = null;
+    // #400 (V71): the spider's death is the one thing besides the player
+    // (MarkSpiderPriority off) that ends a spider priority. Up to V70 it also ended
+    // on every feed, hunt end, rampage end and chase divert.
     world.spiderPriorityColonyId = null;
     world.scatterReticleTile = null;
     return;
@@ -1019,8 +1020,9 @@ function feedRetreatCoord(k: number, sign: number, size: number, margin: number)
 
 /**
  * #377 — the spider is ON A RAMPAGE: out hunting hungry, from the moment it grows
- * hungry until it eats (any kill resets its hunger: step 3 below) or dies. That is
- * the window the rampage caption warns about (render/recurring-captions.ts). The
+ * hungry until it eats (any kill resets its hunger: step 3 below) or dies: one hungry
+ * spell. (How often the render-side rampage warning shows within a spell is
+ * render/recurring-captions.ts's business, not this predicate's.) The
  * `Rampaging` state is only its entrance-camping part: the camper diverts to chase
  * any ant that comes near, and after a chase that does not end in a meal it goes
  * back to camping, hunting or chasing, still hungry, until it eats.
@@ -1042,8 +1044,10 @@ export function spiderOnRampage(world: WorldState): boolean {
 // tickSpiderV23 — hunger-gated meandering surface predator (#146/#147 redesign).
 // No lair orbit; slow meander while sated, fast lunge while hunting/chasing.
 // Always bites back any ant attacking it; fights to the death (no retreat/flee).
-// A kill resets hunger; if out of danger it retreats ~10 tiles and heals while
-// feeding (interruptible). Deterministic: no world.rngState draws.
+// A kill resets hunger; if out of danger it retreats ~10 tiles and eats there
+// (interruptible). From #400 (V71) it heals only while fed and safe (health.ts),
+// and a spider priority stays on until the player clears it or the spider dies.
+// Deterministic: no world.rngState draws.
 // ---------------------------------------------------------------------------
 function tickSpiderV23(world: WorldState, spider: SpiderState): void {
   // 1. Normalize: 'Retreating' is unused in V23 (may load from an earlier #172 build).
@@ -1087,7 +1091,7 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
       } else if (priorState === 'Rampaging') {
         emitSpiderRampageEnd(world, 'quota_met', spider.rampageKillsThisRampage, false);
       }
-      // Out of danger: retreat ~10 tiles from the kill, then eat there to heal.
+      // Out of danger: retreat ~10 tiles from the kill, then eat there.
       computeFeedAwayTile(world, spider);
       spider.feedArrivedTick = -1;
       clearSpiderPairingSentinels(world);
@@ -1097,7 +1101,6 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
       spider.chaseTargetAntId = -1;
       spider.rampageTargetColonyId = -1;
       spider.rampageEntranceId = -1;
-      world.spiderPriorityColonyId = null;
       emitEvent(world, {
         tick: world.tick,
         type: 'spider_feed_start',
@@ -1136,12 +1139,10 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
         spider.huntTargetTileX = -1;
         spider.huntTargetTileY = -1;
         spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
-        world.spiderPriorityColonyId = null;
       } else if (spider.state === 'Rampaging') {
         emitSpiderRampageEnd(world, 'retreated', spider.rampageKillsThisRampage, false);
         spider.rampageTargetColonyId = -1;
         spider.rampageEntranceId = -1;
-        world.spiderPriorityColonyId = null;
       }
       clearSpiderPairingSentinels(world);
       enterChasing(world, spider, attackerId);
@@ -1240,7 +1241,6 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
         spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
         spider.huntTargetTileX = -1;
         spider.huntTargetTileY = -1;
-        world.spiderPriorityColonyId = null;
       }
       break;
     }
@@ -1304,7 +1304,6 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
         spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
         spider.rampageTargetColonyId = -1;
         spider.rampageEntranceId = -1;
-        world.spiderPriorityColonyId = null;
       } else if (spider.rampageTargetColonyId < 0 || campedEntrance(world, spider) === null) {
         // No target yet, or the camped colony sealed its only open entrance.
         // (Re-pick first; if still no open entrance, resume patrolling.)
@@ -1317,7 +1316,6 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
           spider.nextHuntTick = world.tick + SPIDER_HUNT_INTERVAL_TICKS;
           spider.rampageTargetColonyId = -1;
           spider.rampageEntranceId = -1;
-          world.spiderPriorityColonyId = null;
         }
       } else {
         // Camping-straggler lunge (#146): an ant emerging from the entrance moves off
@@ -1339,7 +1337,6 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
           clearSpiderPairingSentinels(world);
           spider.rampageTargetColonyId = -1;
           spider.rampageEntranceId = -1;
-          world.spiderPriorityColonyId = null;
           enterChasing(world, spider, stragglerId);
         }
       }
@@ -1348,7 +1345,7 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
 
     case 'Feeding': {
       if (isFighterAdjacent(world, spider)) {
-        // Interrupted: forfeit the remaining heal and resume defending.
+        // Interrupted: abandon the meal and resume defending.
         emitEvent(world, {
           tick: world.tick,
           type: 'spider_feed_end',
@@ -1367,15 +1364,13 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
         ) {
           spider.feedArrivedTick = world.tick;
         }
+        // #400 (V71): eating no longer heals the spider. It heals by the fed-and-safe
+        // rule like every creature (health.ts, step 16f) — fed it is, having just
+        // eaten, so it heals here only while no ant has hit it for HEAL_SAFE_TICKS.
         if (spider.feedArrivedTick >= 0) {
-          if (
-            (world.tick - spider.feedArrivedTick) % SPIDER_FEED_HEAL_INTERVAL_TICKS === 0 &&
-            spider.hp < SPIDER_HP_FULL
-          ) {
-            spider.hp += 1;
-            if (spider.hp > SPIDER_HP_FULL) spider.hp = SPIDER_HP_FULL;
-          }
           if (world.tick - spider.feedArrivedTick >= SPIDER_FEED_TICKS) {
+            // The telemetry outcome keeps its V23 name: the feed window ran out
+            // uninterrupted.
             emitEvent(world, {
               tick: world.tick,
               type: 'spider_feed_end',
@@ -1449,7 +1444,7 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
       break;
     }
     case 'Feeding': {
-      // Travel to the feed tile, then idle there while healing.
+      // Travel to the feed tile, then idle there while it eats.
       moveTowardTile(spider, spider.feedAwayTileX, spider.feedAwayTileY);
       break;
     }

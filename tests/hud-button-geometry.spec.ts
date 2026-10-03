@@ -210,6 +210,18 @@ test.describe('#320 — HUD button labels stay inside their click rects', () => 
     await expect.poll(() => labelOf(page, 'alarm-toggle')).not.toBe(alarmOff);
     record(await expectAllInside(page, 'surface, alarm on'));
 
+    // 2b. #400 — the spider-order chip, drawn only while the player's spider order
+    //     is in force: set one through the real Command-tap handler.
+    await page.evaluate(() => {
+      const t = (window as unknown as { __phase9_test?: { tapSpiderAsPlayer?: () => boolean } })
+        .__phase9_test;
+      if (t?.tapSpiderAsPlayer?.() !== true) throw new Error('tapSpiderAsPlayer failed');
+    });
+    await expect
+      .poll(async () => (await geometry(page)).find((g) => g.id === 'spider-order')?.visible)
+      .toBe(true);
+    record(await expectAllInside(page, 'surface, spider order on'));
+
     // 3. Underground — the view toggle's other label, and the colony toggle
     //    (drawn on this view only) in its first state.
     const surfaceView = await labelOf(page, 'view-toggle');
@@ -232,6 +244,7 @@ test.describe('#320 — HUD button labels stay inside their click rects', () => 
       expect(seen.get(id)?.size ?? 0, `${id} variants measured`).toBe(2);
     }
     for (const id of [
+      'spider-order',
       'tool:command',
       'tool:dig',
       'tool:chamber',

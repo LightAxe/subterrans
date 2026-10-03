@@ -14,7 +14,7 @@
 import type { WorldState, EntityId, AIStateRecord, SpiderState } from '../sim/types.js';
 import {
   LATEST_SIM_VERSION,
-  SIM_VERSION_V50_LOCATED_FOOD,
+  SIM_VERSION_V71_HEALTH_MODEL,
   SIM_VERSION_V51_UNIFIED_HUNGER,
   SIM_VERSION_V66_QUEEN_STARVES_HP,
   SIM_VERSION_V52_RAIDING,
@@ -67,7 +67,6 @@ import {
   UNDERGROUND_GRID_WIDTH,
   UNDERGROUND_GRID_HEIGHT,
   PLAYER_COLONY_ID,
-  COMBAT_HP_QUEEN,
   QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
 } from '../sim/constants.js';
 import { FP_SHIFT } from '../sim/fixed.js';
@@ -75,6 +74,7 @@ import { AntTask, ChamberType, FightingSubState, RaidType, isRaidType } from '..
 import { livePileTiles } from '../sim/food/food-api.js';
 import { Zone } from '../sim/terrain.js';
 import { FIGHTER_HUNGER, LARVA_HUNGER, QUEEN_HUNGER, WORKER_HUNGER } from '../sim/hunger.js';
+import { antMaxHp } from '../sim/health.js';
 import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 import {
   validateSurfaceConnectivity,
@@ -171,7 +171,8 @@ export class FutureSimVersionError extends Error {
  * rules; "no gates" is a review rule.
  *
  * Transition: V69 (#402) and V70 (#405) were written under the earlier gated
- * policy and leave MIN here. The first sim PR after them sets MIN === LATEST.
+ * policy and left MIN at V50. #400 (V71) is the first sim PR after them and sets
+ * MIN === LATEST.
  * Post-1.0 the rolling window returns: MIN stays put while LATEST advances behind
  * sticky gates, and raising MIN becomes a deliberate, justified exception.
  *
@@ -180,16 +181,19 @@ export class FutureSimVersionError extends Error {
  * `gameVersion` carries that build's git SHA, and scripts/analyze-snapshot.ts says
  * so instead of replaying.
  *
- * Why it is V50 today:
- *   - V50: #290 PR 2. The located food store replaces the `foodPiles` array and
- *     the `foodStored` scalars, and the count-up hunger clock `ants.lastMealTick`
- *     replaces `starvationTimer` / `queenStarvationTimer`. Loading a pre-V50
- *     snapshot into the new shape would be a format transform, which ADR-0014
- *     forbids, so every pre-V50 save is rejected (owner decision on #290,
- *     2026-09-25).
- *   - Previous floor: V30 (PR 6-sim's underground-embedding guards).
+ * Why it is V71 today:
+ *   - V71: #400, the health model (max HP by territory, healing while fed and
+ *     safe; `ants.homeGroundBonusHp` removed, `lastHitTick` added). The first sim
+ *     PR under the pre-1.0 policy: every pre-V71 save is rejected.
+ *   - Previous floor V50: #290 PR 2. The located food store replaces the
+ *     `foodPiles` array and the `foodStored` scalars, and the count-up hunger clock
+ *     `ants.lastMealTick` replaces `starvationTimer` / `queenStarvationTimer`.
+ *     Loading a pre-V50 snapshot into the new shape would be a format transform,
+ *     which ADR-0014 forbids, so every pre-V50 save was rejected (owner decision
+ *     on #290, 2026-09-25).
+ *   - Before that: V30 (PR 6-sim's underground-embedding guards).
  */
-export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V50_LOCATED_FOOD;
+export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V71_HEALTH_MODEL;
 
 export class OldSimVersionError extends Error {
   // #229 — explicit field (see SaveVersionMismatchError): strip-only Node compat.
@@ -670,7 +674,10 @@ interface SerializedAnts {
   carryingBroodId: number[];
   carriedBy: number[];
   hp: number[];
-  homeGroundBonusHp: number[];
+  // #400 (V71) — the tick of the ant's last combat blow (-1 = never hit). Replaces
+  // the V16–V70 `homeGroundBonusHp` column; MIN_ACCEPTED is V71, so no save without
+  // it loads.
+  lastHitTick: number[];
   attackCooldown: number[];
   combatOpponentId: number[];
   // #209 PR A (V34) — flee/shelter phase column. OPTIONAL on load: a pre-V34
@@ -752,6 +759,8 @@ interface SerializedSpiderState {
   feedAwayTileX: number;
   feedAwayTileY: number;
   feedArrivedTick: number;
+  // #400 (V71) — tick of the last blow an ant landed on it; -1 = never hit.
+  lastHitTick: number;
   // V54 (#337) — absent on a pre-V54 save; restored as -1 (none).
   rampageEntranceId?: number;
   rampageRotationEntranceId?: number;
@@ -1019,7 +1028,7 @@ function serializeAnts(a: AntComponents, nextEntityId: number): SerializedAnts {
     carriedBy: Array.from(a.carriedBy),
     // S1 — combat HP/damage/cooldown fields.
     hp: Array.from(a.hp),
-    homeGroundBonusHp: Array.from(a.homeGroundBonusHp),
+    lastHitTick: Array.from(a.lastHitTick),
     attackCooldown: Array.from(a.attackCooldown),
     combatOpponentId: Array.from(a.combatOpponentId),
     // #209 PR A (V34) — flee/shelter phase (-1 / 0 / >0).
@@ -1351,6 +1360,9 @@ function validateAntColumns(saved: SerializedAnts, capacity: number): void {
   // taken mid-spider-fight legitimately carries it. Widen ID_SENTINEL for this
   // one column so it is not falsely rejected.
   const combatOppSentinel = (v: number): boolean => v === -2 || idSentinel(v);
+  // #400 (V71) — a tick column whose "never" is -1 (lastHitTick).
+  const tickSentinel = (v: number): boolean =>
+    v === -1 || (Number.isInteger(v) && v >= 0 && v <= 0x7fffffff);
   const byte = (v: number): boolean => Number.isInteger(v) && v >= 0 && v < 256;
   const enumMax =
     (max: number) =>
@@ -1395,7 +1407,9 @@ function validateAntColumns(saved: SerializedAnts, capacity: number): void {
     ['carryingBroodId', saved.carryingBroodId, idSentinel],
     ['carriedBy', saved.carriedBy, idSentinel],
     ['hp', saved.hp, finiteInt],
-    ['homeGroundBonusHp', saved.homeGroundBonusHp, finiteInt],
+    // #400 (V71): -1 (never hit) or a tick; "not in the future" is checked against
+    // the assembled world.
+    ['lastHitTick', saved.lastHitTick, tickSentinel],
     ['attackCooldown', saved.attackCooldown, finiteInt],
     ['combatOpponentId', saved.combatOpponentId, combatOppSentinel],
   ];
@@ -1476,7 +1490,7 @@ function deserializeAnts(
   copyIntoInt32(a.carryingBroodId, saved.carryingBroodId);
   copyIntoInt32(a.carriedBy, saved.carriedBy);
   copyIntoInt32(a.hp, saved.hp);
-  copyIntoInt32(a.homeGroundBonusHp, saved.homeGroundBonusHp);
+  copyIntoInt32(a.lastHitTick, saved.lastHitTick);
   copyIntoInt32(a.attackCooldown, saved.attackCooldown);
   copyIntoInt32(a.combatOpponentId, saved.combatOpponentId);
   // #209 PR A (V34) — optional-on-load flee/shelter phase. Absent on pre-V34
@@ -1701,6 +1715,27 @@ function deserializeSpider(s: SerializedWorldState): SpiderState | null {
     safeState === 'Rampaging' &&
     typeof r.rampageTargetColonyId === 'number' &&
     r.rampageTargetColonyId > 0;
+  // #400 (V71) — the spider's last-hit clock, checked as ants.lastHitTick is: a blow
+  // lands during a tick (combat.ts damageSpider), so between ticks it is -1 (never
+  // hit) or an integer in [0, tick − 1]. Anything else is rejected. That is stricter
+  // than the other spider clocks' fallbacks on purpose: it is a V71 field and
+  // MIN_ACCEPTED_SIM_VERSION === LATEST (V71), so every loadable save carries it, and
+  // reading a missing or impossible value as "never hit" would let the spider heal
+  // before HEAL_SAFE_TICKS. (deserializeWorldState has validated s.tick by now.)
+  const lastHitTick = r.lastHitTick;
+  if (
+    lastHitTick !== -1 &&
+    !(
+      typeof lastHitTick === 'number' &&
+      Number.isInteger(lastHitTick) &&
+      lastHitTick >= 0 &&
+      lastHitTick <= s.tick - 1
+    )
+  ) {
+    throw new Error(
+      `Invalid spider.lastHitTick: ${String(lastHitTick)} at tick ${s.tick} (require -1 or an integer in [0, tick − 1])`,
+    );
+  }
   return {
     state: safeState,
     posX: typeof r.posX === 'number' && Number.isInteger(r.posX) ? r.posX : 0,
@@ -1779,6 +1814,7 @@ function deserializeSpider(s: SerializedWorldState): SpiderState | null {
       typeof r.feedArrivedTick === 'number' && Number.isInteger(r.feedArrivedTick)
         ? r.feedArrivedTick
         : -1,
+    lastHitTick, // #400 (V71): validated above
     // V54 (#337). The pinned entrance only means something mid-rampage (as
     // rampageTargetColonyId); the rotation cursor and its timeout tick outlive the
     // rampage (they last until the spider's next kill). A cursor without a valid tick
@@ -2151,20 +2187,36 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   // its task at the check, so one stood down from Fighting since its last meal
   // may be past its current kind's starve-after until step 3 next runs: the
   // window uses the larger of the two.) From V66 (#375) the queen starves by HP
-  // drain: at most COMBAT_HP_QUEEN drains, one per QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
-  // so that product is her window (today equal to her starve-after, 300).
+  // drain: at most her max HP in drains, one per QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
+  // so that product is her window. #400 (V71): her max is where she stands
+  // (health.ts antMaxHp) — QUEEN_HP_HOME in her nest (a window of 300, her
+  // starve-after), COMBAT_HP_QUEEN on the surface before she founds it. (The surface
+  // window relies on a queen never going back up once she is in her nest.)
   const workersEat = world.simVersion >= SIM_VERSION_V51_UNIFIED_HUNGER;
-  const queenStarveAfter =
-    world.simVersion >= SIM_VERSION_V66_QUEEN_STARVES_HP
-      ? COMBAT_HP_QUEEN * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS
-      : QUEEN_HUNGER.starveAfterTicks;
+  const queenStarvesByHp = world.simVersion >= SIM_VERSION_V66_QUEEN_STARVES_HP;
+  // #400 (V71) — a blow lands during a tick, so between ticks no ant's last hit is
+  // later than tick − 1 (dead slots included: their stamp is from before they died).
+  const allocated = Math.min(world.nextEntityId, world.ants.lastHitTick.length);
+  for (let id = 0; id < allocated; id++) {
+    if (world.ants.lastHitTick[id]! > world.tick - 1) {
+      throw new Error(
+        `Invalid ants.lastHitTick[${id}]: ${world.ants.lastHitTick[id]} at tick ${world.tick}`,
+      );
+    }
+  }
   const workerStarveAfter = Math.max(
     WORKER_HUNGER.starveAfterTicks,
     FIGHTER_HUNGER.starveAfterTicks,
   );
   for (const c of Object.values(world.colonies)) {
     const eaters: Array<[number, number, string]> = [
-      [c.queenEntityId, queenStarveAfter, 'queen'],
+      [
+        c.queenEntityId,
+        queenStarvesByHp
+          ? antMaxHp(world, c.queenEntityId) * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS
+          : QUEEN_HUNGER.starveAfterTicks,
+        'queen',
+      ],
       ...c.larvae.map((id): [number, number, string] => [
         id,
         LARVA_HUNGER.starveAfterTicks,
@@ -2176,16 +2228,17 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
         'worker',
       ]),
     ];
-    // #375 — the V66 queen window above holds only while her HP never exceeds
-    // COMBAT_HP_QUEEN (she spawns at it and regenerates only up to it).
-    if (
-      world.simVersion >= SIM_VERSION_V66_QUEEN_STARVES_HP &&
-      world.ants.alive[c.queenEntityId] === 1 &&
-      world.ants.hp[c.queenEntityId]! > COMBAT_HP_QUEEN
-    ) {
-      throw new Error(
-        `Invalid ants.hp[${c.queenEntityId}] (colony ${c.colonyId} queen): above COMBAT_HP_QUEEN`,
-      );
+    // #375 / #400 — the queen window above holds only while her HP never exceeds her
+    // max where she stands. #400 (V71): between ticks no adult is above it (health.ts
+    // antMaxHp: step 16f clamps after movement, and nothing later in the tick moves
+    // an ant).
+    for (const id of [c.queenEntityId, ...c.workers]) {
+      if (world.ants.alive[id] !== 1) continue;
+      if (world.ants.hp[id]! > antMaxHp(world, id)) {
+        throw new Error(
+          `Invalid ants.hp[${id}] (colony ${c.colonyId}): ${world.ants.hp[id]} above its max HP ${antMaxHp(world, id)}`,
+        );
+      }
     }
     for (const [id, starveAfter, what] of eaters) {
       if (world.ants.alive[id] !== 1) continue;

@@ -9,12 +9,13 @@ import { describe, it, expect } from 'vitest';
 import { serializeWorldState, deserializeWorldState, type SerializedWorldState } from './save.js';
 import { createScenario } from '../sim/scenario.js';
 import { tick } from '../sim/tick.js';
-import { allocateEntityId, SIM_VERSION_V50_LOCATED_FOOD } from '../sim/types.js';
+import { allocateEntityId } from '../sim/types.js';
 import { initAnt } from '../sim/ant/ant-store.js';
 import { FIGHTER_HUNGER, LARVA_HUNGER, WORKER_HUNGER } from '../sim/hunger.js';
 import { spawnCorpseFood } from '../sim/food-system.js';
 import type { WorldState } from '../sim/types.js';
 import { isSurfaceTileInComponent } from '../sim/surface-features.js';
+import { antMaxHp } from '../sim/health.js';
 import {
   BASE_FOOD_STORAGE_CAPACITY,
   ENEMY_COLONY_ID,
@@ -23,6 +24,7 @@ import {
   FOOD_STORAGE_CHAMBERS_PER_COLONY_BOUND,
   FOOD_STORE_CAPACITY,
   PLAYER_COLONY_ID,
+  QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
   SURFACE_GRID_HEIGHT,
   SURFACE_GRID_WIDTH,
 } from '../sim/constants.js';
@@ -408,11 +410,14 @@ describe('#290 PR 2 validateFoodStore — tamper matrix', () => {
     for (let t = 0; t < 5; t++) tick(w, []);
     const q = w.colonies[PC]!.queenEntityId;
     expect(() => deserializeWorldState(serializeWorldState(w))).not.toThrow();
+    // #400 (V71): her famine window is her max HP where she stands × the drain
+    // interval (still on the surface here, 5 ticks in: COMBAT_HP_QUEEN × D = 276).
+    const window = antMaxHp(w, q) * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS;
     rejects(w, (s) => (s.ants.lastMealTick[q] = s.tick), /lastMealTick/);
-    rejects(w, (s) => (s.ants.lastMealTick[q] = s.tick - 301), /lastMealTick/);
+    rejects(w, (s) => (s.ants.lastMealTick[q] = s.tick - window - 1), /lastMealTick/);
     // The edges load: fed last tick, or one meal from starving.
     const s = serializeWorldState(w);
-    s.ants.lastMealTick[q] = s.tick - 300;
+    s.ants.lastMealTick[q] = s.tick - window;
     expect(() => deserializeWorldState(s)).not.toThrow();
   });
 
@@ -443,7 +448,7 @@ describe('#290 PR 2 validateFoodStore — tamper matrix', () => {
     expect(() => deserializeWorldState(s)).not.toThrow();
   });
 
-  it('from V51 rejects a live worker or fighter whose last meal is in the future or past starve-after', () => {
+  it('rejects a live worker or fighter whose last meal is in the future or past starve-after', () => {
     const w = createScenario(42);
     for (let t = 0; t < 5; t++) tick(w, []);
     const id = w.colonies[PC]!.workers[0]!;
@@ -454,11 +459,8 @@ describe('#290 PR 2 validateFoodStore — tamper matrix', () => {
     edge.ants.lastMealTick[id] = edge.tick - starve; // the window's far edge loads
     expect(() => deserializeWorldState(edge)).not.toThrow();
     rejects(w, (s) => (s.ants.lastMealTick[id] = s.tick - starve - 1), /lastMealTick.*worker/);
-    // A V50 world's workers never ate: their clocks are not checked.
-    const v50 = serializeWorldState(w);
-    v50.simVersion = SIM_VERSION_V50_LOCATED_FOOD;
-    v50.ants.lastMealTick[id] = v50.tick + 1000;
-    expect(() => deserializeWorldState(v50)).not.toThrow();
+    // (The V50 arm — a V50 world's workers never ate, so their clocks went unchecked —
+    // was retired by #400: MIN_ACCEPTED is V71, so no V50 save loads at all.)
   });
 
   // 5. Pile order.

@@ -7,12 +7,12 @@
 // per session, so a second attack or famine later in the match went unannounced.
 //
 // It now re-arms once the queen has RECOVERED:
-//   - she is back at full health (base HP = COMBAT_HP_QUEEN) — from V66 a fed queen
-//     regenerates (QUEEN_FED_HP_REGEN_INTERVAL_TICKS), so this is the HP threshold;
+//   - she is back at full health (her max HP where she stands, health.ts antMaxHp)
+//     — from V66 a fed queen regenerates (from #400, V71, only while also safe from
+//     blows and in her nest: health.ts), so this is the HP threshold;
 //   - she ate on the last tick; and
-//   - she has lost no HP for QUEEN_DANGER_REARM_TICKS. This keeps a fight at full
-//     base HP, where blows land on the home-ground buffer, from re-raising the
-//     caption on every blow.
+//   - she has lost no HP for QUEEN_DANGER_REARM_TICKS, so a fight that pauses does
+//     not re-raise the caption on its next blow.
 // A pre-V66 world has no regeneration, so a wounded queen there would never reach
 // full HP again; for it the HP threshold is waived (fed and unhurt suffices).
 //
@@ -23,7 +23,7 @@ import type { WorldState } from '../sim/types.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
 import { isAlive } from '../sim/ant/ant-store.js';
 import { QUEEN_HUNGER } from '../sim/hunger.js';
-import { COMBAT_HP_QUEEN } from '../sim/constants.js';
+import { antMaxHp } from '../sim/health.js';
 import { SIM_VERSION_V66_QUEEN_STARVES_HP } from '../sim/types.js';
 import { queenMealsUntilStarvation } from './hud-stats.js';
 import { checkAndTrigger, untrigger } from './onboarding-captions.js';
@@ -33,7 +33,7 @@ import { QUEEN_DAMAGE_SUPPRESS_TICKS } from './screen-effects.js';
 export const QUEEN_DANGER_REARM_TICKS = 200;
 
 export interface QueenDangerState {
-  /** Queen HP (base + home-ground buffer) at the previous frame; null before the first. */
+  /** Queen HP at the previous frame; null before the first. */
   prevHp: number | null;
   /** Tick of her most recent HP loss seen, or null if none since the last re-arm. */
   lastHarmTick: number | null;
@@ -51,9 +51,9 @@ export interface QueenDangerStep {
 }
 
 /**
- * Advance the tracker by one render frame. `hp` is the queen's combined HP now,
- * `fed` whether she ate on the last tick, `healed` whether she is back at full base
- * HP (always true before V66), `tick` the world tick.
+ * Advance the tracker by one render frame. `hp` is the queen's HP now, `fed`
+ * whether she ate on the last tick, `healed` whether she is back at her full max HP
+ * (always true before V66), `tick` the world tick.
  */
 export function stepQueenDanger(
   state: QueenDangerState,
@@ -90,8 +90,8 @@ export interface QueenDangerFrame {
 
 /**
  * GameScene's per-frame queen-danger step for `colony` (the player's): reads her
- * combined HP (base + home-ground buffer), whether she ate on the last tick and
- * whether she is back at full base HP (V66; waived before), re-arms the caption on
+ * HP, whether she ate on the last tick and whether she is back at her full max HP
+ * (V66; waived before), re-arms the caption on
  * recovery (untrigger), and on an HP loss past
  * QUEEN_DAMAGE_SUPPRESS_TICKS asks for the pulse and the caption (checkAndTrigger,
  * so it shows once per danger spell).
@@ -102,13 +102,11 @@ export function advanceQueenDanger(
   colony: ColonyRecord,
 ): QueenDangerFrame {
   const q = colony.queenEntityId;
-  const hp = (world.ants.hp[q] ?? 0) + (world.ants.homeGroundBonusHp[q] ?? 0);
+  const hp = world.ants.hp[q] ?? 0;
   const fed =
     isAlive(world.ants, q) &&
     queenMealsUntilStarvation(world, colony) >= QUEEN_HUNGER.starveAfterTicks;
-  const healed =
-    world.simVersion < SIM_VERSION_V66_QUEEN_STARVES_HP ||
-    (world.ants.hp[q] ?? 0) >= COMBAT_HP_QUEEN;
+  const healed = world.simVersion < SIM_VERSION_V66_QUEEN_STARVES_HP || hp >= antMaxHp(world, q);
   const step = stepQueenDanger(state, hp, fed, healed, world.tick);
   if (step.rearm) untrigger('queenDamage');
   if (!step.hurt || world.tick <= QUEEN_DAMAGE_SUPPRESS_TICKS) return NO_DANGER;

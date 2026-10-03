@@ -26,7 +26,7 @@ import {
 import { AntTask, PheromoneType, ForagingSubState, ChamberType, NursingSubState } from './enums.js';
 import {
   WORKER_LIFESPAN_TICKS,
-  COMBAT_HP_QUEEN,
+  QUEEN_HP_HOME,
   WORKER_BASE_SPEED,
   STARVATION_GRACE_TICKS,
   PLAYER_COLONY_ID,
@@ -440,7 +440,10 @@ describe('Phase 6 SC 2: starvation cascade', () => {
       subTask: 0,
       speed: 0,
       lifespan: WORKER_LIFESPAN_TICKS,
-      hp: COMBAT_HP_QUEEN, // #375: from V66 she starves by HP; full HP = the same tick
+      // #375: from V66 she starves by HP; full HP = the same tick. #400 (V71): her full
+      // HP is QUEEN_HP_HOME in her nest (underground, her own grid); speed 0 keeps her.
+      zone: Zone.Underground,
+      hp: QUEEN_HP_HOME,
     });
     world.colonies[1] = createColonyRecord(1, queenId);
     setPoolFoodForTest(world, world.colonies[1], 0); // no food — queen cannot eat

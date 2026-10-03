@@ -16,8 +16,11 @@ import { tick } from '../sim/tick.js';
 import {
   COMBAT_HP_QUEEN,
   PLAYER_COLONY_ID,
-  QUEEN_FED_HP_REGEN_INTERVAL_TICKS,
+  QUEEN_HEAL_INTERVAL_TICKS,
+  QUEEN_HP_HOME,
+  QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
 } from '../sim/constants.js';
+import { stageQueenInNest } from '../sim/health-test-utils.js';
 import { SIM_VERSION_V66_QUEEN_STARVES_HP } from '../sim/types.js';
 import { setColonyFoodForTest } from '../sim/food/food-test-utils.js';
 
@@ -44,7 +47,7 @@ describe('stepQueenDanger', () => {
     expect(stepQueenDanger(s, 30, true, true, 0).hurt).toBe(false);
     expect(stepQueenDanger(s, 30, true, true, 1).hurt).toBe(false);
     expect(stepQueenDanger(s, 29, false, false, 2).hurt).toBe(true);
-    expect(stepQueenDanger(s, 33, true, true, 3).hurt).toBe(false); // healed / buffer refilled
+    expect(stepQueenDanger(s, 33, true, true, 3).hurt).toBe(false); // healed
   });
 
   it('the caption shows once per danger spell, and again after she recovers', () => {
@@ -97,7 +100,12 @@ describe('#375 advanceQueenDanger against the sim (V66): starvation raises it, r
   it('famine → pulse + caption; fed 200+ ticks → re-armed; second famine → caption again', () => {
     const world = createScenario(7, 'Normal');
     const colony = world.colonies[PLAYER_COLONY_ID]!;
-    const q = colony.queenEntityId;
+    // #400 (V71): she heals only in her nest — stage her there, at full home HP.
+    const q = stageQueenInNest(world, colony);
+    world.ants.hp[q] = QUEEN_HP_HOME;
+    // Two drains, then (fed) safe ticks to heal them.
+    const famine =
+      2 * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS + (QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS >> 1);
     const s = createQueenDangerState();
     const shown: number[] = [];
     let pulses = 0;
@@ -113,16 +121,16 @@ describe('#375 advanceQueenDanger against the sim (V66): starvation raises it, r
     };
     for (let i = 0; i < 60; i++) step(2048); // past the round-start grace, fed
     expect(pulses).toBe(0);
-    for (let i = 0; i < 25; i++) step(0); // famine: drains at 10 and 20 ticks since her meal
+    for (let i = 0; i < famine; i++) step(0); // famine: two drains since her meal
     expect(shown).toHaveLength(1);
     expect(pulses).toBe(2);
-    expect(world.ants.hp[q]).toBe(28);
+    expect(world.ants.hp[q]).toBe(QUEEN_HP_HOME - 2);
     // Fed: she regenerates to full HP, then stays unhurt long enough to re-arm.
-    const recover = 2 * QUEEN_FED_HP_REGEN_INTERVAL_TICKS + QUEEN_DANGER_REARM_TICKS + 5;
+    const recover = 2 * QUEEN_HEAL_INTERVAL_TICKS + QUEEN_DANGER_REARM_TICKS + 5;
     for (let i = 0; i < recover; i++) step(2048);
-    expect(world.ants.hp[q]).toBe(COMBAT_HP_QUEEN);
+    expect(world.ants.hp[q]).toBe(QUEEN_HP_HOME);
     expect(shown).toHaveLength(1);
-    for (let i = 0; i < 25; i++) step(0); // second famine
+    for (let i = 0; i < famine; i++) step(0); // second famine
     expect(shown).toHaveLength(2);
     expect(world.ants.alive[q]).toBe(1);
   });
@@ -137,18 +145,38 @@ describe('#375 advanceQueenDanger against the sim (V66): starvation raises it, r
     expect(advanceQueenDanger(s, world, colony)).toEqual({ pulse: false, caption: null });
   });
 
-  it('counts the home-ground buffer: a buffer hit is harm', () => {
+  it('#400: at full home HP the first blow is harm (no hidden buffer absorbs it)', () => {
     const world = createScenario(7, 'Normal');
     const colony = world.colonies[PLAYER_COLONY_ID]!;
-    const q = colony.queenEntityId;
+    const q = stageQueenInNest(world, colony);
+    world.ants.hp[q] = QUEEN_HP_HOME;
     // eslint-disable-next-line no-restricted-syntax -- test fixture: stage the world tick
     world.tick = QUEEN_DAMAGE_SUPPRESS_TICKS + 1;
     world.ants.lastMealTick[q] = world.tick - 1;
-    world.ants.homeGroundBonusHp[q] = 4;
     const s = createQueenDangerState();
     advanceQueenDanger(s, world, colony);
-    world.ants.homeGroundBonusHp[q] = 2;
+    world.ants.hp[q] = QUEEN_HP_HOME - 5; // one home-ground blow
     expect(advanceQueenDanger(s, world, colony)).toEqual({ pulse: true, caption: DANGER });
+  });
+
+  it('#400: "healed" is her max HP where she stands — in her nest, QUEEN_HP_HOME', () => {
+    const world = createScenario(7, 'Normal');
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const q = stageQueenInNest(world, colony);
+    for (const [hp, rearmed] of [
+      [COMBAT_HP_QUEEN, false], // her surface max: not full at home
+      [QUEEN_HP_HOME, true],
+    ] as const) {
+      const s = createQueenDangerState();
+      s.prevHp = hp;
+      s.lastHarmTick = 0;
+      world.ants.hp[q] = hp;
+      // eslint-disable-next-line no-restricted-syntax -- test fixture: stage the world tick
+      world.tick = QUEEN_DANGER_REARM_TICKS * 5;
+      world.ants.lastMealTick[q] = world.tick - 1; // fed
+      advanceQueenDanger(s, world, colony);
+      expect(s.lastHarmTick === null, `hp ${hp}`).toBe(rearmed);
+    }
   });
 
   it('V66: a wounded queen fed and unhurt does not re-arm below full HP; pre-V66 the HP bar is waived', () => {

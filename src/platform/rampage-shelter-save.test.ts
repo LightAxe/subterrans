@@ -13,7 +13,7 @@ import { serializeWorldState, deserializeWorldState } from './save.js';
 import { hashWorldState } from './world-hash.js';
 import { createScenario } from '../sim/scenario.js';
 import { tick } from '../sim/tick.js';
-import { allocateEntityId, SIM_VERSION_V68_RAMPAGE_SHELTER } from '../sim/types.js';
+import { allocateEntityId } from '../sim/types.js';
 import type { WorldState } from '../sim/types.js';
 import { initAnt } from '../sim/ant/ant-store.js';
 import { rampageShelterActive, rampageThreatens } from '../sim/ant/idle-reserve.js';
@@ -32,12 +32,12 @@ import {
 const P = PLAYER_COLONY_ID;
 const center = (t: number): number => (t << FP_SHIFT) + (FP_ONE >> 1);
 
-/** Seed 7 at V68, past the grace, a hungry spider at its lair on its way to camp the
+/** Seed 7 (at LATEST — #400 raised MIN_ACCEPTED to V71, so a V68 save no longer
+ *  loads), past the grace, a hungry spider at its lair on its way to camp the
  *  player's colony (so it threatens it: the camp target, saved state), a 0:0 ratio,
  *  and ten idle workers east of the player's door (24,64), 2 to 14 tiles out. */
 function world(): { w: WorldState; ids: number[] } {
   const w = createScenario(7, 'Normal');
-  w.simVersion = SIM_VERSION_V68_RAMPAGE_SHELTER;
   w.aiState = [];
   // eslint-disable-next-line no-restricted-syntax -- test fixture: stage the world tick past the spider's grace
   w.tick = SPIDER_GRACE_TICKS + 500;

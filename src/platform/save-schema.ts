@@ -102,7 +102,7 @@ export const SERIALIZED_ANT_SOA_FIELDS: readonly (keyof AntComponents)[] = [
   'carryingBroodId',
   'carriedBy',
   'hp',
-  'homeGroundBonusHp',
+  'lastHitTick',
   'attackCooldown',
   'combatOpponentId',
   'fleeShelterUntilTick',

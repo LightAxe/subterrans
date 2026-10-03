@@ -567,6 +567,9 @@ function spreadTrial(simVersion: number, ticks: number): number[] {
   });
   const engaged: number[] = [];
   for (let t = 0; t < ticks; t++) {
+    // #400 (V71): step 16f clamps every ant to its max HP where it stands, so the
+    // invaders' "outlasts the trial" HP is restored each tick.
+    for (const id of invaders) world.ants.hp[id] = 1000;
     tick(world, []);
     let n = 0;
     for (const inv of invaders) {
@@ -610,6 +613,7 @@ describe('#371 (V62) — in its own nest only fellow fighters hold a duel', () =
     for (let y = 4; y <= 6; y++) ugSet(grid, ent.x + 3, y, UndergroundTileState.Open);
     colony.digFlowFieldDirty = true;
     zoneFlips(world, ids, 60);
+    const stills: number[] = [];
     const still = (colonyId: number, x: number, y: number, task: number): number => {
       const id = allocateEntityId(world);
       initAnt(world.ants, id, {
@@ -625,6 +629,7 @@ describe('#371 (V62) — in its own nest only fellow fighters hold a duel', () =
       world.ants.hp[id] = 1000;
       world.ants.currentGridColonyId[id] = PLAYER_COLONY_ID;
       world.colonies[colonyId]!.workers.push(id);
+      stills.push(id);
       return id;
     };
     world.colonies[ENEMY_COLONY_ID]!.rallyPoint = { tileX: ent.x, tileY: ent.y };
@@ -636,7 +641,10 @@ describe('#371 (V62) — in its own nest only fellow fighters hold a duel', () =
     still(ENEMY_COLONY_ID, ent.x + 3, 6, AntTask.Fighting);
     still(ENEMY_COLONY_ID, ent.x + 13, 3, AntTask.Fighting);
     const d = ids[0]!;
-    for (let t = 0; t < 60; t++) tick(world, []);
+    for (let t = 0; t < 60; t++) {
+      for (const id of stills) world.ants.hp[id] = 1000; // #400: restored past the clamp
+      tick(world, []);
+    }
     expect([world.ants.posX[d]! >> FP_SHIFT, world.ants.posY[d]! >> FP_SHIFT]).toEqual([
       ent.x + 3,
       6,
@@ -663,6 +671,7 @@ describe('#371 (V62) — in its own nest only fellow fighters hold a duel', () =
     world.ants.subTask[low] = ForagingSubState.CarryingFood;
     world.ants.speed[low] = 0;
     world.ants.hp[low] = 1000;
+    const tough: number[] = [low];
     world.colonies[ENEMY_COLONY_ID]!.rallyPoint = { tileX: ent.x, tileY: ent.y };
     for (const [x, y] of [
       [ent.x + 3, 6],
@@ -682,8 +691,12 @@ describe('#371 (V62) — in its own nest only fellow fighters hold a duel', () =
       world.ants.hp[id] = 1000;
       world.ants.currentGridColonyId[id] = PLAYER_COLONY_ID;
       world.colonies[ENEMY_COLONY_ID]!.workers.push(id);
+      tough.push(id);
     }
-    for (let t = 0; t < 60; t++) tick(world, []);
+    for (let t = 0; t < 60; t++) {
+      for (const id of tough) world.ants.hp[id] = 1000; // #400: restored past the clamp
+      tick(world, []);
+    }
     expect([world.ants.posX[d]! >> FP_SHIFT, world.ants.posY[d]! >> FP_SHIFT]).toEqual([
       ent.x + 13,
       3,

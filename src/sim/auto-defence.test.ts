@@ -685,10 +685,12 @@ describe('#372 (V64) — automatic defence through tick()', () => {
     // One connected nest: A is breached even with the intruder just below B, so
     // B's sentries come round to A.
     const invaders = invade(world, a, [b.x + 3]);
-    world.ants.hp[invaders[0]!] = 100_000; // outlasts the walk: we watch where they go in
     const entered = new Map<number, number>();
     for (let t = 0; t < 250; t++) {
       const before = atB.map((id) => world.ants.zone[id]);
+      // Outlasts the walk: we watch where they go in. #400 (V71): step 16f clamps to
+      // the max HP where an ant stands, so the HP is restored each tick.
+      world.ants.hp[invaders[0]!] = 100_000;
       tick(world, []);
       atB.forEach((id, k) => {
         if (before[k] === Zone.Surface && world.ants.zone[id] === Zone.Underground) {

@@ -18,12 +18,14 @@
 //     capacity = colonyFoodCapacity(colony) >> FP_SHIFT
 //     Capacity grows as FoodStorage chambers complete, so the label doubles
 //     as feedback for "did my new chamber take effect yet?".
-//   - Queen health = visual bar: the queen's HP / COMBAT_HP_QUEEN (#375). From
-//     simVersion V66 starvation drains her HP, so HP alone says how close she is
-//     to death from either cause. A pre-V66 world still starves her outright at
-//     QUEEN_STARVE_AFTER_TICKS, so there the bar shows the lower of her HP and her
-//     meals until starvation / QUEEN_STARVE_AFTER_TICKS (queenMealsUntilStarvation).
-//     The home-ground combat buffer is not counted.
+//   - Queen health = visual bar: the queen's HP out of her max HP where she stands
+//     (#375; #400 — health.ts antMaxHp: QUEEN_HP_HOME in her nest, COMBAT_HP_QUEEN
+//     on the surface before she founds it). From simVersion V66 starvation drains her
+//     HP, so HP alone says how close she is to death from either cause, and from V71
+//     there is no hidden home-ground buffer, so the bar drops from the first blow. A
+//     pre-V66 world still starves her outright at QUEEN_STARVE_AFTER_TICKS, so there
+//     the bar shows the lower of her HP and her meals until starvation /
+//     QUEEN_STARVE_AFTER_TICKS (queenMealsUntilStarvation).
 //     * green  when pct > 50  (healthy)
 //     * yellow when 25 ≤ pct ≤ 50 (moderate)
 //     * red    when pct < 25  (critical)
@@ -41,7 +43,7 @@ import type { ColonyRecord } from '../sim/colony/colony-store.js';
 import { isAlive } from '../sim/ant/ant-store.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { QUEEN_HUNGER, mealsUntilStarvation } from '../sim/hunger.js';
-import { COMBAT_HP_QUEEN } from '../sim/constants.js';
+import { antMaxHp } from '../sim/health.js';
 import { SIM_VERSION_V66_QUEEN_STARVES_HP } from '../sim/types.js';
 import { colonyFoodCapacity, colonyFoodTotal } from '../sim/food/food-api.js';
 
@@ -106,7 +108,8 @@ export function computeHudStats(world: WorldState, colony: ColonyRecord): HudSta
 
   let queenHealthPct = 0;
   if (queenAlive) {
-    let raw = (world.ants.hp[colony.queenEntityId] ?? 0) / COMBAT_HP_QUEEN;
+    const q = colony.queenEntityId;
+    let raw = (world.ants.hp[q] ?? 0) / antMaxHp(world, q);
     if (world.simVersion < SIM_VERSION_V66_QUEEN_STARVES_HP) {
       const hunger = queenMealsUntilStarvation(world, colony) / QUEEN_HUNGER.starveAfterTicks;
       if (hunger < raw) raw = hunger;

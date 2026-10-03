@@ -17,7 +17,6 @@ import {
   createWorldState,
   SIM_VERSION_V69_FOOD_FAIRNESS,
   SIM_VERSION_V70_EGG_RESERVE,
-  LATEST_SIM_VERSION,
 } from '../types.js';
 import type { WorldState } from '../types.js';
 import { createColonyRecord } from './colony-store.js';
@@ -424,10 +423,6 @@ describe('#395 — pinned V69: the 3-food threshold, whatever the colony', () =>
         );
       }
     }
-  });
-
-  it('LATEST is V70', () => {
-    expect(LATEST_SIM_VERSION).toBe(SIM_VERSION_V70_EGG_RESERVE);
   });
 });
 

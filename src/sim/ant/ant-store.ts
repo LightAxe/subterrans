@@ -223,10 +223,18 @@ export interface AntComponents {
    */
   readonly carriedBy: Int32Array;
   // S1 — combat HP/damage/cooldown fields.
-  /** S1 / D-32 — Current base HP. Death when hp <= 0 (after homeGroundBonusHp depleted). */
+  /**
+   * S1 / D-32 — Current HP. Death when hp <= 0. #400 (V71): never above the ant's max
+   * HP where it stands between ticks (health.ts antMaxHp — higher on home ground;
+   * step 16f clamps it down when the ant leaves home).
+   */
   readonly hp: Int32Array;
-  /** S1 / D-32 — Home-ground HP buffer; depletes first before hp. 0 when on away ground. */
-  readonly homeGroundBonusHp: Int32Array;
+  /**
+   * #400 (V71) — tick of the last combat blow this ant took (combat.ts applyDamage);
+   * -1 = never hit. An ant heals only once HEAL_SAFE_TICKS have passed since it
+   * (health.ts). Replaces the V16–V70 `homeGroundBonusHp` buffer.
+   */
+  readonly lastHitTick: Int32Array;
   /** S1 / D-32 — Ticks until next strike (0 = not in active combat). Windup on first engagement. */
   readonly attackCooldown: Int32Array;
   /**
@@ -366,7 +374,12 @@ export function createAntComponents(maxEntities: number = MAX_ENTITIES): AntComp
     // S1 — combat fields. hp zero-init would be wrong (dead ants have hp=0);
     // initAnt sets hp=COMBAT_HP_BASE on spawn.
     hp: new Int32Array(maxEntities),
-    homeGroundBonusHp: new Int32Array(maxEntities),
+    // #400 (V71) — -1 = never hit; initAnt resets it.
+    lastHitTick: (() => {
+      const a = new Int32Array(maxEntities);
+      a.fill(-1);
+      return a;
+    })(),
     attackCooldown: new Int32Array(maxEntities),
     // S1 — combat opponent tracking. -1 = not paired.
     combatOpponentId: (() => {
@@ -404,7 +417,11 @@ export interface InitAntSpec {
    * Corresponds to Zone.Surface and Zone.Underground in terrain.ts.
    */
   zone?: number;
-  /** Override initial HP. Defaults to COMBAT_HP_BASE. Use COMBAT_HP_QUEEN for the queen. */
+  /**
+   * Override initial HP. Defaults to COMBAT_HP_BASE (an ant's max away from home). Use
+   * COMBAT_HP_QUEEN for the queen; #400 (V71): an egg, laid in the nest, passes its
+   * home max.
+   */
   hp?: number;
   /**
    * #288 (V50) — tick of the ant's last meal. Every sim spawn site passes it
@@ -470,10 +487,10 @@ export function initAnt(ants: AntComponents, id: EntityId, spec: InitAntSpec): v
   // Issue #17 Phase 1 — fresh ant is not carrying / not carried.
   ants.carryingBroodId[id] = -1;
   ants.carriedBy[id] = -1;
-  // S1 — fresh ant starts at full base HP; home-ground bonus is set by
-  // the combat resolver on first engagement on home ground.
+  // S1 — fresh ant starts at the HP the spawn site passes (its full max where it
+  // spawns — #400, V71), else COMBAT_HP_BASE; it has never been hit.
   ants.hp[id] = spec.hp ?? COMBAT_HP_BASE;
-  ants.homeGroundBonusHp[id] = 0;
+  ants.lastHitTick[id] = -1;
   ants.attackCooldown[id] = 0;
   ants.combatOpponentId[id] = -1;
   // #209 PR A (V34) — fresh ant is not fleeing.
