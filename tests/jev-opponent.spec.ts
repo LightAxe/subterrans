@@ -36,6 +36,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import {
+  GAME_OVER_RESTART_RECT,
   JEV_BUILD_JEV_SELECTED as JEV,
   JEV_BUILD_RULES_SELECTED as RULES,
   JEV_ORDERS_PRESETS,
@@ -139,6 +140,54 @@ async function expectStillOnScreen(page: Page): Promise<void> {
   await page.waitForTimeout(500);
   expect(await bootScreen(page)).toBe('difficulty-select');
   expect(await roundOpponent(page)).toBeUndefined();
+}
+
+/** game-scene.ts notifyJevFallback's caption. */
+const JEV_FALLBACK_CAPTION = 'Jev is unavailable — the standard AI has taken over';
+
+interface EndScreenTestHooks {
+  forceGameOver?: (outcome?: 'Victory' | 'Defeat' | 'MutualDestruction') => void;
+  getEndScreenCauseLine?: () => string | null;
+  getEndScreenTitle?: () => string | null;
+  getCaptionsShown?: () => string[];
+}
+
+/** Drive the render-side game-over transition (the dev-only #304 seam). */
+async function forceGameOver(
+  page: Page,
+  outcome: 'Victory' | 'Defeat' | 'MutualDestruction',
+): Promise<void> {
+  await page.evaluate((o) => {
+    const t = (window as unknown as { __phase9_test?: EndScreenTestHooks }).__phase9_test;
+    if (!t?.forceGameOver) throw new Error('__phase9_test.forceGameOver not installed');
+    t.forceGameOver(o);
+  }, outcome);
+}
+
+/** What the end screen drew (canvas text DOM locators cannot see). */
+function endScreenTitle(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    const t = (window as unknown as { __phase9_test?: EndScreenTestHooks }).__phase9_test;
+    if (!t?.getEndScreenTitle) throw new Error('getEndScreenTitle not installed');
+    return t.getEndScreenTitle();
+  });
+}
+function endScreenCauseLine(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    const t = (window as unknown as { __phase9_test?: EndScreenTestHooks }).__phase9_test;
+    if (!t?.getEndScreenCauseLine) throw new Error('getEndScreenCauseLine not installed');
+    return t.getEndScreenCauseLine();
+  });
+}
+
+/** Every caption shown this round, oldest first. */
+function captionsShown(page: Page): Promise<string[]> {
+  return page.evaluate(
+    () =>
+      (
+        window as unknown as { __phase9_test?: EndScreenTestHooks }
+      ).__phase9_test?.getCaptionsShown?.() ?? [],
+  );
 }
 
 test.describe('Jev opponent beta — the opponent section of the new-game screen', () => {
@@ -334,5 +383,44 @@ test.describe('Jev opponent beta — the opponent section of the new-game screen
     await expect(textarea).toHaveCount(0);
     await selectOpponent(page, 'jev', RULES);
     await expect(textarea).toHaveValue('Hold the line.');
+  });
+  test('a Jev round that fell back: the end screen names how it ended, and Restart reopens the screen on Jev', async ({
+    page,
+  }) => {
+    // Waits out a real fallback (~10 s of game time) on top of a full boot.
+    test.setTimeout(120_000);
+    await bootToNewGameScreen(page);
+    await selectOpponent(page, 'jev', RULES);
+    await startRound(page, JEV.startButton);
+    expect(await roundOpponent(page)).toBe('jev');
+
+    // The stub endpoint 404s: the readiness probe and the first two beats fail,
+    // and the standard AI takes over for the round.
+    await expect
+      .poll(() => captionsShown(page), { timeout: 60_000 })
+      .toContain(JEV_FALLBACK_CAPTION);
+
+    // #389 — the end screen keys its title and cause line off how the match ended,
+    // whoever drives the enemy colony: a draw with both queens alive is a DRAW.
+    await forceGameOver(page, 'MutualDestruction');
+    await expect.poll(() => activeOverlay(page), { timeout: 5_000 }).toBe('game-over');
+    expect(await endScreenTitle(page)).toBe('DRAW');
+    expect(await endScreenCauseLine(page)).toBe('Both colonies ran out of food — a draw');
+
+    // Restart takes the end screen down and reopens the new-game screen with Jev
+    // still selected; Start boots a fresh Jev round.
+    await clickCanvasRect(page, GAME_OVER_RESTART_RECT);
+    await expect.poll(() => bootScreen(page), { timeout: 10_000 }).toBe('difficulty-select');
+    expect(await endScreenTitle(page)).toBeNull();
+    expect(await endScreenCauseLine(page)).toBeNull();
+    expect(await selectedOpponent(page)).toBe('jev');
+    await startRound(page, JEV.startButton);
+    expect(await roundOpponent(page)).toBe('jev');
+
+    // Nothing of the last round's ending carries into this one's.
+    await forceGameOver(page, 'Defeat');
+    await expect.poll(() => activeOverlay(page), { timeout: 5_000 }).toBe('game-over');
+    expect(await endScreenTitle(page)).toBe('DEFEAT');
+    expect(await endScreenCauseLine(page)).toBe('');
   });
 });
