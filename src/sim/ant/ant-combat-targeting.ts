@@ -6,12 +6,7 @@ import { ENTRANCE_SHAFT_DEPTH, FIGHT_AGGRO_RADIUS } from '../constants.js';
 import { AntTask, FightingSubState } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
 import { Zone, type UndergroundGrid } from '../terrain.js';
-import {
-  SIM_VERSION_V55_ROUTED_HOMING,
-  SIM_VERSION_V57_ROUTED_TO_ENTRANCE,
-  SIM_VERSION_V64_AUTO_DEFENCE,
-  type WorldState,
-} from '../types.js';
+import { SIM_VERSION_V64_AUTO_DEFENCE, type WorldState } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
 import {
   antIsAtHome,
@@ -406,7 +401,7 @@ export function fighterWalksHomeToEat(world: WorldState, id: number): boolean {
  * cleared ("come home"). A missing colony record is NOT a recall (a defensive
  * fallback). The one rally-cleared predicate behind every recalled-invader
  * decision — tickAntMovement's underground recall navigation and its ascent
- * (`isRecallingFromForeign`), and invaderIsRecalledV55 — so they stay in lockstep.
+ * (`isRecallingFromForeign`), and invaderIsRecalled — so they stay in lockstep.
  * Unversioned: the recall has keyed on a cleared rally alone since V25 (the
  * pre-V25 branch was reaped, #247).
  */
@@ -421,7 +416,7 @@ export function colonyRecalledItsFighters(world: WorldState, colonyId: number): 
  * `id` is outside the probe's cohort (fighter-orders.ts), so no rally holds it in a
  * foreign nest. Exactly colonyRecalledItsFighters below V64. The predicate behind
  * tickAntMovement's underground recall navigation and ascent, and
- * invaderIsRecalledV55, so they stay in lockstep.
+ * invaderIsRecalled, so they stay in lockstep.
  */
 export function fighterIsRecalled(world: WorldState, id: number): boolean {
   return (
@@ -433,10 +428,8 @@ export function fighterIsRecalled(world: WorldState, id: number): boolean {
 /**
  * #346 (V55) — invader `id` (a fighter below ground in a FOREIGN nest) has been
  * recalled: its own colony's rally point is cleared (colonyRecalledItsFighters).
- * Always false below V55.
  */
-export function invaderIsRecalledV55(world: WorldState, id: number): boolean {
-  if (world.simVersion < SIM_VERSION_V55_ROUTED_HOMING) return false;
+export function invaderIsRecalled(world: WorldState, id: number): boolean {
   const ants = world.ants;
   const ownColonyId = ants.colonyId[id]!;
   if (ants.zone[id] !== Zone.Underground || ants.currentGridColonyId[id] === ownColonyId) {
@@ -448,7 +441,7 @@ export function invaderIsRecalledV55(world: WorldState, id: number): boolean {
 /**
  * Invader `id` in a foreign nest walks out by that nest's entrance flow field
  * this tick: a hauler (V52, #290 PR 5; `hauling` is fighterIsHauling in a foreign
- * nest, which ant-raid.ts owns) or, from V55, a recalled invader (#346). The
+ * nest, which ant-raid.ts owns) or a recalled invader (#346, V55). The
  * caller (tickAntMovement) reads the field and, off it, falls back to the recall
  * route.
  */
@@ -457,26 +450,7 @@ export function invaderExitsByEntranceField(
   id: number,
   hauling: boolean,
 ): boolean {
-  return hauling || invaderIsRecalledV55(world, id);
-}
-
-/**
- * Invader `id`, on the recall route out of a foreign nest (off its entrance
- * field), takes the reachable-exit step — the wall-aware BFS toward the first
- * OPEN entrance of the nest it can reach (tickAntMovement's hungryExitStep) —
- * rather than the straight-line step at the nearest entrance: a hungry one sent
- * home to eat (V51, #290 PR 4, D11), a hauler (V52, `hauling` as above) and, from
- * V55, every one (#346: before V55 a plain recalled invader, fed and not
- * hauling, took the straight-line step, and a U-bend in the tunnel pinned it).
- */
-export function invaderTakesReachableExit(
-  world: WorldState,
-  id: number,
-  hauling: boolean,
-): boolean {
-  return (
-    fighterWalksHomeToEat(world, id) || hauling || world.simVersion >= SIM_VERSION_V55_ROUTED_HOMING
-  );
+  return hauling || invaderIsRecalled(world, id);
 }
 
 /**
@@ -485,9 +459,7 @@ export function invaderTakesReachableExit(
  * it reached step 10c's ordinary rally routing (not the D11 walk home, a chase or
  * a sentry route). A hungry fighter at home gets here, as does a fed one, or a
  * hungry one in a duel. Step 16 steps it down the surface goal field seeded at its target
- * tile, which routes round obstacles; before V57 it stepped in a straight line and
- * an obstacle in the way pinned it. (Same-tick scratch, rebuilt by every 10c pass;
- * never set below V57.)
+ * tile, which routes round obstacles. (Same-tick scratch, rebuilt by every 10c pass.)
  */
 export function defenderWalksToEntrance(world: WorldState, id: number): boolean {
   const moving = getScratch(world).antTargeting.sentryMoving;
@@ -2064,11 +2036,7 @@ export function updateFightAntTargets(world: WorldState): void {
     ants.targetPosY[id] = (rallyY << FP_SHIFT) + (FP_ONE >> 1);
     // #357 (V57): on the surface, bound for the entrance its colony defends (the
     // rally is on it), it routes round obstacles (defenderWalksToEntrance).
-    if (
-      world.simVersion >= SIM_VERSION_V57_ROUTED_TO_ENTRANCE &&
-      ants.zone[id] === Zone.Surface &&
-      defended !== null
-    ) {
+    if (ants.zone[id] === Zone.Surface && defended !== null) {
       sentryMoving[id] = DEFENDER_MOVING_TO_ENTRANCE;
     }
   }

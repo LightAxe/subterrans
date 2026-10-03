@@ -16,7 +16,7 @@ import { AntTask, DiggingSubState, ForagingSubState } from '../enums.js';
 import { FP_SHIFT } from '../fixed.js';
 import { SURFACE_GOAL_UNREACHED, surfaceGoalDistance } from '../surface-routing.js';
 import { UndergroundTileState, Zone, ugSet } from '../terrain.js';
-import { SIM_VERSION_V57_ROUTED_TO_ENTRANCE, type WorldState } from '../types.js';
+import type { WorldState } from '../types.js';
 import { clearRecentTiles } from './ant-store.js';
 
 /**
@@ -25,18 +25,12 @@ import { clearRecentTiles } from './ant-store.js';
  * dug from the top) down the surface goal field seeded at that entrance, and picks
  * that target by path distance (surfaceDiggerEntranceDistance); tickAntMovement
  * takes the step. A closed entrance is not on the entrance flow field, and the
- * field's nearest open entrance need not be the digger's target. Before V57 it
- * picked by Manhattan distance and stepped in a straight line, and an obstacle in
- * the way pinned it. Always false below V57 (and for any ant that is not a
- * surface digger).
+ * field's nearest open entrance need not be the digger's target. False for any
+ * ant that is not a surface digger.
  */
 export function surfaceDiggerRoutesToEntrance(world: WorldState, id: number): boolean {
   const ants = world.ants;
-  return (
-    ants.task[id] === AntTask.Digging &&
-    ants.zone[id] === Zone.Surface &&
-    world.simVersion >= SIM_VERSION_V57_ROUTED_TO_ENTRANCE
-  );
+  return ants.task[id] === AntTask.Digging && ants.zone[id] === Zone.Surface;
 }
 
 /**
