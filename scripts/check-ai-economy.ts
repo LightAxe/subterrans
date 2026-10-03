@@ -91,10 +91,8 @@ const {
 } = await import('../src/sim/food/food-api.js');
 const { ChamberType, AntTask, FightingSubState, PheromoneType } =
   await import('../src/sim/enums.js');
-const { SIM_VERSION_V66_QUEEN_STARVES_HP } = await import('../src/sim/types.js');
 const { isAlive } = await import('../src/sim/ant/ant-store.js');
-const { mealsUntilStarvation, QUEEN_HUNGER, workerHungerProfile } =
-  await import('../src/sim/hunger.js');
+const { mealsUntilStarvation, workerHungerProfile } = await import('../src/sim/hunger.js');
 const { createDefaultAIStateRecord, getAIStateForColony } = await import('../src/sim/ai-state.js');
 const { pheromoneGridKey, phGet } = await import('../src/sim/pheromone/pheromone-store.js');
 const { Zone } = await import('../src/sim/terrain.js');
@@ -418,39 +416,30 @@ function entranceDanger(world: WorldState, colonyId: number): number {
  * both sides is the bug this harness exists to catch; a kill means the v3.0
  * combat loop actually fired.
  *
- * Read from the queen's hunger clock rather than the `queen_death` telemetry
- * event: the event carries no colonyId. The clock is exact —
- * `tickFoodConsumption` only kills the queen on a failed meal once ticks since
- * her last meal reach QUEEN_STARVE_AFTER_TICKS, and every successful meal resets
- * `lastMealTick` — so, read right after the death tick, a meals-until-starvation
- * of 0 or less means starvation and anything else means she was killed.
- * (Pre-V50 this read the equivalent `colony.queenStarvationTimer <= 0`.)
- *
- * From V66 (#375) starvation drains her HP instead, so a wounded queen starves
- * before the clock runs out. The drain kills her only at step 3 of a tick on which
- * she missed a meal and the ticks since her last meal reached a multiple of
+ * Read from the queen's hunger clock and HP rather than the `queen_death`
+ * telemetry event: the event carries no colonyId. From V66 (#375) starvation
+ * drains her HP. The drain kills her only at step 3 of a tick on which she missed
+ * a meal and the ticks since her last meal reached a multiple of
  * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS, and only when she went into that tick at
  * 1 HP (`hpBefore`); combat runs later in the tick and a dead queen takes no
  * blows. Any other death is a kill.
  */
 function queenDeathCause(world: WorldState, colony: ColonyRecord, hpBefore: number): string {
   const qid = colony.queenEntityId;
-  if (world.simVersion >= SIM_VERSION_V66_QUEEN_STARVES_HP) {
-    // Between ticks: the death tick's consumption step ran at world.tick − 1.
-    const sinceMeal = world.tick - 1 - world.ants.lastMealTick[qid]!;
-    return sinceMeal > 0 && sinceMeal % QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS === 0 && hpBefore <= 1
-      ? 'Starvation'
-      : 'Killed';
-  }
-  return mealsUntilStarvation(world, qid, QUEEN_HUNGER) <= 0 ? 'Starvation' : 'Killed';
+  // Between ticks: the death tick's consumption step ran at world.tick − 1.
+  const sinceMeal = world.tick - 1 - world.ants.lastMealTick[qid]!;
+  return sinceMeal > 0 && sinceMeal % QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS === 0 && hpBefore <= 1
+    ? 'Starvation'
+    : 'Killed';
 }
 
 /**
- * #290 PR 4 — did worker `id`, found dead right after a tick, starve? From V51
- * every live worker's clock stays below its starve-after (a failed meal at it is
- * fatal the same tick), so a dead worker whose meals-until-starvation reads 0 or
- * less starved and anything else was killed — the queenDeathCause argument,
- * with the kind (worker / fighter) read from its task at death.
+ * #290 PR 4 — did worker `id`, found dead right after a tick, starve? Every live
+ * worker's clock stays below its starve-after: a failed meal at it is fatal the
+ * same tick, and every meal resets `lastMealTick`. So, read right after the death
+ * tick, a dead worker whose meals-until-starvation reads 0 or less starved and
+ * anything else was killed. Its kind (worker / fighter) is read from its task at
+ * death.
  */
 function workerStarved(world: WorldState, id: number): boolean {
   return mealsUntilStarvation(world, id, workerHungerProfile(world, id)) <= 0;

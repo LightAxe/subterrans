@@ -22,10 +22,7 @@
 //     (#375; #400 — health.ts antMaxHp: QUEEN_HP_HOME in her nest, COMBAT_HP_QUEEN
 //     on the surface before she founds it). From simVersion V66 starvation drains her
 //     HP, so HP alone says how close she is to death from either cause, and from V71
-//     there is no hidden home-ground buffer, so the bar drops from the first blow. A
-//     pre-V66 world still starves her outright at QUEEN_STARVE_AFTER_TICKS, so there
-//     the bar shows the lower of her HP and her meals until starvation /
-//     QUEEN_STARVE_AFTER_TICKS (queenMealsUntilStarvation).
+//     there is no hidden home-ground buffer, so the bar drops from the first blow.
 //     * green  when pct > 50  (healthy)
 //     * yellow when 25 ≤ pct ≤ 50 (moderate)
 //     * red    when pct < 25  (critical)
@@ -44,7 +41,6 @@ import { isAlive } from '../sim/ant/ant-store.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { QUEEN_HUNGER, mealsUntilStarvation } from '../sim/hunger.js';
 import { antMaxHp } from '../sim/health.js';
-import { SIM_VERSION_V66_QUEEN_STARVES_HP } from '../sim/types.js';
 import { colonyFoodCapacity, colonyFoodTotal } from '../sim/food/food-api.js';
 
 export interface HudStats {
@@ -109,11 +105,7 @@ export function computeHudStats(world: WorldState, colony: ColonyRecord): HudSta
   let queenHealthPct = 0;
   if (queenAlive) {
     const q = colony.queenEntityId;
-    let raw = (world.ants.hp[q] ?? 0) / antMaxHp(world, q);
-    if (world.simVersion < SIM_VERSION_V66_QUEEN_STARVES_HP) {
-      const hunger = queenMealsUntilStarvation(world, colony) / QUEEN_HUNGER.starveAfterTicks;
-      if (hunger < raw) raw = hunger;
-    }
+    const raw = (world.ants.hp[q] ?? 0) / antMaxHp(world, q);
     const t = raw < 0 ? 0 : raw > 1 ? 1 : raw;
     queenHealthPct = Math.round(t * 100);
   }
@@ -124,9 +116,9 @@ export function computeHudStats(world: WorldState, colony: ColonyRecord): HudSta
 /**
  * #288 (V50) — how many more failed meals the colony's queen survives, read
  * between ticks: QUEEN_STARVE_AFTER_TICKS (300) while she is being fed, one less
- * per missed meal, 0 when she starves before V66. From V66 (#375) she starves by
- * HP drain instead, so a wounded queen dies while this is still above 0. Below the
- * maximum means at least one meal has failed. Meaningful only while she is alive.
+ * per missed meal. From V66 (#375) she starves by HP drain instead, so a wounded
+ * queen dies while this is still above 0. Below the maximum means at least one
+ * meal has failed. Meaningful only while she is alive.
  */
 export function queenMealsUntilStarvation(world: WorldState, colony: ColonyRecord): number {
   return mealsUntilStarvation(world, colony.queenEntityId, QUEEN_HUNGER);

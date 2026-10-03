@@ -10,7 +10,7 @@ import {
 } from './ant-activity.js';
 import { buildHudLayout } from './hud-layout.js';
 import { DEFAULT_LAYOUT } from './layout.js';
-import { createWorldState, allocateEntityId, SIM_VERSION_V50_LOCATED_FOOD } from '../sim/types.js';
+import { createWorldState, allocateEntityId } from '../sim/types.js';
 import { FIGHTER_HUNGER, WORKER_HUNGER } from '../sim/hunger.js';
 import type { WorldState } from '../sim/types.js';
 import { initAnt } from '../sim/ant/ant-store.js';
@@ -206,7 +206,6 @@ describe('computeAntActivity — hunger (V51, #290 PR 4)', () => {
     const starveAt = (FIGHTER_HUNGER.starveAfterTicks * 3 + 3) >> 2; // ceil(¾ starve-after)
     world.ants.lastMealTick[late] = world.tick - 1 - starveAt;
     let a = computeAntActivity(world, colony);
-    expect(a.workersEat).toBe(true);
     expect(a.hungry).toBe(1);
     expect(a.starving).toBe(1);
     expect(formatAntActivityLines(a).join('\n')).toContain('Hungry:   1  starving: 1');
@@ -215,16 +214,6 @@ describe('computeAntActivity — hunger (V51, #290 PR 4)', () => {
     a = computeAntActivity(world, colony);
     expect(a.hungry).toBe(2);
     expect(a.starving).toBe(0);
-  });
-
-  it('shows no hunger line for a V50 world, where workers do not eat', () => {
-    const { world, colony } = setupWorld();
-    world.simVersion = SIM_VERSION_V50_LOCATED_FOOD;
-    spawnWorker(world, colony, AntTask.Idle, 0);
-    const a = computeAntActivity(world, colony);
-    expect(a.workersEat).toBe(false);
-    expect(a.hungry + a.starving).toBe(0);
-    expect(formatAntActivityLines(a).join('\n')).not.toContain('Hungry');
   });
 });
 

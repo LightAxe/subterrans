@@ -1,6 +1,6 @@
 // queen-danger.test.ts — #375: "Your queen is in danger." covers combat and (from
-// V66) starvation, and re-arms once she has recovered (back at full HP — waived
-// before V66 — fed, and unhurt for QUEEN_DANGER_REARM_TICKS).
+// V66) starvation, and re-arms once she has recovered (back at full HP, fed, and
+// unhurt for QUEEN_DANGER_REARM_TICKS).
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   createQueenDangerState,
@@ -21,7 +21,6 @@ import {
   QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
 } from '../sim/constants.js';
 import { stageQueenInNest } from '../sim/health-test-utils.js';
-import { SIM_VERSION_V66_QUEEN_STARVES_HP } from '../sim/types.js';
 import { setColonyFoodForTest } from '../sim/food/food-test-utils.js';
 
 const DANGER = 'Your queen is in danger.';
@@ -179,25 +178,19 @@ describe('#375 advanceQueenDanger against the sim (V66): starvation raises it, r
     }
   });
 
-  it('V66: a wounded queen fed and unhurt does not re-arm below full HP; pre-V66 the HP bar is waived', () => {
-    for (const [v, expected] of [
-      [SIM_VERSION_V66_QUEEN_STARVES_HP, 1],
-      [SIM_VERSION_V66_QUEEN_STARVES_HP - 1, null],
-    ] as const) {
-      const world = createScenario(7, 'Normal');
-      world.simVersion = v;
-      const colony = world.colonies[PLAYER_COLONY_ID]!;
-      const q = colony.queenEntityId;
-      const s = createQueenDangerState();
-      s.prevHp = COMBAT_HP_QUEEN - 1;
-      s.lastHarmTick = 0;
-      world.ants.hp[q] = COMBAT_HP_QUEEN - 1; // fixture: wounded, 1 HP short of full
-      // eslint-disable-next-line no-restricted-syntax -- test fixture: stage the world tick
-      world.tick = QUEEN_DANGER_REARM_TICKS * 5;
-      world.ants.lastMealTick[q] = world.tick - 1; // fed
-      advanceQueenDanger(s, world, colony);
-      expect(s.lastHarmTick === null ? null : 1, `V${v}`).toBe(expected);
-    }
+  it('V66: a wounded queen fed and unhurt does not re-arm below full HP', () => {
+    const world = createScenario(7, 'Normal');
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const q = colony.queenEntityId;
+    const s = createQueenDangerState();
+    s.prevHp = COMBAT_HP_QUEEN - 1;
+    s.lastHarmTick = 0;
+    world.ants.hp[q] = COMBAT_HP_QUEEN - 1; // fixture: wounded, 1 HP short of full
+    // eslint-disable-next-line no-restricted-syntax -- test fixture: stage the world tick
+    world.tick = QUEEN_DANGER_REARM_TICKS * 5;
+    world.ants.lastMealTick[q] = world.tick - 1; // fed
+    advanceQueenDanger(s, world, colony);
+    expect(s.lastHarmTick).not.toBeNull();
   });
 
   it('a dead queen never re-arms the caption', () => {

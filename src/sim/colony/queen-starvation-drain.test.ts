@@ -3,14 +3,14 @@
 //
 // While she cannot eat she loses 1 HP each time the ticks since her last meal reach
 // a multiple of QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS, and dies of starvation at 0 HP.
-// Covered: the drain schedule, a queen at full home HP dying on the V65 tick, a
-// wounded one sooner, a meal stopping the drain and restarting the interval, the
-// meal itself healing nothing (#400), healing in step 16f (fed, safe, in her nest;
-// capped; not while starving; not on the surface; not right after a blow), short
-// famines healing back, the #398 rate (1 HP per ANT_HEAL_INTERVAL_TICKS through
-// tick(), on every phase her meals resume on, and not mid-fight in a real fight),
-// the queen_death cause through tick(), the larva unchanged, and the V65
-// instant-death path pinned.
+// Covered: the drain schedule, a queen at full home HP dying on tick 299 (the old
+// 300-tick grace), a wounded one sooner, a meal stopping the drain and restarting
+// the interval, the meal itself healing nothing (#400), healing in step 16f (fed,
+// safe, in her nest; capped; not while starving; not on the surface; not right
+// after a blow), short famines healing back, the #398 rate (1 HP per
+// ANT_HEAL_INTERVAL_TICKS through tick(), on every phase her meals resume on, and
+// not mid-fight in a real fight), the queen_death cause through tick(), and the
+// larva unchanged.
 import { describe, it, expect } from 'vitest';
 import { tickFoodConsumption } from './colony-system.js';
 import { createScenario } from '../scenario.js';
@@ -41,17 +41,15 @@ import { allocateEntityId, SIM_VERSION_V66_QUEEN_STARVES_HP } from '../types.js'
 import type { WorldState } from '../types.js';
 import type { ColonyRecord } from './colony-store.js';
 
-const V65 = SIM_VERSION_V66_QUEEN_STARVES_HP - 1;
 const D = QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS;
 
-/** A scenario world (at `simVersion` if given), the player colony emptied of food. */
-function starvingWorld(simVersion?: number): {
+/** A scenario world, the player colony emptied of food. */
+function starvingWorld(): {
   world: WorldState;
   colony: ColonyRecord;
   q: number;
 } {
   const world = createScenario(7, 'Normal');
-  if (simVersion !== undefined) world.simVersion = simVersion;
   const colony = world.colonies[PLAYER_COLONY_ID]!;
   setColonyFoodForTest(world, colony, 0);
   return { world, colony, q: colony.queenEntityId };
@@ -96,13 +94,9 @@ describe('#375 V66 — the queen starves by losing HP', () => {
     expect(QUEEN_MEAL_INTERVAL_TICKS).toBe(1);
   });
 
-  it('a queen at full home HP never fed dies on the same tick as at V65 (tick 299)', () => {
+  it('a queen at full home HP never fed dies at tick 299, the old 300-tick grace', () => {
     const a = starvingWorldInNest();
-    const b = starvingWorld(V65);
-    const dA = deathTick(a.world, a.colony);
-    const dB = deathTick(b.world, b.colony);
-    expect(dB).toBe(STARVATION_GRACE_TICKS - 1);
-    expect(dA).toBe(dB);
+    expect(deathTick(a.world, a.colony)).toBe(STARVATION_GRACE_TICKS - 1);
   });
 
   it('she loses 1 HP each time ticks-since-meal reaches a multiple of the drain interval, and no other tick', () => {
@@ -133,13 +127,6 @@ describe('#375 V66 — the queen starves by losing HP', () => {
     }
   });
 
-  it('V65 pinned: a wounded queen still dies only at the 300-tick clock, her HP untouched', () => {
-    const { world, colony, q } = starvingWorld(V65);
-    world.ants.hp[q] = 6;
-    expect(deathTick(world, colony)).toBe(STARVATION_GRACE_TICKS - 1);
-    expect(world.ants.hp[q]).toBe(6);
-  });
-
   it('eating stops the drain and heals nothing by itself (#400); a new famine restarts the interval', () => {
     const { world, colony, q } = starvingWorldInNest();
     for (let t = 0; t < 5 * D + 1; t++) consume(world, colony); // 5 drains
@@ -165,7 +152,7 @@ describe('#375 V66 — the queen starves by losing HP', () => {
     expect(deathTick(world, colony)).toBe(lastMeal + (QUEEN_HP_HOME - 5) * D);
   });
 
-  it('a larva keeps V65 starvation at V66: dies at its 300-tick clock', () => {
+  it('a larva does not drain HP: it dies at its 300-tick clock', () => {
     const { world, colony } = starvingWorld();
     world.ants.hp[colony.queenEntityId] = 1000; // keep the queen out of it
     const id = allocateEntityId(world);

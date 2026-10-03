@@ -15,8 +15,6 @@ import type { WorldState, EntityId, AIStateRecord, SpiderState } from '../sim/ty
 import {
   LATEST_SIM_VERSION,
   SIM_VERSION_V71_HEALTH_MODEL,
-  SIM_VERSION_V51_UNIFIED_HUNGER,
-  SIM_VERSION_V66_QUEEN_STARVES_HP,
   SIM_VERSION_V52_RAIDING,
   SIM_VERSION_V60_RAID_ORDERS,
 } from '../sim/types.js';
@@ -73,7 +71,7 @@ import { FP_SHIFT } from '../sim/fixed.js';
 import { AntTask, ChamberType, FightingSubState, RaidType, isRaidType } from '../sim/enums.js';
 import { livePileTiles } from '../sim/food/food-api.js';
 import { Zone } from '../sim/terrain.js';
-import { FIGHTER_HUNGER, LARVA_HUNGER, QUEEN_HUNGER, WORKER_HUNGER } from '../sim/hunger.js';
+import { FIGHTER_HUNGER, LARVA_HUNGER, WORKER_HUNGER } from '../sim/hunger.js';
 import { antMaxHp } from '../sim/health.js';
 import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 import {
@@ -2192,8 +2190,6 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   // (health.ts antMaxHp) — QUEEN_HP_HOME in her nest (a window of 300, her
   // starve-after), COMBAT_HP_QUEEN on the surface before she founds it. (The surface
   // window relies on a queen never going back up once she is in her nest.)
-  const workersEat = world.simVersion >= SIM_VERSION_V51_UNIFIED_HUNGER;
-  const queenStarvesByHp = world.simVersion >= SIM_VERSION_V66_QUEEN_STARVES_HP;
   // #400 (V71) — a blow lands during a tick, so between ticks no ant's last hit is
   // later than tick − 1 (dead slots included: their stamp is from before they died).
   const allocated = Math.min(world.nextEntityId, world.ants.lastHitTick.length);
@@ -2212,9 +2208,7 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     const eaters: Array<[number, number, string]> = [
       [
         c.queenEntityId,
-        queenStarvesByHp
-          ? antMaxHp(world, c.queenEntityId) * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS
-          : QUEEN_HUNGER.starveAfterTicks,
+        antMaxHp(world, c.queenEntityId) * QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS,
         'queen',
       ],
       ...c.larvae.map((id): [number, number, string] => [
@@ -2222,11 +2216,7 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
         LARVA_HUNGER.starveAfterTicks,
         'larva',
       ]),
-      ...(workersEat ? c.workers : []).map((id): [number, number, string] => [
-        id,
-        workerStarveAfter,
-        'worker',
-      ]),
+      ...c.workers.map((id): [number, number, string] => [id, workerStarveAfter, 'worker']),
     ];
     // #375 / #400 — the queen window above holds only while her HP never exceeds her
     // max where she stands. #400 (V71): between ticks no adult is above it (health.ts

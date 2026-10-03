@@ -19,7 +19,6 @@
 
 import type { EntityId, WorldState } from './types.js';
 import type { ColonyRecord } from './colony/colony-store.js';
-import { SIM_VERSION_V51_UNIFIED_HUNGER, SIM_VERSION_V58_STARVING_FIGHTER_EATS } from './types.js';
 import { AntTask } from './enums.js';
 import { FP_SHIFT } from './fixed.js';
 import { Zone } from './terrain.js';
@@ -158,14 +157,11 @@ export function antIsAtHome(world: WorldState, id: EntityId): boolean {
  * V51 (#290 PR 4, owner decision D11) — fighter `id` is hungry: past
  * FIGHTER_WALK_HOME_HUNGER_TICKS since its last meal and empty-handed (an ant
  * carrying food eats from its load instead). Such a fighter walks home to eat
- * (ant-combat-targeting.ts) and, from V52, does not loot (ant-raid.ts). Always
- * false below V51.
+ * (ant-combat-targeting.ts) and, from V52, does not loot (ant-raid.ts).
  */
 export function fighterIsHungry(world: WorldState, id: EntityId): boolean {
   return (
-    world.simVersion >= SIM_VERSION_V51_UNIFIED_HUNGER &&
-    world.ants.foodCarrying[id] === 0 &&
-    ticksSinceMeal(world, id) >= FIGHTER_WALK_HOME_HUNGER_TICKS
+    world.ants.foodCarrying[id] === 0 && ticksSinceMeal(world, id) >= FIGHTER_WALK_HOME_HUNGER_TICKS
   );
 }
 
@@ -189,14 +185,10 @@ export function storesCanSpareMeal(
  * profile's lethal 'starving' state (`hungerState`, at the starve-after itself).
  * The caller (ant-combat-targeting.ts) sends a starving fighter that is away from
  * home, and whose colony can feed it, home to eat even from a fight. Implies
- * fighterIsHungry. Always false below V58.
+ * fighterIsHungry.
  */
 export function fighterIsStarving(world: WorldState, id: EntityId): boolean {
-  return (
-    world.simVersion >= SIM_VERSION_V58_STARVING_FIGHTER_EATS &&
-    world.ants.foodCarrying[id] === 0 &&
-    ticksSinceMeal(world, id) >= FIGHTER_STARVING_TICKS
-  );
+  return world.ants.foodCarrying[id] === 0 && ticksSinceMeal(world, id) >= FIGHTER_STARVING_TICKS;
 }
 
 /** Largest int32 — "never" for a starve-after that must not fire. */

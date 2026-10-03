@@ -921,7 +921,7 @@ export function tickAntMovement(
         // `isRecallingFromForeign` / `skipAscent` predicate in the surface-ascent block
         // later in tickAntMovement.
         // V51 (#290 PR 4, D11): a hungry invader step 10c sent home to eat leaves
-        // the same way (fighterWalksHomeToEat is false below V51).
+        // the same way.
         const isRecalling =
           fighterIsRecalled(world, id) ||
           fighterWalksHomeToEat(world, id) ||

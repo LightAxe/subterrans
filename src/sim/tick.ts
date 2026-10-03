@@ -1559,8 +1559,6 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       if (ants.colonyId[sid] !== spiderPriorityCid) continue;
       if (ants.zone[sid] !== 0) continue; // surface only; underground fighters surface first
       // #363 (V58): a starving fighter step 10c sent home to eat keeps walking home.
-      // (Unversioned: before V58 step 10c never sends a fighter of the colony under
-      // spider priority home to eat, so this never skips one.)
       if (fighterWalksHomeToEat(world, sid)) continue;
       ants.targetPosX[sid] = (spTileX << FP_SHIFT) + (FP_ONE >> 1);
       ants.targetPosY[sid] = (spTileY << FP_SHIFT) + (FP_ONE >> 1);

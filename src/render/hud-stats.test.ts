@@ -136,8 +136,7 @@ describe('computeHudStats', () => {
   });
 
   // #375 — the bar is the queen's HP. From V66 starvation drains her HP, so hunger
-  // alone never moves it; a pre-V66 world (instant starvation) shows the lower of
-  // HP and meals-until-starvation.
+  // alone never moves it.
   it('queenHealthPct = 100 at full HP and fed', () => {
     const { world, colony, queenId } = setupWorld();
     setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, STARVATION_GRACE_TICKS);
@@ -189,17 +188,6 @@ describe('computeHudStats', () => {
     expect(computeHudStats(world, colony).queenHealthPct).toBe(100);
     world.ants.hp[queenId] = 12;
     expect(computeHudStats(world, colony).queenHealthPct).toBe(pctOf(12, COMBAT_HP_QUEEN));
-  });
-
-  it('pre-V66: the bar shows the lower of HP and meals-until-starvation', () => {
-    const { world, colony, queenId } = setupWorld();
-    world.simVersion = SIM_VERSION_V66_QUEEN_STARVES_HP - 1;
-    setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, STARVATION_GRACE_TICKS >> 1);
-    expect(computeHudStats(world, colony).queenHealthPct).toBe(50); // hunger lower
-    world.ants.hp[queenId] = 6;
-    expect(computeHudStats(world, colony).queenHealthPct).toBe(pctOf(6, COMBAT_HP_QUEEN)); // HP lower
-    setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, 0);
-    expect(computeHudStats(world, colony).queenHealthPct).toBe(0);
   });
 
   it('queenHealthPct clamps to [0, 100]', () => {

@@ -13,7 +13,7 @@
 import { describe, it, expect } from 'vitest';
 import { tickFoodConsumption } from './colony-system.js';
 import { createColonyRecord, type ColonyRecord } from './colony-store.js';
-import { createWorldState, SIM_VERSION_V50_LOCATED_FOOD, type WorldState } from '../types.js';
+import { createWorldState, type WorldState } from '../types.js';
 import { colonyFoodTotal } from '../food/food-api.js';
 import { setMealsUntilStarvationForTest, setPoolFoodForTest } from '../food/food-test-utils.js';
 import {
@@ -414,22 +414,5 @@ describe('tickFoodConsumption — worker meals (V51)', () => {
       consume(world, colony);
     }
     for (const id of ids) expect(world.ants.alive[id]).toBe(1);
-  });
-
-  it('a V50 world never runs the worker loop: no meals, no starvation', () => {
-    const { world, colony } = setup(2000);
-    world.simVersion = SIM_VERSION_V50_LOCATED_FOOD;
-    const starving = addWorker(
-      world,
-      colony,
-      { kind: 'surface', x: DOOR_X + 40, y: DOOR_Y },
-      WORKER_STARVE_AFTER_TICKS + 100,
-    );
-    const due = addWorker(world, colony, { kind: 'nest' }, WORKER_MEAL_INTERVAL_TICKS);
-    const lastDue = world.ants.lastMealTick[due]!;
-    consume(world, colony);
-    expect(world.ants.alive[starving]).toBe(1);
-    expect(world.ants.lastMealTick[due]).toBe(lastDue);
-    expect(colonyFoodTotal(world, colony)).toBe(2000 - QUEEN_FOOD_PER_TICK);
   });
 });
