@@ -113,6 +113,9 @@ describe('buildHudLayout', () => {
     // ...and inside the canvas.
     expect(label.x).toBeGreaterThanOrEqual(0);
     expect(label.y + label.h).toBeLessThanOrEqual(DEFAULT_LAYOUT.h);
+    // ...and above the right column: the tool palette and (#400) the spider-order chip.
+    expect(label.y + label.h).toBeLessThanOrEqual(hud.TOOLS.y);
+    expect(label.y + label.h).toBeLessThanOrEqual(hud.SPIDER_ORDER.y);
   });
 
   it('reflows right/bottom-anchored zones with the layout size', () => {
