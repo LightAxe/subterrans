@@ -7,7 +7,6 @@
 import type { AIStateRecord, WorldState } from '../sim/types.js';
 import {
   SIM_VERSION_V61_AI_EARLY_STORAGE,
-  SIM_VERSION_V62_AI_NEST_DEFENCE,
   SIM_VERSION_V63_AI_DEEP_QUEEN,
   SIM_VERSION_V69_FOOD_FAIRNESS,
 } from '../sim/types.js';
@@ -1164,7 +1163,7 @@ function isDefenceRally(
  * call's commands): the decision still reads the colony's CURRENT rally, so the raid
  * keeps its hold radius, and the defence rally is compared against the rally as it
  * will be once the queue applies (queuedRally), so it is sent again behind the
- * clear — no tick without a rally, no early end. Off below V62.
+ * clear — no tick without a rally, no early end.
  */
 export function aiNestDefence(
   world: WorldState,
@@ -1173,7 +1172,6 @@ export function aiNestDefence(
   out?: { holdOperations: boolean },
 ): NestEntrance | null {
   if (out !== undefined) out.holdOperations = false;
-  if (world.simVersion < SIM_VERSION_V62_AI_NEST_DEFENCE) return null;
   if (aiState?.operationKind === 'Invasion') {
     // The raid clock means nothing while the army is out; a raid after the
     // invasion starts a fresh one.

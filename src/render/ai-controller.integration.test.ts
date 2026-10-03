@@ -422,8 +422,10 @@ describe('#370 — AI opening with a full entrance pool (seed 404 Normal)', () =
 
 // -----------------------------------------------------------------------------
 // #371 (V62) — the playtest's rush: a standard player opening, ratio 4:6 at 5200
-// and an Assault rally on the enemy's entrance at 5800 (repro R2, seed 303). Up to
-// V61 the enemy queen died ~240 ticks later; from V62 the AI defends its nest.
+// and an Assault rally on the enemy's entrance at 5800 (repro R2, seed 303). Before
+// #371 the enemy queen died ~240 ticks later; the AI defends its nest. (The sim's
+// automatic defence, #372, now holds this nest even without the AI's response, so the
+// test also pins the response itself: the raid clock and the defence rally.)
 // -----------------------------------------------------------------------------
 
 function rushCommands(world: WorldState, t: number): SimCommand[] {
@@ -476,26 +478,57 @@ function rushCommands(world: WorldState, t: number): SimCommand[] {
   return out;
 }
 
-/** The tick the enemy queen died (null = alive at `ticks`). */
-function rushTrial(simVersion: number, ticks: number): number | null {
-  // #395: created at the pinned version, so the map is the one it had then.
-  const world = createScenario(303, 'Normal', simVersion);
+interface RushTrial {
+  /** The tick the enemy queen died (null = alive at the end). */
+  queenDiedAt: number | null;
+  /** First tick the enemy's raid clock (AIStateRecord.raidSinceTick) was running. */
+  raidClockAt: number | null;
+  /** First tick the enemy's rally stood on one of its own open entrances (its defence). */
+  defenceRallyAt: number | null;
+}
+
+/** Runs the rush for `ticks`: when the enemy queen died, and when the AI's raid clock
+ *  and its defence rally first appeared. */
+function rushTrial(ticks: number): RushTrial {
+  const world = createScenario(303, 'Normal');
   const enemy = world.colonies[ENEMY_COLONY_ID]!;
+  const out: RushTrial = { queenDiedAt: null, raidClockAt: null, defenceRallyAt: null };
   for (let t = 0; t < ticks; t++) {
     runAIController(world, ENEMY_COLONY_ID);
     tick(world, [...rushCommands(world, t), ...world.commandQueue.splice(0)]);
-    if (world.ants.alive[enemy.queenEntityId] !== 1) return world.tick;
+    const rec = world.aiState.find((r) => r.colonyId === ENEMY_COLONY_ID);
+    if (out.raidClockAt === null && rec !== undefined && rec.raidSinceTick !== -1) {
+      out.raidClockAt = world.tick;
+    }
+    const rp = enemy.rallyPoint;
+    if (
+      out.defenceRallyAt === null &&
+      rp != null &&
+      enemy.entrances.some(
+        (e) => e.isOpen && e.surfaceTileX === rp.tileX && e.surfaceTileY === rp.tileY,
+      )
+    ) {
+      out.defenceRallyAt = world.tick;
+    }
+    if (world.ants.alive[enemy.queenEntityId] !== 1) {
+      out.queenDiedAt = world.tick;
+      break;
+    }
   }
-  return null;
+  return out;
 }
 
 describe('#371 — a 6-fighter Assault rush on the AI (seed 303 Normal)', () => {
-  it('V62: the AI defends its nest; the queen outlives the first wave', () => {
-    expect(rushTrial(SIM_VERSION_V62_AI_NEST_DEFENCE, 6600)).toBeNull();
-  }, 90_000);
-
-  it('V63 (deep Queen, #374): the defence still holds', () => {
-    expect(rushTrial(SIM_VERSION_V63_AI_DEEP_QUEEN, 6600)).toBeNull();
+  it('the AI defends its nest (deep Queen, #374, too); the queen outlives the first wave', () => {
+    const trial = rushTrial(6600);
+    const msg = JSON.stringify(trial);
+    expect(trial.queenDiedAt, msg).toBeNull();
+    // The AI saw the raid (its clock started) and rallied its fighters on its own
+    // entrance, after the Assault rally at 5800 and before the queen could die.
+    expect(trial.raidClockAt, msg).not.toBeNull();
+    expect(trial.raidClockAt!, msg).toBeGreaterThan(5800);
+    expect(trial.defenceRallyAt, msg).not.toBeNull();
+    expect(trial.defenceRallyAt!, msg).toBeGreaterThan(5800);
   }, 90_000);
 });
 
