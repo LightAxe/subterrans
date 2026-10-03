@@ -7,7 +7,12 @@ import { createScenario } from '../sim/scenario.js';
 import { tick } from '../sim/tick.js';
 import { copyWorldState, type WorldState } from '../sim/types.js';
 import type { SimCommand } from '../sim/commands.js';
-import { ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
+import {
+  ENEMY_COLONY_ID,
+  PLAYER_COLONY_ID,
+  SURFACE_GRID_HEIGHT,
+  SURFACE_GRID_WIDTH,
+} from '../sim/constants.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { setPoolFoodForTest } from '../sim/food/food-test-utils.js';
 import type { JevAnswerMap } from './jev-encode.js';
@@ -19,6 +24,7 @@ import {
 } from './jev-client.js';
 import type { Seats } from './jev-types.js';
 import { JevCommandLedger } from './jev-commands.js';
+import { SPIDER_NEAR_TILES } from './jev-candidates.js';
 import { createJevOpeningState, isHandoffComplete, runJevOpeningTick } from './jev-opening.js';
 
 /** Every tile of every pending footprint `colonyId` owns, as "x,y" keys. */
@@ -649,6 +655,47 @@ describe('JevEnemyController — live phase', () => {
     expect(colony.priorityFoodPileId).toBeNull();
   });
 
+  it('#400 (V71): calls off its own spider priority once a beat no longer asks about the spider', async () => {
+    // A spider priority lasts until it is called off (or the spider dies) from
+    // V71, and Jev is only asked about the spider while it is near.
+    const SHORT_BEAT = 20;
+    const client = new ScriptedClient((state) => scripted({}, { spider_priority: 0.9 })(state));
+    const ctl = new JevEnemyController({ seats: SEATS, client, orders: '', beatTicks: SHORT_BEAT });
+    const world = handoffWorld();
+    const entrance = world.colonies[ENEMY_COLONY_ID]!.entrances[0]!;
+    const placeSpider = (x: number, y: number): void => {
+      world.spider!.posX = x << FP_SHIFT;
+      world.spider!.posY = y << FP_SHIFT;
+    };
+
+    stepOnce(world, ctl);
+    await alignToBeat(world, ctl, undefined, SHORT_BEAT);
+    placeSpider(entrance.surfaceTileX, entrance.surfaceTileY);
+    await step(world, ctl, 2); // the beat asks; its decision lands
+    expect(offeredCandidates(client)).toContain('spider_priority');
+    expect(world.spiderPriorityColonyId).toBe(ENEMY_COLONY_ID);
+
+    // The spider is now across the map: the next beat does not ask, and the
+    // priority Jev gave is called off rather than sending every fighter after it.
+    const farX = entrance.surfaceTileX < SURFACE_GRID_WIDTH / 2 ? SURFACE_GRID_WIDTH - 8 : 8;
+    const farY = entrance.surfaceTileY < SURFACE_GRID_HEIGHT / 2 ? SURFACE_GRID_HEIGHT - 8 : 8;
+    expect(
+      Math.abs(farX - entrance.surfaceTileX) + Math.abs(farY - entrance.surfaceTileY),
+    ).toBeGreaterThan(SPIDER_NEAR_TILES * 2);
+    placeSpider(farX, farY);
+    const callsBefore = client.calls;
+    await step(world, ctl, SHORT_BEAT + 1);
+    expect(client.calls).toBe(callsBefore + 1);
+    expect(offeredCandidates(client)).not.toContain('spider_priority');
+    expect(world.spiderPriorityColonyId).toBeNull();
+
+    // A priority the PLAYER gave is never Jev's to call off.
+    world.spiderPriorityColonyId = PLAYER_COLONY_ID;
+    await step(world, ctl, SHORT_BEAT + 1);
+    expect(client.calls).toBe(callsBefore + 2);
+    expect(world.spiderPriorityColonyId).toBe(PLAYER_COLONY_ID);
+  });
+
   it('does not overlap requests — a beat while one is in flight is skipped', async () => {
     let release: (() => void) | null = null;
     let mints = 0;
@@ -729,6 +776,22 @@ describe('JevEnemyController — failure policy', () => {
     expect(client.mints + client.calls).toBe(requestsAtFallback);
     expect(onFallback).toHaveBeenCalledTimes(1);
     expect(vi.mocked(runAIController).mock.calls.length).toBe(BEAT * 2);
+  });
+
+  it("#400 (V71): falling back calls off a spider priority Jev gave, and only Jev's", async () => {
+    // The rule-based AI never gives or calls off a spider priority, and from V71
+    // one lasts until called off — so Jev's must not outlive Jev.
+    for (const holder of [ENEMY_COLONY_ID, PLAYER_COLONY_ID]) {
+      const ctl = new JevEnemyController({ seats: SEATS, client: deadClient(), orders: '' });
+      const world = handoffWorld();
+      world.spiderPriorityColonyId = holder;
+      stepOnce(world, ctl); // the failed probe
+      await alignToBeat(world, ctl);
+      await step(world, ctl, BEAT + 2); // two more failed beats, then the flip
+      expect(ctl.status).toBe('fallback');
+      expect(world.spider).not.toBeNull();
+      expect(world.spiderPriorityColonyId).toBe(holder === ENEMY_COLONY_ID ? null : holder);
+    }
   });
 
   it('a success resets the consecutive-failure streak', async () => {

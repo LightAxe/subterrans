@@ -175,6 +175,11 @@ export class JevEnemyController {
 
     if (this.status === 'jev' && this.consecutiveFailures >= this.maxConsecutiveFailures) {
       this.status = 'fallback';
+      // #400 (V71): a spider priority now lasts until called off, and the rule-based
+      // AI never gives or calls one off, so a priority Jev gave would outlive Jev.
+      if (world.spiderPriorityColonyId === this.seats.mySeat) {
+        this.issueSpiderPriority(world, false);
+      }
       if (!this.fallbackNotified) {
         this.fallbackNotified = true;
         this.onFallback?.();
@@ -382,17 +387,14 @@ export class JevEnemyController {
       }
     }
 
-    if (d.spiderPriority !== null) {
-      const ours = world.spiderPriorityColonyId === colonyId;
-      if (d.spiderPriority !== ours) {
-        const cmd: MarkSpiderPriorityCommand = {
-          type: 'MarkSpiderPriority',
-          colonyId,
-          isPriority: d.spiderPriority,
-          issuedAtTick: tick,
-        };
-        this.ledger.issue(world, cmd);
-      }
+    // #400 (V71): a spider priority lasts until it is called off or the spider dies;
+    // the sim no longer ends it with the encounter. Jev is only asked about the
+    // spider while it is near, so when this beat did not ask, a priority Jev gave is
+    // called off: otherwise every surface fighter would keep chasing the spider
+    // across the map for the rest of its life.
+    const wantSpider = cands.spiderPriority === null ? false : d.spiderPriority;
+    if (wantSpider !== null && wantSpider !== (world.spiderPriorityColonyId === colonyId)) {
+      this.issueSpiderPriority(world, wantSpider);
     }
 
     if (d.expandStorage === true && cands.expandStorage !== null) {
@@ -406,5 +408,15 @@ export class JevEnemyController {
       };
       this.ledger.issue(world, cmd);
     }
+  }
+
+  private issueSpiderPriority(world: WorldState, isPriority: boolean): void {
+    const cmd: MarkSpiderPriorityCommand = {
+      type: 'MarkSpiderPriority',
+      colonyId: this.seats.mySeat,
+      isPriority,
+      issuedAtTick: world.tick,
+    };
+    this.ledger.issue(world, cmd);
   }
 }
