@@ -32,6 +32,20 @@
 // changes the food storage SHAPE but must keep behaviour: capture with
 // BYTE_GATE_PROJECTION=1 on the base commit, verify with it on the branch. A
 // baseline captured in one mode cannot be verified in the other.
+//
+// #408 — BYTE_GATE_SWEEP=1 adds a both-AI sweep (8 seeds × 12 000 ticks across the
+// three difficulties) and a raid-type cycle (8 000 ticks) to the six scenarios: use it
+// for a gate reap, or a refactor of raids or raid orders. It also runs both AIs, the
+// colony alarm, spider priority, shelterers and rampages, but check RULE-COVERAGE
+// before leaning on it for another rule: AI nest defence, alarm recruitment and rampage
+// shelter have no counter of their own. The flag is stored in the baseline, so capture
+// and verify must both set it. BYTE_GATE_COVERAGE=1 also prints a RULE-COVERAGE line
+// per scenario (raid food taken and spoiled per colony, raid type and 1000-tick window,
+// blockade, shelterers, rampages, the rotation cursor, queen deaths) to show a sweep is
+// not vacuous. Run with `--reporter=dot` (or verbose) to see the per-scenario lines.
+// Not covered: the spider's entrance rotation (V54) fires only on a rampage that times
+// out with no kill, which none of these scenarios reach (rotationCursorSets is 0), so a
+// change to it needs its own non-vacuity check.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { tick } from '../sim/tick.js';
@@ -56,11 +70,13 @@ import {
 } from '../sim/constants.js';
 import type { SimCommand } from '../sim/commands.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
-import { AntTask, ChamberType } from '../sim/enums.js';
+import { AntTask, ChamberType, FightingSubState, RaidType } from '../sim/enums.js';
 import { FP_ONE, FP_SHIFT } from '../sim/fixed.js';
 import { Zone } from '../sim/terrain.js';
 import { initAnt } from '../sim/ant/ant-store.js';
 import { runAIController } from '../render/ai-controller.js';
+import { createDefaultAIStateRecord, getAIStateForColony } from '../sim/ai-state.js';
+import { blockadedEntrance, rallyEnemyEntrance } from '../sim/raid-order.js';
 import {
   chamberStock,
   colonyPoolFood,
@@ -347,6 +363,314 @@ const SCENARIOS: readonly Scenario[] = [
   },
 ];
 
+// ---------------------------------------------------------------------------
+// #408 — BYTE_GATE_SWEEP=1 adds a both-AI sweep and a raid-type cycle to the six
+// scenarios above. The six barely run raids and raid orders, so a reap of those is
+// proven on these too. They also drive both AIs, the colony alarm, spider priority
+// and the spider's rampages; the spider's entrance rotation is not reached (see the
+// header). The flag is stored in the baseline like the hash mode: a baseline
+// captured with it cannot be verified without it, or the other way round.
+// ---------------------------------------------------------------------------
+const SWEEP = process.env.BYTE_GATE_SWEEP === '1';
+
+/** Offsets from the first entrance tried for a second one, one per attempt. */
+const SECOND_ENTRANCE_OFFSETS: ReadonlyArray<[number, number]> = [
+  [10, 0],
+  [-10, 0],
+  [0, 10],
+  [0, -10],
+  [10, 10],
+  [-10, 10],
+  [10, -10],
+  [-10, -10],
+  [14, 0],
+  [-14, 0],
+  [0, 14],
+  [0, -14],
+];
+
+/** The player's DesignateEntrance attempt `n` at a second entrance, or null once it has one. */
+function secondEntrance(world: WorldState, n: number, at: number): SimCommand | null {
+  const ents = world.colonies[PC]!.entrances;
+  if (ents.length !== 1) return null;
+  const [dx, dy] = SECOND_ENTRANCE_OFFSETS[n % SECOND_ENTRANCE_OFFSETS.length]!;
+  return {
+    type: 'DesignateEntrance',
+    colonyId: PC,
+    surfaceTileX: ents[0]!.surfaceTileX + dx,
+    surfaceTileY: ents[0]!.surfaceTileY + dy,
+    issuedAtTick: at,
+  };
+}
+
+/** The enemy's first open entrance tile, or null. */
+function enemyEntranceTile(world: WorldState): { x: number; y: number } | null {
+  const en = world.colonies[EC]?.entrances.find((e) => e.isOpen);
+  return en === undefined ? null : { x: en.surfaceTileX, y: en.surfaceTileY };
+}
+
+/** The player colony gets an AI state record, so its AI can go to war and raid
+ *  (createScenario gives one to the enemy only; check-ai-economy --both-ai does the same). */
+function bothAiSetup(world: WorldState): void {
+  if (getAIStateForColony(world, PC) === null) world.aiState.push(createDefaultAIStateRecord(PC));
+}
+
+/** The player's AI drives it inside these windows; the scripted player owns it outside. */
+function playerAiOn(t: number): boolean {
+  return t < 5000 || (t >= 8000 && t < 10500);
+}
+
+/** The scripted player's ratio swings (all outside the player-AI windows). */
+const SWEEP_RATIOS: ReadonlyMap<number, { forage: number; fight: number }> = new Map([
+  [5000, { forage: 3, fight: 7 }],
+  [6300, { forage: 8, fight: 2 }],
+  [7200, { forage: 0, fight: 10 }],
+  [10500, { forage: 5, fight: 5 }],
+  [11200, { forage: 9, fight: 1 }],
+]);
+
+/**
+ * Both colonies AI-driven, plus a scripted player:
+ *  - a second player entrance (attempts from tick 600), so the spider has a door
+ *    to rotate to;
+ *  - MarkSpiderPriority on and off, twice;
+ *  - SetColonyAlarm on and off, twice;
+ *  - ratio swings and a Loot rally on the enemy's entrance while the player's AI
+ *    is off (it re-syncs the ratio every tick it runs).
+ */
+function sweepDriver(world: WorldState, t: number): SimCommand[] {
+  runAIController(world, EC);
+  if (playerAiOn(t)) runAIController(world, PC);
+  const out: SimCommand[] = [];
+  const at = t;
+  if (t >= 600 && t <= 3000 && t % 50 === 0) {
+    const cmd = secondEntrance(world, (t - 600) / 50, at);
+    if (cmd !== null) out.push(cmd);
+  }
+  if (t === 3500 || t === 9000) {
+    out.push({ type: 'MarkSpiderPriority', colonyId: PC, isPriority: true, issuedAtTick: at });
+  }
+  if (t === 4500 || t === 9800) {
+    out.push({ type: 'MarkSpiderPriority', colonyId: PC, isPriority: false, issuedAtTick: at });
+  }
+  if (t === 5500 || t === 10600) {
+    out.push({ type: 'SetColonyAlarm', colonyId: PC, active: true, issuedAtTick: at });
+  }
+  if (t === 6200 || t === 11000) {
+    out.push({ type: 'SetColonyAlarm', colonyId: PC, active: false, issuedAtTick: at });
+  }
+  const ratio = SWEEP_RATIOS.get(t);
+  if (ratio !== undefined) {
+    out.push({ type: 'SetBehaviorRatio', colonyId: PC, ratio: { ...ratio }, issuedAtTick: at });
+  }
+  if (t === 5100) {
+    const en = enemyEntranceTile(world);
+    if (en !== null) {
+      out.push({ type: 'SetRallyPoint', colonyId: PC, tileX: en.x, tileY: en.y, issuedAtTick: at });
+    }
+  }
+  if (t === 6800) out.push({ type: 'ClearRallyPoint', colonyId: PC, issuedAtTick: at });
+  for (const c of world.commandQueue.splice(0)) out.push(c);
+  return out;
+}
+
+/** The raid types the raid-type cycle walks, one per 1000 ticks from tick 3000. */
+const RAID_CYCLE: readonly RaidType[] = [
+  RaidType.Loot,
+  RaidType.Deny,
+  RaidType.Spoil,
+  RaidType.Blockade,
+  RaidType.Assault,
+];
+
+/**
+ * Both colonies AI-driven until 3000 (the player's AI builds its nest and army),
+ * then the scripted player sets an even ratio and rallies on the enemy's entrance
+ * every 1000 ticks from 3000, cycling the raid type Loot → Deny → Spoil →
+ * Blockade → Assault. The enemy's AI runs throughout. On seed 42 the player's
+ * raiders take food in the Loot and Deny windows and spoil it in the Spoil window
+ * (BYTE_GATE_COVERAGE's raidFoodByWindow), and the enemy queen lives into the
+ * Blockade and Assault windows (queenDeathTick).
+ */
+function raidCycleDriver(world: WorldState, t: number): SimCommand[] {
+  runAIController(world, EC);
+  if (t < 3000) runAIController(world, PC);
+  const out: SimCommand[] = [];
+  const at = t;
+  if (t === 3000) {
+    out.push({
+      type: 'SetBehaviorRatio',
+      colonyId: PC,
+      ratio: { forage: 5, fight: 5 },
+      issuedAtTick: at,
+    });
+  }
+  if (t >= 3000 && t % 1000 === 0) {
+    const en = enemyEntranceTile(world);
+    if (en !== null) {
+      out.push({
+        type: 'SetRallyPoint',
+        colonyId: PC,
+        tileX: en.x,
+        tileY: en.y,
+        raidType: RAID_CYCLE[((t - 3000) / 1000) % RAID_CYCLE.length]!,
+        issuedAtTick: at,
+      });
+    }
+  }
+  for (const c of world.commandQueue.splice(0)) out.push(c);
+  return out;
+}
+
+const SWEEP_SEEDS: ReadonlyArray<[number, 'Easy' | 'Normal' | 'Hard']> = [
+  [3, 'Normal'],
+  [11, 'Hard'],
+  [23, 'Easy'],
+  [37, 'Normal'],
+  [51, 'Hard'],
+  [64, 'Easy'],
+  [77, 'Normal'],
+  [90, 'Hard'],
+];
+
+const SWEEP_SCENARIOS: readonly Scenario[] = [
+  ...SWEEP_SEEDS.map(
+    ([seed, difficulty]): Scenario => ({
+      name: `sweep-sc${seed}-${difficulty.toLowerCase()}-12000-both-ai`,
+      seed,
+      difficulty,
+      ticks: 12_000,
+      commands: [],
+      setup: bothAiSetup,
+      driver: sweepDriver,
+    }),
+  ),
+  {
+    name: 'sweep-sc42-normal-8000-raid-type-cycle',
+    seed: 42,
+    difficulty: 'Normal',
+    ticks: 8000,
+    commands: [],
+    setup: bothAiSetup,
+    driver: raidCycleDriver,
+  },
+];
+
+const ACTIVE_SCENARIOS: readonly Scenario[] = SWEEP
+  ? [...SCENARIOS, ...SWEEP_SCENARIOS]
+  : SCENARIOS;
+
+/** BYTE_GATE_COVERAGE=1 — what a scenario exercised of the rules the #408 reap touches. */
+interface RuleCoverage {
+  lootingTicks: number; // ant-ticks in FightingSubState.Looting
+  haulingTicks: number; // ant-ticks in FightingSubState.Hauling
+  /** `colonyId:raidType@kiloTick` → raid food (fp) the colony TOOK (its foodRaidedFp
+   *  rose) and SPOILED (its victim's foodLostToRaidsFp rose by more than the raiders
+   *  took) on ticks in that 1000-tick window, under the raid type it held then. */
+  raidFoodByWindow: Record<string, { taken: number; spoiled: number }>;
+  /** colonyId → the tick its queen was first seen dead (absent: alive at the end). */
+  queenDeathTick: Record<string, number>;
+  raidTripsByColony: Record<string, number>;
+  raidTypesRallied: number[]; // raid types held while rallied on an enemy entrance
+  blockadeTicks: number; // ticks some colony blockaded an enemy entrance
+  shelterTicks: number; // ant-ticks in the flee/shelter phase
+  alarmTicks: number;
+  spiderPriorityTicks: number;
+  rampageTicks: number;
+  rampageStarts: number;
+  rotationCursorSets: number; // the spider remembered a timed-out entrance
+  maxPlayerEntrances: number;
+}
+
+function newRuleCoverage(): RuleCoverage {
+  return {
+    lootingTicks: 0,
+    haulingTicks: 0,
+    raidFoodByWindow: {},
+    queenDeathTick: {},
+    raidTripsByColony: {},
+    raidTypesRallied: [],
+    blockadeTicks: 0,
+    shelterTicks: 0,
+    alarmTicks: 0,
+    spiderPriorityTicks: 0,
+    rampageTicks: 0,
+    rampageStarts: 0,
+    rotationCursorSets: 0,
+    maxPlayerEntrances: 0,
+  };
+}
+
+function observeRules(
+  world: WorldState,
+  cov: RuleCoverage,
+  prev: {
+    rampaging: boolean;
+    cursor: number;
+    raided: Record<string, number>;
+    lost: Record<string, number>;
+  },
+): void {
+  const a = world.ants;
+  for (let id = 0; id < world.nextEntityId; id++) {
+    if (a.alive[id] !== 1) continue;
+    if (a.fleeShelterUntilTick[id]! >= 0) cov.shelterTicks++;
+    if (a.task[id] !== AntTask.Fighting) continue;
+    const looting = a.subTask[id] === FightingSubState.Looting;
+    const hauling = a.subTask[id] === FightingSubState.Hauling;
+    if (looting) cov.lootingTicks++;
+    else if (hauling) cov.haulingTicks++;
+  }
+  // Raid food this tick, by colony, raid type and 1000-tick window.
+  const kilo = Math.floor(world.tick / 1000);
+  const dRaided: Record<string, number> = {};
+  const dLost: Record<string, number> = {};
+  for (const [cid, c] of Object.entries(world.colonies)) {
+    dRaided[cid] = c.foodRaidedFp - (prev.raided[cid] ?? 0);
+    dLost[cid] = c.foodLostToRaidsFp - (prev.lost[cid] ?? 0);
+    prev.raided[cid] = c.foodRaidedFp;
+    prev.lost[cid] = c.foodLostToRaidsFp;
+  }
+  const bucket = (cid: string): { taken: number; spoiled: number } =>
+    (cov.raidFoodByWindow[`${cid}:${world.colonies[Number(cid)]!.raidType}@${kilo}`] ??= {
+      taken: 0,
+      spoiled: 0,
+    });
+  for (const [cid, d] of Object.entries(dRaided)) if (d > 0) bucket(cid).taken += d;
+  for (const [victim, lost] of Object.entries(dLost)) {
+    let tookFromIt = 0;
+    for (const [cid, d] of Object.entries(dRaided)) if (cid !== victim && d > 0) tookFromIt += d;
+    const spoiled = lost - tookFromIt;
+    if (spoiled <= 0) continue;
+    for (const [cid, c] of Object.entries(world.colonies)) {
+      if (cid !== victim && c.raidType === RaidType.Spoil) bucket(cid).spoiled += spoiled;
+    }
+  }
+  let blockade = false;
+  for (const [cid, c] of Object.entries(world.colonies)) {
+    cov.raidTripsByColony[cid] = c.raidTrips;
+    if (a.alive[c.queenEntityId] !== 1 && cov.queenDeathTick[cid] === undefined) {
+      cov.queenDeathTick[cid] = world.tick;
+    }
+    if (c.alarmActive) cov.alarmTicks++;
+    if (blockadedEntrance(world, c) !== null) blockade = true;
+    if (rallyEnemyEntrance(world, c) !== null && !cov.raidTypesRallied.includes(c.raidType)) {
+      cov.raidTypesRallied.push(c.raidType);
+    }
+  }
+  if (blockade) cov.blockadeTicks++;
+  if (world.spiderPriorityColonyId !== null) cov.spiderPriorityTicks++;
+  cov.maxPlayerEntrances = Math.max(cov.maxPlayerEntrances, world.colonies[PC]!.entrances.length);
+  const sp = world.spider;
+  const rampaging = sp !== null && sp.state === 'Rampaging';
+  if (rampaging) cov.rampageTicks++;
+  if (rampaging && !prev.rampaging) cov.rampageStarts++;
+  prev.rampaging = rampaging;
+  const cursor = sp === null ? -1 : sp.rampageRotationEntranceId;
+  if (cursor !== -1 && cursor !== prev.cursor) cov.rotationCursorSets++;
+  prev.cursor = cursor;
+}
+
 /** BYTE_GATE_COVERAGE=1 — what a scenario exercised, read through the facade only. */
 interface FoodCoverage {
   maxFoodStorageChambers: Record<string, number>;
@@ -480,14 +804,22 @@ function runScenario(scn: Scenario): ScenarioResult {
     pool: {},
     mark: null as number | null,
   };
+  const rules = newRuleCoverage();
+  const rulesPrev = { rampaging: false, cursor: -1, raided: {}, lost: {} };
   if (COVERAGE) observe(world, newCoverage(), prev); // prime: tick-0 piles are not spawns
   for (let t = 0; t < scn.ticks; t++) {
     const scripted = scn.commands[t] ?? [];
     tick(world, scn.driver ? [...scripted, ...scn.driver(world, t)] : scripted);
-    if (COVERAGE) observe(world, cov, prev);
+    if (COVERAGE) {
+      observe(world, cov, prev);
+      observeRules(world, rules, rulesPrev);
+    }
     if ((t + 1) % CHECKPOINT_EVERY === 0) checkpoints.push([t + 1, hashFor(world)]);
   }
-  if (COVERAGE) console.log(`[byte-gate] COVERAGE ${scn.name} ${JSON.stringify(cov)}`);
+  if (COVERAGE) {
+    console.log(`[byte-gate] COVERAGE ${scn.name} ${JSON.stringify(cov)}`);
+    console.log(`[byte-gate] RULE-COVERAGE ${scn.name} ${JSON.stringify(rules)}`);
+  }
   return { final: hashFor(world), checkpoints };
 }
 
@@ -500,16 +832,19 @@ function firstDivergentTick(a: ScenarioResult, b: ScenarioResult): number {
 }
 
 describe.skipIf(!MODE)('byte-gate: cross-build determinism (#212 split)', () => {
-  it(`${MODE ?? 'skip'} ${SCENARIOS.length} scenarios`, () => {
+  it(`${MODE ?? 'skip'} ${ACTIVE_SCENARIOS.length} scenarios`, () => {
     if (!FILE) throw new Error('BYTE_GATE_FILE env var must be an absolute path');
     const results: Record<string, ScenarioResult> = {};
-    for (const scn of SCENARIOS) results[scn.name] = runScenario(scn);
+    for (const scn of ACTIVE_SCENARIOS) results[scn.name] = runScenario(scn);
 
     const hashMode = PROJECTION ? 'projection' : 'snapshot';
     if (MODE === 'capture') {
-      writeFileSync(FILE, JSON.stringify({ hashMode, results }));
-      console.log(`[byte-gate] CAPTURED ${SCENARIOS.length} ${hashMode} baselines -> ${FILE}`);
-      for (const scn of SCENARIOS) {
+      writeFileSync(FILE, JSON.stringify({ hashMode, sweep: SWEEP, results }));
+      console.log(
+        `[byte-gate] CAPTURED ${ACTIVE_SCENARIOS.length} ${hashMode} baselines ` +
+          `(sweep ${SWEEP ? 'on' : 'off'}) -> ${FILE}`,
+      );
+      for (const scn of ACTIVE_SCENARIOS) {
         console.log(`  ${scn.name}: final=${results[scn.name]!.final} (${scn.ticks} ticks)`);
       }
       return; // capture asserts nothing
@@ -524,9 +859,19 @@ describe.skipIf(!MODE)('byte-gate: cross-build determinism (#212 split)', () => 
     if (baseMode !== hashMode) {
       throw new Error(`baseline was captured in ${baseMode} mode; this run is ${hashMode} mode`);
     }
-    console.log(`[byte-gate] VERIFY (${hashMode}) against baseline ${FILE}`);
+    // #408 — baselines from before the sweep existed carry no flag (sweep off).
+    const baseSweep = parsed['sweep'] === true;
+    if (baseSweep !== SWEEP) {
+      throw new Error(
+        `baseline was captured with BYTE_GATE_SWEEP ${baseSweep ? 'on' : 'off'}; ` +
+          `this run has it ${SWEEP ? 'on' : 'off'}`,
+      );
+    }
+    console.log(
+      `[byte-gate] VERIFY (${hashMode}, sweep ${SWEEP ? 'on' : 'off'}) against baseline ${FILE}`,
+    );
     let allPass = true;
-    for (const scn of SCENARIOS) {
+    for (const scn of ACTIVE_SCENARIOS) {
       const got = results[scn.name]!;
       const base = baseline[scn.name];
       if (!base) {
@@ -556,5 +901,5 @@ describe.skipIf(!MODE)('byte-gate: cross-build determinism (#212 split)', () => 
       }
     }
     expect(allPass, 'every scenario must be byte-identical to the pre-split baseline').toBe(true);
-  }, 600_000);
+  }, 1_800_000);
 });
