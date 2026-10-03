@@ -30,6 +30,9 @@ import {
   AI_PROBE_TIMEOUT_TICKS,
   AI_INVADING_MIN_TICK,
   AI_INVADING_FIGHTER_THRESHOLD,
+  AI_INVASION_FLOOR_STEP,
+  AI_INVASION_FLOOR_MAX,
+  AI_INVASION_FLOOR_PATIENCE_TICKS,
   AI_INVADING_TIMEOUT_TICKS,
   AI_RECOVERY_DURATION_TICKS,
   AI_MAX_OPERATION_FIGHTERS,
@@ -75,6 +78,7 @@ export function createDefaultAIStateRecord(colonyId: ColonyId): AIStateRecord {
     operationAttackerDeaths: 0,
     operationDefenderDeaths: 0,
     raidSinceTick: -1,
+    invasionFloor: 0,
   };
 }
 
@@ -315,6 +319,21 @@ function _tryTransitionPeacetimeToWarFooting(
   }
 }
 
+/**
+ * #398 (V72) — the fighters an AI colony needs to launch an invasion: the tier's base
+ * need (AI_INVADING_FIGHTER_THRESHOLD), or its invasion floor while that is higher and
+ * fewer than AI_INVASION_FLOOR_PATIENCE_TICKS have passed since its last Recovery
+ * ended. After that the base need applies again (the floor itself stays), so an AI
+ * that cannot grow to its floor still attacks. A colony that has never been in
+ * Recovery has floor 0, so its need is the base.
+ */
+export function invasionFighterNeed(world: WorldState, aiState: AIStateRecord): number {
+  const base = AI_INVADING_FIGHTER_THRESHOLD[tierIndex(world.difficulty)];
+  if (aiState.invasionFloor <= base) return base;
+  if (world.tick - aiState.recoveryEndTick >= AI_INVASION_FLOOR_PATIENCE_TICKS) return base;
+  return aiState.invasionFloor;
+}
+
 /** Returns true if transition fired (to prevent probe check on same tick). */
 function _checkWarFootingToInvading(
   world: WorldState,
@@ -326,7 +345,7 @@ function _checkWarFootingToInvading(
   const foodCap = aiFoodCap(world, aiColonyId);
 
   if (
-    fighters >= AI_INVADING_FIGHTER_THRESHOLD[tierIndex(world.difficulty)] &&
+    fighters >= invasionFighterNeed(world, aiState) &&
     foodStored * 100 >= foodCap * AI_INVADING_FOOD_FRAC_PCT &&
     world.tick >= AI_INVADING_MIN_TICK
   ) {
@@ -477,9 +496,20 @@ function _endInvasion(
     issuedAtTick: world.tick,
   };
   pushCommand(world, clearCmd, 'sim');
+  // #398 (V72) — a repelled invasion (a rout, or the timeout once a cohort was
+  // committed) raises the invasion floor, so the next wave is bigger, or later, or both.
+  // Read before _clearOperationFields wipes the committed size. A queen kill ends the
+  // match.
+  const tier = tierIndex(world.difficulty);
+  if (outcome !== 'queen_kill' && aiState.operationStartFighterCount > 0) {
+    aiState.invasionFloor = Math.min(
+      AI_INVASION_FLOOR_MAX[tier],
+      Math.max(aiState.invasionFloor, aiState.operationStartFighterCount) + AI_INVASION_FLOOR_STEP,
+    );
+  }
   aiState.state = 'Recovery';
   aiState.enteredTick = world.tick;
-  aiState.recoveryEndTick = world.tick + AI_RECOVERY_DURATION_TICKS[tierIndex(world.difficulty)];
+  aiState.recoveryEndTick = world.tick + AI_RECOVERY_DURATION_TICKS[tier];
   aiState.invasionStartTick = 0;
   aiState.invasionRallyTileX = -1;
   aiState.invasionRallyTileY = -1;

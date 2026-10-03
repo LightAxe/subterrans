@@ -539,6 +539,27 @@ every fighter's order.
 _Avoid_: "attack" used alone (ambiguous); don't conflate the operation kind
 (`Probe`/`Invasion`) with the AI state (`Probing`/`Invading`).
 
+**Repelled invasion** (#398):
+An invasion that ends without killing the queen after its cohort was committed: a
+**fighter rout** (fewer than 3 of the cohort alive) or the **timeout**. An invasion
+that times out before any cohort is committed (no entrance found, or the AI held it
+to defend its own nest) is not repelled, nor is one that ends in a queen kill.
+_Avoid_: "failed invasion" (ambiguous with the pre-cohort timeout).
+
+**Invasion floor** (#398, simVersion V72; `AIStateRecord.invasionFloor`):
+The fighters an AI colony's launch gate asks for in place of
+`AI_INVADING_FIGHTER_THRESHOLD` while the floor is higher; 0 = none. Each repelled
+invasion raises it to the wave's committed size (or the old floor, if higher) plus
+`AI_INVASION_FLOOR_STEP`, up to the tier's `AI_INVASION_FLOOR_MAX`, and it never
+falls within a match. The gate needs it only for `AI_INVASION_FLOOR_PATIENCE_TICKS`
+after the colony's latest Recovery ends; after that it needs the base threshold
+again, so an AI that cannot grow to its floor still attacks. Any Recovery re-arms
+it: a repelled invasion, or a timeout before any cohort was committed (which does
+not raise it). So the wave after one the player repels is bigger, or later, or
+both.
+_Avoid_: "wave size" for the floor (a wave can launch bigger than its floor, or at
+the base threshold once patience runs out).
+
 **Gathering (enemy army)** (#372, render-only):
 At least `GATHER_MIN_FIGHTERS` fighters of other colonies on the surface (moving
 or not) within `GATHER_RADIUS_TILES` of one of the viewing colony's open entrances,

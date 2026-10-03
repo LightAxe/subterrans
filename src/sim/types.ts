@@ -1698,7 +1698,28 @@ export const SIM_VERSION_V70_EGG_RESERVE = 70 as const;
  *     the spider dies: no feed, hunt end, rampage end or chase divert clears it.
  */
 export const SIM_VERSION_V71_HEALTH_MODEL = 71 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V71_HEALTH_MODEL;
+
+/**
+ * #398 (V72) — the AI escalates after a repelled invasion. Up to V71 the launch gate
+ * (WarFooting → Invading) needed AI_INVADING_FIGHTER_THRESHOLD fighters whatever had
+ * happened before, so a colony that routed every wave met one of the same size every
+ * ~3 min for the rest of the match. From V72 each AI colony keeps an invasion floor
+ * (new AIStateRecord.invasionFloor, 0 = none). When an invasion is repelled (it ends
+ * in a fighter rout, or in the timeout once a cohort was committed; a queen kill or a
+ * timeout before any cohort leaves it alone), the floor becomes
+ * min(AI_INVASION_FLOOR_MAX[tier], max(floor, the wave's committed size) +
+ * AI_INVASION_FLOOR_STEP). The launch gate needs max(base, floor) fighters
+ * (invasionFighterNeed, ai-state.ts) until AI_INVASION_FLOOR_PATIENCE_TICKS have
+ * passed since its latest Recovery ended (recoveryEndTick, which the end of Recovery
+ * leaves in place), and the base need again after that, so the floor never stalls
+ * the AI. The food gate and
+ * AI_INVADING_MIN_TICK are unchanged; the first invasion of a match is unchanged.
+ * Colony-agnostic (CLNY-08). The field is serialized only when non-zero. No change to
+ * the render AI controller, no command, no world.rngState draw, no tick-order change.
+ * Pre-1.0 policy: no version gate; MIN_ACCEPTED is raised to V72 with it.
+ */
+export const SIM_VERSION_V72_AI_ESCALATION = 72 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V72_AI_ESCALATION;
 
 /**
  * S2 — AI colony state machine states.
@@ -1773,7 +1794,10 @@ export interface AIStateRecord {
   invasionStartTick: number; // 0 if not Invading
   invasionRallyTileX: number; // -1 if no active rally; integer tile coords
   invasionRallyTileY: number;
-  recoveryEndTick: number; // 0 if not in Recovery
+  /** The tick the latest Recovery ends (or ended); 0 = never in Recovery. Set on
+   *  entering Recovery and kept after it ends: from V72 (#398) the invasion floor's
+   *  patience is measured from it. */
+  recoveryEndTick: number;
 
   // Committed-force operation tracking (CF-P0-005)
   operationKind: 'None' | 'Probe' | 'Invasion';
@@ -1793,6 +1817,17 @@ export interface AIStateRecord {
    * AI_DEFENCE_OPS_HOLD_LIMIT_TICKS. Serialized only when set (never below V62).
    */
   raidSinceTick: number;
+  /**
+   * #398 (V72) — the invasion floor: the fighters the launch gate asks for in place
+   * of the base need (AI_INVADING_FIGHTER_THRESHOLD) while it is higher, until its
+   * patience runs out; 0 = none. After a repelled invasion (a fighter rout, or the
+   * timeout once a cohort was committed) it becomes min(AI_INVASION_FLOOR_MAX[tier],
+   * max(floor, the wave's committed size) + AI_INVASION_FLOOR_STEP), so it never
+   * falls within a match (the loader clamps a saved value to the same tier cap). The
+   * gate needs it while fewer than AI_INVASION_FLOOR_PATIENCE_TICKS have passed since
+   * recoveryEndTick (invasionFighterNeed, ai-state.ts). Serialized only when non-zero.
+   */
+  invasionFloor: number;
 }
 
 export interface WorldState {
@@ -2167,6 +2202,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
       d.operationAttackerDeaths = s.operationAttackerDeaths;
       d.operationDefenderDeaths = s.operationDefenderDeaths;
       d.raidSinceTick = s.raidSinceTick;
+      d.invasionFloor = s.invasionFloor;
     } else {
       // Grow: push a new deep copy.
       dst.aiState.push({
@@ -2189,6 +2225,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
         operationAttackerDeaths: s.operationAttackerDeaths,
         operationDefenderDeaths: s.operationDefenderDeaths,
         raidSinceTick: s.raidSinceTick,
+        invasionFloor: s.invasionFloor,
       });
     }
   }

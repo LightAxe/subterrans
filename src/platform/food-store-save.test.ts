@@ -460,7 +460,7 @@ describe('#290 PR 2 validateFoodStore — tamper matrix', () => {
     expect(() => deserializeWorldState(edge)).not.toThrow();
     rejects(w, (s) => (s.ants.lastMealTick[id] = s.tick - starve - 1), /lastMealTick.*worker/);
     // (The V50 arm — a V50 world's workers never ate, so their clocks went unchecked —
-    // was retired by #400: MIN_ACCEPTED is V71, so no V50 save loads at all.)
+    // was retired by #400: MIN_ACCEPTED is V71 or later, so no V50 save loads at all.)
   });
 
   // 5. Pile order.
