@@ -18,7 +18,6 @@ import {
   AI_DIG_INTERVAL,
   AI_CHAMBER_INTERVAL,
   AI_DIG_MARK_BUDGET,
-  AI_QUEEN_CHAMBER_DEPTH,
   AI_PLACEMENT_DEPTH_TOLERANCE,
   aiQueenMinAnchorRow,
   AI_FOOD_STORAGE_THRESHOLD,
@@ -49,7 +48,6 @@ import {
 import {
   createWorldState,
   allocateEntityId,
-  SIM_VERSION_V60_RAID_ORDERS,
   SIM_VERSION_V61_AI_EARLY_STORAGE,
   SIM_VERSION_V62_AI_NEST_DEFENCE,
   SIM_VERSION_V63_AI_DEEP_QUEEN,
@@ -97,6 +95,8 @@ const GRID_W = 64;
 const GRID_H = 64;
 /** #374 (V63) — the AI's Queen anchor row on the test grid (a third of the way down). */
 const QUEEN_ROW = aiQueenMinAnchorRow(GRID_H, CHAMBER_DIMENSIONS[ChamberType.Queen].height);
+/** The anchor row of a Queen chamber a fixture already has (any row below the larder). */
+const FIXTURE_QUEEN_ROW = 18;
 
 /**
  * Build a minimal WorldState with the given tick.
@@ -391,13 +391,12 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
   describe('aiChamberPlacement', () => {
     it('issues PlaceChamber Queen when no queen chamber exists, using anchorTileX/anchorTileY', () => {
       const world = makeWorld(0);
-      world.simVersion = SIM_VERSION_V62_AI_NEST_DEFENCE; // pre-V63 Queen depth (#374)
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       setQueenPos(world, 0, 10, 10);
-      // Mark a tile Open near AI_QUEEN_CHAMBER_DEPTH
+      // Mark a tile Open on the Queen's anchor row
       const grid = world.undergroundGrids[2 as ColonyId]!;
-      ugSet(grid, 10, AI_QUEEN_CHAMBER_DEPTH, UndergroundTileState.Open);
+      ugSet(grid, 10, QUEEN_ROW, UndergroundTileState.Open);
       aiChamberPlacement(world, colony);
       const chamberCmds = world.commandQueue.filter((c) => c.type === 'PlaceChamber');
       const queenCmd = chamberCmds.find(
@@ -418,7 +417,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       setQueenPos(world, 0, 10, 10);
       setPoolFoodForTest(world, colony, AI_FOOD_STORAGE_THRESHOLD);
       // Add a Queen chamber so that branch is skipped
-      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, FIXTURE_QUEEN_ROW));
       // Open tile for FoodStorage
       const grid = world.undergroundGrids[2 as ColonyId]!;
       ugSet(grid, 10, 5, UndergroundTileState.Open);
@@ -436,7 +435,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       addUndergroundGrid(world, 2 as ColonyId);
       setQueenPos(world, 0, 10, 10);
       setPoolFoodForTest(world, colony, AI_FOOD_STORAGE_THRESHOLD - 1);
-      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, FIXTURE_QUEEN_ROW));
       addChamberForTest(world, colony, makeChamber(ChamberType.FoodStorage, 10, 5));
       const grid = world.undergroundGrids[2 as ColonyId]!;
       ugSet(grid, 10, 5, UndergroundTileState.Open);
@@ -456,7 +455,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       setQueenPos(world, 0, 10, 10);
       colony.eggCount = 6;
       colony.larvaeCount = 6; // 12 total >= AI_NURSERY_THRESHOLD
-      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, FIXTURE_QUEEN_ROW));
       const grid = world.undergroundGrids[2 as ColonyId]!;
       ugSet(grid, 10, 7, UndergroundTileState.Open);
       aiChamberPlacement(world, colony);
@@ -473,7 +472,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       setQueenPos(world, 0, 10, 10);
-      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, FIXTURE_QUEEN_ROW));
       addChamberForTest(world, colony, makeChamber(ChamberType.FoodStorage, 10, 5));
       addChamberForTest(world, colony, makeChamber(ChamberType.Nursery, 10, 7));
       aiChamberPlacement(world, colony);
@@ -513,7 +512,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       setQueenPos(world, 0, 10, 10);
-      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, FIXTURE_QUEEN_ROW));
       if (withNursery) addChamberForTest(world, colony, makeChamber(ChamberType.Nursery, 20, 7));
       const fs = addChamberForTest(world, colony, makeChamber(ChamberType.FoodStorage, 10, 5));
       const pool = Math.min(totalFp, BASE_FOOD_STORAGE_CAPACITY);
@@ -598,7 +597,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const colony = addColony(world, 2 as ColonyId, queenId);
       addUndergroundGrid(world, 2 as ColonyId);
       setQueenPos(world, queenId, 10, 10);
-      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, FIXTURE_QUEEN_ROW));
       addChamberForTest(world, colony, makeChamber(ChamberType.Nursery, 20, 7));
       addChamberForTest(world, colony, makeChamber(ChamberType.FoodStorage, 10, 5));
       for (let i = 1; i < chambers; i++) {
@@ -800,7 +799,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
         colonyId: 2 as ColonyId,
         chamberType: ChamberType.Queen,
         anchorTileX: 10,
-        anchorTileY: AI_QUEEN_CHAMBER_DEPTH,
+        anchorTileY: FIXTURE_QUEEN_ROW,
         width: 5,
         height: 3,
       };
@@ -811,7 +810,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       const world = makeWorld(0);
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
-      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, FIXTURE_QUEEN_ROW));
       addChamberForTest(world, colony, makeChamber(ChamberType.Nursery, 20, 7));
       setPoolFoodForTest(world, colony, BASE_FOOD_STORAGE_CAPACITY);
       expect(aiExtraFoodStorageWanted(world, colony)).toBe(false);
@@ -1005,13 +1004,12 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
 
     it('returns the Open tile nearest to preferredDepth', () => {
       const world = makeWorld(0);
-      world.simVersion = SIM_VERSION_V62_AI_NEST_DEFENCE; // pre-V63 Queen depth (#374)
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       setQueenPos(world, 0, 10, 10);
       const grid = world.undergroundGrids[2 as ColonyId]!;
       // Two Open tiles: one at preferredDepth, one far away
-      ugSet(grid, 10, AI_QUEEN_CHAMBER_DEPTH, UndergroundTileState.Open);
+      ugSet(grid, 10, QUEEN_ROW, UndergroundTileState.Open);
       ugSet(grid, 10, 30, UndergroundTileState.Open);
       aiChamberPlacement(world, colony);
       const queenCmd = world.commandQueue.find(
@@ -1021,8 +1019,8 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       );
       expect(queenCmd).toBeDefined();
       const qc = queenCmd as { anchorTileY: number };
-      // Should pick the tile at AI_QUEEN_CHAMBER_DEPTH (closer to preferredDepth)
-      expect(qc.anchorTileY).toBe(AI_QUEEN_CHAMBER_DEPTH);
+      // Should pick the tile at QUEEN_ROW (closer to preferredDepth)
+      expect(qc.anchorTileY).toBe(QUEEN_ROW);
     });
 
     it('excludes tiles already occupied by existing chambers', () => {
@@ -1113,8 +1111,8 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       expect(aiQueenMinAnchorRow(5, QUEEN_H)).toBe(2);
     });
 
-    it('the V62 anchor band (rows 14..21) no longer places the Queen', () => {
-      for (let y = AI_QUEEN_CHAMBER_DEPTH - AI_PLACEMENT_DEPTH_TOLERANCE; y < THIRD; y++) {
+    it('a row above a third (the #33 band, rows 14..21) does not place the Queen', () => {
+      for (let y = 14; y < THIRD; y++) {
         const world = makeWorld(0);
         expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V63_AI_DEEP_QUEEN);
         const colony = addColony(world, 2 as ColonyId, 0);
@@ -1124,17 +1122,6 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
         aiChamberPlacement(world, colony);
         expect(queenAnchor(world), `row ${y}`).toBeUndefined();
       }
-    });
-
-    it('the same world at V62 places the Queen at row 14 (the gate is what moved it)', () => {
-      const world = makeWorld(0);
-      world.simVersion = SIM_VERSION_V62_AI_NEST_DEFENCE;
-      const colony = addColony(world, 2 as ColonyId, 0);
-      addUndergroundGrid(world, 2 as ColonyId);
-      setQueenPos(world, 0, 10, 64);
-      ugSet(world.undergroundGrids[2 as ColonyId]!, 10, 14, UndergroundTileState.Open);
-      aiChamberPlacement(world, colony);
-      expect(queenAnchor(world)?.anchorTileY).toBe(14);
     });
 
     it('a bootstrap shaft reaching a third of the way down places the Queen on that row, not a shallower one', () => {
@@ -1291,7 +1278,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       setQueenPos(world, 0, 10, 50);
       world.ants.zone[0] = Zone.Underground;
       setPoolFoodForTest(world, colony, AI_FOOD_STORAGE_THRESHOLD);
-      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, FIXTURE_QUEEN_ROW));
       ugSet(world.undergroundGrids[2 as ColonyId]!, 10, 45, UndergroundTileState.Open);
       aiChamberPlacement(world, colony);
       const fs = world.commandQueue.find(
@@ -1311,8 +1298,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       addUndergroundGrid(world, 2 as ColonyId);
       setQueenPos(world, 0, 10, 10);
       const grid = world.undergroundGrids[2 as ColonyId]!;
-      // Only shallow tile available (Y=2): above the V63 Queen floor (row 22), and
-      // |2 - 18| = 16 is outside tolerance=4 for the pre-V63 rule too.
+      // Only shallow tile available (Y=2): above the Queen floor (row 22, #374).
       // Pre-issue-#33 the AI placed Queen at the entrance shaft floor; with
       // the gate it must defer until the bootstrap dig has progressed.
       ugSet(grid, 10, 2, UndergroundTileState.Open);
@@ -1327,13 +1313,12 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
 
     it('depth gate: Queen DOES place when a candidate exists within ±tolerance of preferredDepth', () => {
       const world = makeWorld(0);
-      world.simVersion = SIM_VERSION_V62_AI_NEST_DEFENCE; // pre-V63 Queen depth (#374)
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       setQueenPos(world, 0, 10, 10);
       const grid = world.undergroundGrids[2 as ColonyId]!;
-      // Y=14 is within tolerance 4 of preferredDepth 18 (delta = 4).
-      ugSet(grid, 10, 14, UndergroundTileState.Open);
+      // QUEEN_ROW + 4 is within tolerance 4 of preferredDepth QUEEN_ROW (delta = 4).
+      ugSet(grid, 10, QUEEN_ROW + AI_PLACEMENT_DEPTH_TOLERANCE, UndergroundTileState.Open);
       aiChamberPlacement(world, colony);
       const queenCmd = world.commandQueue.find(
         (c) =>
@@ -1341,7 +1326,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
           (c as { chamberType: number }).chamberType === ChamberType.Queen,
       ) as { anchorTileY: number } | undefined;
       expect(queenCmd).toBeDefined();
-      expect(queenCmd!.anchorTileY).toBe(14);
+      expect(queenCmd!.anchorTileY).toBe(QUEEN_ROW + AI_PLACEMENT_DEPTH_TOLERANCE);
     });
 
     it('spread bias: among same-depth candidates, anchor farthest from existing chambers wins', () => {
@@ -1354,7 +1339,7 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       // existing Queen+FS at X≈10) and X=40 (far). Both have valid 4x3
       // footprints that don't overlap any existing chamber. Spread bias
       // should pick X=40.
-      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, AI_QUEEN_CHAMBER_DEPTH));
+      addChamberForTest(world, colony, makeChamber(ChamberType.Queen, 10, FIXTURE_QUEEN_ROW));
       addChamberForTest(world, colony, makeChamber(ChamberType.FoodStorage, 10, 5));
       colony.eggCount = 6;
       colony.larvaeCount = 6; // Triggers Nursery via brood threshold.
@@ -1370,28 +1355,6 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
       // Nursery lands at X=40 — farther from the existing chambers at X=10.
       expect(nurseryCmd!.anchorTileX).toBe(40);
       expect(nurseryCmd!.anchorTileY).toBe(7);
-    });
-
-    it('Queen-first ordering (pre-V61): FoodStorage does NOT place before Queen exists, even with food >= threshold', () => {
-      const world = makeWorld(0);
-      // #370 — the Queen-first order is kept for pre-V61 worlds only.
-      world.simVersion = SIM_VERSION_V60_RAID_ORDERS;
-      const colony = addColony(world, 2 as ColonyId, 0);
-      addUndergroundGrid(world, 2 as ColonyId);
-      setQueenPos(world, 0, 10, 10);
-      setPoolFoodForTest(world, colony, AI_FOOD_STORAGE_THRESHOLD * 100); // Far above threshold.
-      const grid = world.undergroundGrids[2 as ColonyId]!;
-      // Open tile at FS preferredDepth (5). Pre-fix the FS gate fired here
-      // immediately; the FS chamber landed and blocked the bootstrap dig
-      // before the Queen could find a deep enough spot.
-      ugSet(grid, 10, 5, UndergroundTileState.Open);
-      aiChamberPlacement(world, colony);
-      const fsCmd = world.commandQueue.find(
-        (c) =>
-          c.type === 'PlaceChamber' &&
-          (c as { chamberType: number }).chamberType === ChamberType.FoodStorage,
-      );
-      expect(fsCmd).toBeUndefined();
     });
 
     it('#370 (V61): the first FoodStorage places with no Queen chamber, completed or pending', () => {
@@ -1646,8 +1609,6 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
   describe('exported constants', () => {
     it('AI_DIG_INTERVAL is 40', () => expect(AI_DIG_INTERVAL).toBe(40));
     it('AI_DIG_MARK_BUDGET is 5', () => expect(AI_DIG_MARK_BUDGET).toBe(5));
-    it('AI_QUEEN_CHAMBER_DEPTH is 18 (issue #33 — deeper to satisfy maxDepth>15 acceptance criterion)', () =>
-      expect(AI_QUEEN_CHAMBER_DEPTH).toBe(18));
     it('AI_FOOD_STORAGE_THRESHOLD is 8', () => expect(AI_FOOD_STORAGE_THRESHOLD).toBe(8));
     it('AI_NURSERY_THRESHOLD is 12', () => expect(AI_NURSERY_THRESHOLD).toBe(12));
     it('AI_BEHAVIOR_RATIO has two-field shape (Phase 10 / D-05)', () => {
@@ -2747,15 +2708,6 @@ describe('#371 (V62) — the AI defends its own nest', () => {
     colony.rallyPoint = { tileX: DOOR_X, tileY: 0 };
     expect(aiNestDefence(world, colony, undefined)).toBeNull();
     expect(rallies(world)).toEqual([clear()]);
-  });
-
-  it('is off below V62: a V61 world gets no defence command', () => {
-    const { world, colony } = setup();
-    world.simVersion = SIM_VERSION_V61_AI_EARLY_STORAGE;
-    ant(world, FOE, DOOR_X, 10, AI);
-    colony.rallyPoint = { tileX: DOOR_X, tileY: 0 };
-    expect(aiNestDefence(world, colony, undefined)).toBeNull();
-    expect(rallies(world)).toHaveLength(0);
   });
 
   it('past the limit a WarFooting colony probes again under a parked pair; an enemy inside still holds', () => {

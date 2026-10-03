@@ -1,11 +1,6 @@
 // src/sim/tick.ts — Phase 9 19-step tick dispatcher.
 import type { WorldState } from './types.js';
-import {
-  allocateEntityId,
-  INVALID_ENTITY_ID,
-  SIM_VERSION_V62_AI_NEST_DEFENCE,
-  SIM_VERSION_V65_ALARM_INVASION,
-} from './types.js';
+import { allocateEntityId, INVALID_ENTITY_ID } from './types.js';
 import { tickSpider } from './spider.js';
 import { MAX_COMMANDS_PER_TICK, type SimCommand } from './commands.js';
 import { GameOutcome, checkQueenDeath, checkTiebreaks } from './game-over.js';
@@ -846,7 +841,6 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
       case 'SetAIRaidClock': {
         // #371 (V62): the AI raid clock (AIStateRecord.raidSinceTick). `raiding` is
         // validated as a boolean: replayed/saved commands are not schema-checked.
-        if (world.simVersion < SIM_VERSION_V62_AI_NEST_DEFENCE) break;
         if (typeof cmd.raiding !== 'boolean') break;
         const raidRec = getAIStateForColony(world, cmd.colonyId);
         if (raidRec === null) break;
@@ -1281,18 +1275,15 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // 0 and allocation self-corrects. Accepted: a stricter gate would
     // need to introspect Mark/BeingDug grid state, and the drift is one
     // tick / one slot per dig job.
-    // C1 (V42) — read once: while the alarm sounds this colony reassigns nobody.
-    const alarmRecallActive = colony.alarmActive === true;
-    // #373 (V65) — the ratio always wins: under the alarm this colony still
-    // recruits Idle workers into FIGHTING (sheltering ones too), and into nothing
-    // else. See SIM_VERSION_V65_ALARM_INVASION.
-    const alarmRecruitsFighters =
-      alarmRecallActive && world.simVersion >= SIM_VERSION_V65_ALARM_INVASION;
+    // C1 (V42) — the alarm, read once. #373 (V65) — the ratio always wins: under the
+    // alarm this colony still recruits Idle workers into FIGHTING (sheltering ones
+    // too), and into nothing else.
+    const alarmRecruitsFighters = colony.alarmActive === true;
     // #377 (V68) — while the spider on a rampage threatens this colony an Idle worker
     // sheltering stays recruitable (the V34 skip below does not apply): a rampage can
     // last thousands of ticks, and the ratio must not wait for it. With the alarm off
     // it takes any role; under the alarm the V65 rule above already recruits it, into
-    // fighting only. Always false below V68.
+    // fighting only.
     const rampageRecruitsShelterers = rampageThreatens(world, colony);
     const undergroundGrid10a = world.undergroundGrids[colony.colonyId];
     const rawDigDemand =
@@ -1406,15 +1397,6 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
       ) {
         continue;
       }
-      // C1 (V42) — an alarmed colony recruits NOBODY. The timer check above only
-      // covers workers that are ALREADY sheltering, and this step runs at 10a,
-      // five steps before tickIdleReserveAndFlee (15b) gets to start them
-      // fleeing. So on the tick the alarm is sounded an Idle surface worker was
-      // drafted to fight/nurse/dig FIRST, failed 15b's Idle/Foraging filter, and
-      // never sheltered at all — sounding the alarm with unmet fight demand sent
-      // workers OUT instead of pulling them in, and nothing ever recalled them
-      // (Codex P1). The alarm is the colony-wide override, so it wins here.
-      if (alarmRecallActive && !alarmRecruitsFighters) continue;
       eligible.push(id);
     }
     // Sort ascending by EntityId — "lowest-EntityId first" per PRD §7c (deterministic per SCEN-06).

@@ -10,7 +10,7 @@ import { NURSE_ATTEND_DWELL_TICKS } from '../constants.js';
 import { AntTask, ChamberType, NursingSubState } from '../enums.js';
 import { FP_ONE, FP_SHIFT } from '../fixed.js';
 import { UndergroundTileState, Zone, type UndergroundGrid, ugGet } from '../terrain.js';
-import { SIM_VERSION_V55_ROUTED_HOMING, type WorldState } from '../types.js';
+import type { WorldState } from '../types.js';
 import { isInsideQueenChamber } from './ant-motion.js';
 import { isBroodReclaimable, type AntComponents } from './ant-store.js';
 
@@ -19,14 +19,11 @@ import { isBroodReclaimable, type AntComponents } from './ant-store.js';
  * colony's surface entrance flow field (obstacle-aware), as a homebound forager
  * does; tickAntMovement reads the field. The field leads to the nearest OPEN
  * entrance by path (the nurse's target is the nearest by Manhattan), and a nurse
- * goes down any open entrance of its own, so either is home. Before V55 it
- * stepped in a straight line and an obstacle in the way pinned it for good.
- * Always false below V55 (and for any ant that is not a nurse).
+ * goes down any open entrance of its own, so either is home. False for any ant
+ * that is not a nurse.
  */
 export function nurseRoutesHomeByEntranceField(world: WorldState, id: number): boolean {
-  return (
-    world.ants.task[id] === AntTask.Nursing && world.simVersion >= SIM_VERSION_V55_ROUTED_HOMING
-  );
+  return world.ants.task[id] === AntTask.Nursing;
 }
 
 /**

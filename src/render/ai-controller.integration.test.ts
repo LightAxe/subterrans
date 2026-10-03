@@ -29,12 +29,6 @@ import { FP_SHIFT } from '../sim/fixed.js';
 import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 import { PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
 import type { WorldState } from '../sim/types.js';
-import {
-  SIM_VERSION_V60_RAID_ORDERS,
-  SIM_VERSION_V61_AI_EARLY_STORAGE,
-  SIM_VERSION_V62_AI_NEST_DEFENCE,
-  SIM_VERSION_V63_AI_DEEP_QUEEN,
-} from '../sim/types.js';
 import type { SimCommand } from '../sim/commands.js';
 import { RaidType } from '../sim/enums.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
@@ -46,7 +40,7 @@ import { colonyFoodTotal } from '../sim/food/food-api.js';
 
 const SEED = 42;
 // Issue #33 — extended from 3000 to 6000 ticks. The deeper Queen target
-// (AI_QUEEN_CHAMBER_DEPTH = 18, was 10; from #374 / V63 row 22, a third of the
+// (row 18 under #33, was 10; from #374 / V63 row 22, a third of the
 // way down — `aiQueenMinAnchorRow`) lengthens bootstrap dig time before
 // the Queen chamber can land at its acceptable depth band; the OLD shallow
 // target placed the Queen at Y≈1 by tick 100. The new depth gate is the
@@ -300,7 +294,7 @@ describe('AI-only scenario 6000 ticks', () => {
 // (18000 ticks at 20Hz) with the default scenario, the enemy colony
 // footprint should span at least 30% of the underground grid width OR have
 // at least one chamber at depth y > 15. The current fix achieves the depth
-// criterion via a deeper Queen target (AI_QUEEN_CHAMBER_DEPTH = 18; from V63
+// criterion via a deeper Queen target (row 18 under #33; from V63
 // `aiQueenMinAnchorRow`, row 22) plus a
 // depth gate on findOpenChamberSpot.
 // -----------------------------------------------------------------------------
@@ -362,11 +356,12 @@ describe('AI-only scenario 18000 ticks (issue #33)', () => {
 });
 
 // -----------------------------------------------------------------------------
-// #370 (V61) — the opening no longer stalls on a full entrance pool.
-// Seed 404 Normal, rule-based enemy vs a passive player: up to V60 the enemy's
-// pool filled ~tick 750, its foragers parked holding food (no FoodStorage → no
-// V27 backpressure → nobody went Idle for auto-dig), and its Queen chamber landed
-// only ~tick 4 500. From V61 the first FoodStorage goes in at once.
+// #370 (V61) — the opening does not stall on a full entrance pool.
+// Seed 404 Normal, rule-based enemy vs a passive player: while the first
+// FoodStorage waited for the Queen, the enemy's pool filled ~tick 750, its foragers
+// parked holding food (no FoodStorage → no V27 backpressure → nobody went Idle for
+// auto-dig) for thousands of ticks, and its Queen chamber landed only ~tick 4 500.
+// The first FoodStorage goes in at once.
 // -----------------------------------------------------------------------------
 
 interface OpeningTrace {
@@ -377,9 +372,8 @@ interface OpeningTrace {
   parkedCarrierTicks: number;
 }
 
-function traceOpening(simVersion: number, ticks: number): OpeningTrace {
-  // #395: created at the pinned version, so the map is the one it had then.
-  const world = createScenario(404, 'Normal', simVersion);
+function traceOpening(ticks: number): OpeningTrace {
+  const world = createScenario(404, 'Normal');
   const colony = world.colonies[ENEMY_COLONY_ID]!;
   const out: OpeningTrace = { queenAt: null, storageAt: null, parkedCarrierTicks: 0 };
   for (let t = 0; t < ticks; t++) {
@@ -403,27 +397,24 @@ function traceOpening(simVersion: number, ticks: number): OpeningTrace {
 describe('#370 — AI opening with a full entrance pool (seed 404 Normal)', () => {
   const TICKS = 3000;
 
-  it('V61: storage first, no parked carriers, Queen chamber done well inside 3000 ticks', () => {
-    const v61 = traceOpening(SIM_VERSION_V61_AI_EARLY_STORAGE, TICKS);
-    expect(v61.storageAt, JSON.stringify(v61)).not.toBeNull();
-    expect(v61.storageAt!, JSON.stringify(v61)).toBeLessThan(500);
-    expect(v61.queenAt, JSON.stringify(v61)).not.toBeNull();
-    expect(v61.queenAt!, JSON.stringify(v61)).toBeLessThan(2500);
-    expect(v61.parkedCarrierTicks, JSON.stringify(v61)).toBeLessThan(100);
-  }, 60_000);
-
-  it('V60 (pinned): the pre-fix stall — carriers park for thousands of ticks, no Queen chamber by 3000', () => {
-    const v60 = traceOpening(SIM_VERSION_V60_RAID_ORDERS, TICKS);
-    expect(v60.queenAt, JSON.stringify(v60)).toBeNull();
-    expect(v60.storageAt, JSON.stringify(v60)).toBeNull();
-    expect(v60.parkedCarrierTicks, JSON.stringify(v60)).toBeGreaterThan(1000);
+  it('storage first, few parked carriers, Queen chamber done well inside 3000 ticks', () => {
+    const trace = traceOpening(TICKS);
+    const msg = JSON.stringify(trace);
+    expect(trace.storageAt, msg).not.toBeNull();
+    expect(trace.storageAt!, msg).toBeLessThan(500);
+    expect(trace.queenAt, msg).not.toBeNull();
+    expect(trace.queenAt!, msg).toBeLessThan(2500);
+    // 302 parked-carrier ticks on this map; the stall parked them for thousands.
+    expect(trace.parkedCarrierTicks, msg).toBeLessThan(500);
   }, 60_000);
 });
 
 // -----------------------------------------------------------------------------
 // #371 (V62) — the playtest's rush: a standard player opening, ratio 4:6 at 5200
-// and an Assault rally on the enemy's entrance at 5800 (repro R2, seed 303). Up to
-// V61 the enemy queen died ~240 ticks later; from V62 the AI defends its nest.
+// and an Assault rally on the enemy's entrance at 5800 (repro R2, seed 303). Before
+// #371 the enemy queen died ~240 ticks later; the AI defends its nest. (The sim's
+// automatic defence, #372, now holds this nest even without the AI's response, so the
+// test also pins the response itself: the raid clock and the defence rally.)
 // -----------------------------------------------------------------------------
 
 function rushCommands(world: WorldState, t: number): SimCommand[] {
@@ -476,26 +467,57 @@ function rushCommands(world: WorldState, t: number): SimCommand[] {
   return out;
 }
 
-/** The tick the enemy queen died (null = alive at `ticks`). */
-function rushTrial(simVersion: number, ticks: number): number | null {
-  // #395: created at the pinned version, so the map is the one it had then.
-  const world = createScenario(303, 'Normal', simVersion);
+interface RushTrial {
+  /** The tick the enemy queen died (null = alive at the end). */
+  queenDiedAt: number | null;
+  /** First tick the enemy's raid clock (AIStateRecord.raidSinceTick) was running. */
+  raidClockAt: number | null;
+  /** First tick the enemy's rally stood on one of its own open entrances (its defence). */
+  defenceRallyAt: number | null;
+}
+
+/** Runs the rush for `ticks`: when the enemy queen died, and when the AI's raid clock
+ *  and its defence rally first appeared. */
+function rushTrial(ticks: number): RushTrial {
+  const world = createScenario(303, 'Normal');
   const enemy = world.colonies[ENEMY_COLONY_ID]!;
+  const out: RushTrial = { queenDiedAt: null, raidClockAt: null, defenceRallyAt: null };
   for (let t = 0; t < ticks; t++) {
     runAIController(world, ENEMY_COLONY_ID);
     tick(world, [...rushCommands(world, t), ...world.commandQueue.splice(0)]);
-    if (world.ants.alive[enemy.queenEntityId] !== 1) return world.tick;
+    const rec = world.aiState.find((r) => r.colonyId === ENEMY_COLONY_ID);
+    if (out.raidClockAt === null && rec !== undefined && rec.raidSinceTick !== -1) {
+      out.raidClockAt = world.tick;
+    }
+    const rp = enemy.rallyPoint;
+    if (
+      out.defenceRallyAt === null &&
+      rp != null &&
+      enemy.entrances.some(
+        (e) => e.isOpen && e.surfaceTileX === rp.tileX && e.surfaceTileY === rp.tileY,
+      )
+    ) {
+      out.defenceRallyAt = world.tick;
+    }
+    if (world.ants.alive[enemy.queenEntityId] !== 1) {
+      out.queenDiedAt = world.tick;
+      break;
+    }
   }
-  return null;
+  return out;
 }
 
 describe('#371 — a 6-fighter Assault rush on the AI (seed 303 Normal)', () => {
-  it('V62: the AI defends its nest; the queen outlives the first wave', () => {
-    expect(rushTrial(SIM_VERSION_V62_AI_NEST_DEFENCE, 6600)).toBeNull();
-  }, 90_000);
-
-  it('V63 (deep Queen, #374): the defence still holds', () => {
-    expect(rushTrial(SIM_VERSION_V63_AI_DEEP_QUEEN, 6600)).toBeNull();
+  it('the AI defends its nest (deep Queen, #374, too); the queen outlives the first wave', () => {
+    const trial = rushTrial(6600);
+    const msg = JSON.stringify(trial);
+    expect(trial.queenDiedAt, msg).toBeNull();
+    // The AI saw the raid (its clock started) and rallied its fighters on its own
+    // entrance, after the Assault rally at 5800 and before the queen could die.
+    expect(trial.raidClockAt, msg).not.toBeNull();
+    expect(trial.raidClockAt!, msg).toBeGreaterThan(5800);
+    expect(trial.defenceRallyAt, msg).not.toBeNull();
+    expect(trial.defenceRallyAt!, msg).toBeGreaterThan(5800);
   }, 90_000);
 });
 
@@ -513,9 +535,8 @@ interface NestLayout {
   gridHeight: number;
 }
 
-function traceNestLayout(simVersion: number, ticks: number): NestLayout {
-  // #395: created at the pinned version, so the map is the one it had then.
-  const world = createScenario(404, 'Normal', simVersion);
+function traceNestLayout(ticks: number): NestLayout {
+  const world = createScenario(404, 'Normal');
   const colony = world.colonies[ENEMY_COLONY_ID]!;
   const out: NestLayout = {
     queenRow: null,
@@ -542,22 +563,15 @@ function traceNestLayout(simVersion: number, ticks: number): NestLayout {
 describe('#374 — the AI Queen chamber is deep, its larder shallow (seed 404 Normal)', () => {
   const TICKS = 4500;
 
-  it('V63: the Queen chamber is at least a third of the way down, below the larder', () => {
-    const v63 = traceNestLayout(SIM_VERSION_V63_AI_DEEP_QUEEN, TICKS);
-    const msg = JSON.stringify(v63);
-    expect(v63.queenAt, msg).not.toBeNull();
-    expect(v63.queenRow! * 3, msg).toBeGreaterThanOrEqual(v63.gridHeight);
-    expect(v63.queenRow, msg).toBe(
-      aiQueenMinAnchorRow(v63.gridHeight, CHAMBER_DIMENSIONS[ChamberType.Queen].height),
+  it('the Queen chamber is at least a third of the way down, below the larder', () => {
+    const layout = traceNestLayout(TICKS);
+    const msg = JSON.stringify(layout);
+    expect(layout.queenAt, msg).not.toBeNull();
+    expect(layout.queenRow! * 3, msg).toBeGreaterThanOrEqual(layout.gridHeight);
+    expect(layout.queenRow, msg).toBe(
+      aiQueenMinAnchorRow(layout.gridHeight, CHAMBER_DIMENSIONS[ChamberType.Queen].height),
     );
-    expect(v63.storageRow, msg).not.toBeNull();
-    expect(v63.storageRow!, msg).toBeLessThan(v63.queenRow! - 10);
-  }, 90_000);
-
-  it('V62 (pinned): the Queen chamber landed shallower than a third of the way down', () => {
-    const v62 = traceNestLayout(SIM_VERSION_V62_AI_NEST_DEFENCE, TICKS);
-    const msg = JSON.stringify(v62);
-    expect(v62.queenAt, msg).not.toBeNull();
-    expect(v62.queenRow! * 3, msg).toBeLessThan(v62.gridHeight);
+    expect(layout.storageRow, msg).not.toBeNull();
+    expect(layout.storageRow!, msg).toBeLessThan(layout.queenRow! - 10);
   }, 90_000);
 });

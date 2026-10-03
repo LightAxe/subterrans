@@ -3,23 +3,17 @@
 // While the spider is on a rampage (out hunting hungry, until it eats or dies —
 // spiderOnRampage), every colony's Idle workers on the surface go in by the nearest
 // entrance whose way keeps out of the spider's reach, and stay in until it is over;
-// Idle shelterers stay recruitable. Nothing else changes (foragers, fighters, nurses,
-// the alarm's civilians), and nothing at all below V68.
+// Idle shelterers stay recruitable. Nothing else changes: foragers, fighters, nurses
+// and the alarm's civilians keep their own rules (pinned by their own tests; the
+// audit below runs only the Idle workers' cases where the rule applies).
 //
 // The state-space audit (worker × spider × alarm × where the spider is × ratio) runs
-// every case through tick() at V67 and at V68 and checks the V68 outcome is the
-// rule's where one applies, and exactly V67's everywhere else. The rules are pinned
-// through tick() below it.
+// through tick() every case where the rule applies and checks the rule's outcome. The
+// rules are pinned through tick() below it.
 import { afterAll, describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
 import { createScenario } from './scenario.js';
-import {
-  allocateEntityId,
-  copyWorldState,
-  LATEST_SIM_VERSION,
-  SIM_VERSION_V67_NO_MATCH_TIMEOUT,
-  SIM_VERSION_V68_RAMPAGE_SHELTER,
-} from './types.js';
+import { allocateEntityId, copyWorldState } from './types.js';
 import type { SpiderBehaviorState, WorldState } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { killAnt } from './ant-death.js';
@@ -54,8 +48,6 @@ import {
 
 const P = PLAYER_COLONY_ID;
 const E = ENEMY_COLONY_ID;
-const V67 = SIM_VERSION_V67_NO_MATCH_TIMEOUT;
-const V68 = SIM_VERSION_V68_RAMPAGE_SHELTER;
 /** Seed 7: the player's entrance, and the spider's lair (far from both colonies). */
 const DOOR = { x: 24, y: 64 } as const;
 const LAIR = { x: 67, y: 117 } as const;
@@ -79,9 +71,8 @@ const center = (t: number): number => (t << FP_SHIFT) + (FP_ONE >> 1);
  * player nest with a shaft under its open entrance down to a tunnel along TUNNEL_Y
  * and a chamber at its east end. The spider is at its lair, sated.
  */
-function quiet(version: number, at = T0): WorldState {
+function quiet(at = T0): WorldState {
   const world = createScenario(7, 'Normal');
-  world.simVersion = version;
   world.aiState = [];
   for (const cid of [P, E]) {
     const colony = world.colonies[cid]!;
@@ -290,12 +281,12 @@ type Alarm = 'on' | 'off';
 /** The behaviour ratio: nothing to recruit for, or all fighters. */
 type Ratio = 'none' | 'fight';
 
-/** What V68 must do in this case, or 'same' (exactly V67). */
+/** What the rule makes the worker do in this case, or 'same' (it does not apply). */
 type Expect =
   | 'same'
   | 'in' // it heads in (flee phase 0 at the door), or is already down sheltering
   | 'hold' // it holds on the surface: no target, not fleeing
-  | 'stays' // a shelterer stays in (re-armed) where V67 lets it out
+  | 'stays' // a shelterer stays in (re-armed) where its poke-out would let it out
   | 'held' // an idle worker at the shaft top is held there as a shelterer
   | 'recruit'; // a shelterer is recruited as a fighter
 
@@ -342,7 +333,7 @@ function spiderTile(where: Where, far: boolean): { x: number; y: number } {
 
 /** Option 3: the spider on a rampage threatens the player's colony — it camps (or is
  *  on its way to camp) its entrance, or it is within RAMPAGE_THREAT_RADIUS_TILES of
- *  it. Only then does V68 differ from V67. */
+ *  it. Only then does the rule apply. */
 function threatened(s: Spider, where: Where, far: boolean): boolean {
   if (!ON_RAMPAGE.has(s)) return false;
   if (s === 'rampaging') return true;
@@ -357,8 +348,8 @@ function expected(w: Worker, s: Spider, a: Alarm, where: Where, ratio: Ratio): E
     case 'idleFar':
     case 'idleDasher':
     case 'idleOnDoor':
-      // Recruited as a fighter at step 10a (before 15b) on both versions; and under
-      // the alarm the alarm governs its civilians exactly as at V67.
+      // Recruited as a fighter at step 10a (before 15b) whatever the spider does; and
+      // under the alarm the alarm governs its civilians, not the rule.
       if (ratio === 'fight' || a === 'on') return 'same';
       // On the door it goes down, unless a Rampaging spider on it blocks the descent
       // (a Chasing or Patrolling one does not: the descent comes before the bite).
@@ -379,11 +370,11 @@ function expected(w: Worker, s: Spider, a: Alarm, where: Where, ratio: Ratio): E
     case 'shelterer':
       if (a === 'off' && ratio === 'fight') return 'recruit';
       if (a === 'on' || ratio === 'fight') return 'same';
-      // V67 keeps it in too while the spider's danger reads over the shaft (the
-      // spider on the door, or beside it).
+      // The V34 poke-out keeps it in anyway while the spider's danger reads over the
+      // shaft (the spider on the door, or beside it).
       return where === 'atDoor' || where === 'onPath' ? 'same' : 'stays';
     case 'atShaft':
-      // Under the alarm V67 holds it too (C1); the fight ratio recruits it on both.
+      // Under the alarm the alarm holds it anyway; the fight ratio recruits it either way.
       return a === 'off' && ratio === 'none' ? 'held' : 'same';
     default:
       return 'same';
@@ -392,26 +383,21 @@ function expected(w: Worker, s: Spider, a: Alarm, where: Where, ratio: Ratio): E
 
 const AUDIT_TICKS = 8;
 
-/** A pristine quiet() world per (version, tick), copied into one reused world per
- *  version for each case (copyWorldState leaves the copy exactly like a fresh one,
- *  #340) — a createScenario per case would make the audit minutes long. The audit
- *  alone uses them, and clears them when it is done (afterAll). */
-const templates = new Map<string, WorldState>();
-const scratchWorlds = new Map<number, WorldState>();
-function freshQuiet(version: number, at: number): WorldState {
-  const key = `${version}:${at}`;
-  let tpl = templates.get(key);
+/** A pristine quiet() world per start tick, copied into one reused world for each
+ *  case (copyWorldState leaves the copy exactly like a fresh one, #340) — a
+ *  createScenario per case would make the audit minutes long. The audit alone uses
+ *  them, and clears them when it is done (afterAll). */
+const templates = new Map<number, WorldState>();
+let scratchWorld: WorldState | null = null;
+function freshQuiet(at: number): WorldState {
+  let tpl = templates.get(at);
   if (tpl === undefined) {
-    tpl = quiet(version, at);
-    templates.set(key, tpl);
+    tpl = quiet(at);
+    templates.set(at, tpl);
   }
-  let dst = scratchWorlds.get(version);
-  if (dst === undefined) {
-    dst = createScenario(7, 'Normal');
-    scratchWorlds.set(version, dst);
-  }
-  copyWorldState(tpl, dst);
-  return dst;
+  scratchWorld ??= createScenario(7, 'Normal');
+  copyWorldState(tpl, scratchWorld);
+  return scratchWorld;
 }
 
 interface Run {
@@ -422,8 +408,8 @@ interface Run {
   target1: [number, number];
 }
 
-function runCase(version: number, w: Worker, s: Spider, a: Alarm, where: Where, ratio: Ratio): Run {
-  const world = freshQuiet(version, s === 'grace' ? SPIDER_GRACE_TICKS - 500 : T0);
+function runCase(w: Worker, s: Spider, a: Alarm, where: Where, ratio: Ratio): Run {
+  const world = freshQuiet(s === 'grace' ? SPIDER_GRACE_TICKS - 500 : T0);
   const colony = world.colonies[P]!;
   colony.alarmActive = a === 'on';
   // A 0:0 ratio would stand the lone sentry down to Idle (V40) on the first tick,
@@ -535,46 +521,40 @@ function runCase(version: number, w: Worker, s: Spider, a: Alarm, where: Where, 
   return { frames, task1, zone1, phase1, target1 };
 }
 
-/** '' when the V68 run meets `want` against the V67 one, else what went wrong. */
-function check(want: Expect, v67: Run, v68: Run): string {
+/** '' when the run meets `want`, else what went wrong. */
+function check(want: Exclude<Expect, 'same'>, run: Run): string {
   switch (want) {
-    case 'same':
-      return JSON.stringify(v68.frames) === JSON.stringify(v67.frames)
-        ? ''
-        : `differs from V67: ${v67.frames[0]} vs ${v68.frames[0]} … ${v67.frames.at(-1)} vs ${v68.frames.at(-1)}`;
     case 'in': {
-      const down = v68.zone1 === Zone.Underground && v68.phase1 > 0;
+      const down = run.zone1 === Zone.Underground && run.phase1 > 0;
       const dashing =
-        v68.zone1 === Zone.Surface &&
-        v68.phase1 === 0 &&
-        v68.target1[0] === center(DOOR.x) &&
-        v68.target1[1] === center(DOOR.y);
-      return down || dashing ? '' : `not heading in: ${v68.frames[0]}`;
+        run.zone1 === Zone.Surface &&
+        run.phase1 === 0 &&
+        run.target1[0] === center(DOOR.x) &&
+        run.target1[1] === center(DOOR.y);
+      return down || dashing ? '' : `not heading in: ${run.frames[0]}`;
     }
     case 'hold':
-      return v68.zone1 === Zone.Surface &&
-        v68.phase1 === -1 &&
-        v68.target1[0] === -1 &&
-        v68.target1[1] === -1
+      return run.zone1 === Zone.Surface &&
+        run.phase1 === -1 &&
+        run.target1[0] === -1 &&
+        run.target1[1] === -1
         ? ''
-        : `not holding: ${v68.frames[0]}`;
+        : `not holding: ${run.frames[0]}`;
     case 'stays':
-      if (!(v68.zone1 === Zone.Underground && v68.phase1 > 0)) return `let out: ${v68.frames[0]}`;
-      return v67.phase1 === -1 ? '' : `V67 kept it in too: ${v67.frames[0]}`;
+      return run.zone1 === Zone.Underground && run.phase1 > 0 ? '' : `let out: ${run.frames[0]}`;
     case 'held':
-      if (!(v68.zone1 === Zone.Underground && v68.phase1 > 0)) return `not held: ${v68.frames[0]}`;
-      return v67.zone1 === Zone.Surface ? '' : `V67 did not climb out: ${v67.frames[0]}`;
+      return run.zone1 === Zone.Underground && run.phase1 > 0 ? '' : `not held: ${run.frames[0]}`;
     case 'recruit':
-      if (!(v68.task1 === AntTask.Fighting && v68.phase1 === -1))
-        return `not recruited: ${v68.frames[0]}`;
-      return v67.task1 === AntTask.Idle ? '' : `V67 recruited it too: ${v67.frames[0]}`;
+      return run.task1 === AntTask.Fighting && run.phase1 === -1
+        ? ''
+        : `not recruited: ${run.frames[0]}`;
   }
 }
 
-describe('#377 (V68) — state-space audit: worker × spider × alarm × where × ratio, V67 vs V68', () => {
+describe('#377 (V68) — state-space audit: worker × spider × alarm × where × ratio', () => {
   afterAll(() => {
     templates.clear();
-    scratchWorlds.clear();
+    scratchWorld = null;
   });
   const WORKERS: Worker[] = [
     'idleNear',
@@ -613,26 +593,25 @@ describe('#377 (V68) — state-space audit: worker × spider × alarm × where �
   ]);
   const RATIOS: Ratio[] = ['none', 'fight'];
   const tally: Record<Expect, number> = { same: 0, in: 0, hold: 0, stays: 0, held: 0, recruit: 0 };
-  let offThreat = 0; // on a rampage, but not threatening the player's colony: V67
   for (const w of WORKERS) {
     for (const s of SPIDERS) {
-      const cases: [Alarm, Where, Ratio, Expect][] = [];
+      const cases: [Alarm, Where, Ratio, Exclude<Expect, 'same'>][] = [];
       for (const a of ALARMS) {
         for (const where of IDLE_WORKERS.has(w) ? ALL_WHERES : SOME_WHERES) {
           for (const ratio of RATIOS) {
             const want = expected(w, s, a, where, ratio);
             tally[want] += 1;
-            if (ON_RAMPAGE.has(s) && !threatened(s, where, w === 'idleFar')) offThreat += 1;
-            cases.push([a, where, ratio, want]);
+            // Where the rule does not apply, the worker's ordinary behaviour, pinned by
+            // its own tests.
+            if (want !== 'same') cases.push([a, where, ratio, want]);
           }
         }
       }
+      if (cases.length === 0) continue;
       it(`${w}, spider ${s}`, () => {
         const failures: string[] = [];
         for (const [a, where, ratio, want] of cases) {
-          const v67 = runCase(V67, w, s, a, where, ratio);
-          const v68 = runCase(V68, w, s, a, where, ratio);
-          const bad = check(want, v67, v68);
+          const bad = check(want, runCase(w, s, a, where, ratio));
           if (bad !== '')
             failures.push(`alarm ${a}, spider ${where}, ratio ${ratio} → ${want}: ${bad}`);
         }
@@ -650,14 +629,12 @@ describe('#377 (V68) — state-space audit: worker × spider × alarm × where �
     expect(tally.stays).toBe(14 + 3 * 12);
     expect(tally.held).toBe(16 + 3 * 14); // alarm off, ratio none
     expect(tally.recruit).toBe(16 + 3 * 14); // alarm off, ratio fight
-    expect(tally.same).toBeGreaterThan(2000);
-    expect(offThreat).toBeGreaterThan(200);
   });
 });
 
 describe('fixtures', () => {
   it('seed 7: the doors, the lair, and the audit tiles are where the audit puts them', () => {
-    const world = quiet(V68);
+    const world = quiet();
     const ent = world.colonies[P]!.entrances[0]!;
     expect({ x: ent.surfaceTileX, y: ent.surfaceTileY, open: ent.isOpen }).toEqual({
       ...DOOR,
@@ -704,13 +681,13 @@ describe('#377 — spiderOnRampage: out hunting hungry, until it eats', () => {
     'Feeding',
   ];
   it('no spider: never', () => {
-    const world = quiet(V68);
+    const world = quiet();
     world.spider = null;
     expect(spiderOnRampage(world)).toBe(false);
   });
   for (const state of states) {
     it(`${state}: on a rampage iff hungry and past the grace${state === 'Feeding' ? ' — never while Feeding' : ''}`, () => {
-      const world = quiet(V68);
+      const world = quiet();
       const sp = world.spider!;
       sp.state = state;
       for (const [difficulty, tier] of [
@@ -731,14 +708,11 @@ describe('#377 — spiderOnRampage: out hunting hungry, until it eats', () => {
       }
     });
   }
-  it('rampageShelterActive is the rampage from V68 on, and never below', () => {
-    const world = quiet(V68);
+  it('rampageShelterActive is the rampage', () => {
+    const world = quiet();
+    expect(rampageShelterActive(world)).toBe(false);
     world.spider!.hungerTicks = HUNGRY;
     expect(rampageShelterActive(world)).toBe(true);
-    world.simVersion = V67;
-    expect(spiderOnRampage(world)).toBe(true);
-    expect(rampageShelterActive(world)).toBe(false);
-    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(V68);
   });
 });
 
@@ -773,8 +747,8 @@ function holdSpider(world: WorldState, x: number, y: number): void {
 }
 
 describe('#377 — the idle reserve goes in when the spider threatens its colony, and out after it eats', () => {
-  function run(version: number): { world: WorldState; ids: number[] } {
-    const world = quiet(version);
+  function run(): { world: WorldState; ids: number[] } {
+    const world = quiet();
     const ids = reserve(world);
     // It grows hungry within RAMPAGE_THREAT_RADIUS_TILES of the player's door.
     for (let t = 0; t < 20; t++) {
@@ -794,13 +768,8 @@ describe('#377 — the idle reserve goes in when the spider threatens its colony
     ]);
   });
 
-  it('V67: the reserve keeps milling on the surface', () => {
-    const { world, ids } = run(V67);
-    for (const id of ids) expect(world.ants.zone[id]).toBe(Zone.Surface);
-  });
-
-  it('V68: every idle worker is below, sheltering at the shaft top, within 20 ticks', () => {
-    const { world, ids } = run(V68);
+  it('every idle worker is below, sheltering at the shaft top, within 20 ticks', () => {
+    const { world, ids } = run();
     expect(spiderOnRampage(world)).toBe(true);
     for (const id of ids) {
       expect(world.ants.alive[id]).toBe(1);
@@ -811,8 +780,8 @@ describe('#377 — the idle reserve goes in when the spider threatens its colony
     }
   });
 
-  it('V68: they stay in while it hunts, however long, and come out once it has eaten', () => {
-    const { world, ids } = run(V68);
+  it('they stay in while it hunts, however long, and come out once it has eaten', () => {
+    const { world, ids } = run();
     // Keep it hungry and threatening for three shelter windows.
     for (let t = 0; t < 3 * SHELTER_COOLDOWN_TICKS; t++) {
       holdSpider(world, THREAT_SPOT.x, THREAT_SPOT.y);
@@ -834,15 +803,15 @@ describe('#377 — the idle reserve goes in when the spider threatens its colony
     }
   });
 
-  it('V68: the spider dying ends it too', () => {
-    const { world, ids } = run(V68);
+  it('the spider dying ends it too', () => {
+    const { world, ids } = run();
     world.spider = null;
     for (let t = 0; t < SHELTER_COOLDOWN_TICKS + 5; t++) tick(world, []);
     for (const id of ids) expect(world.ants.zone[id]).toBe(Zone.Surface);
   });
 
-  it('V68: once it no longer threatens the colony (still hungry), the next poke-out lets them out', () => {
-    const { world, ids } = run(V68);
+  it('once it no longer threatens the colony (still hungry), the next poke-out lets them out', () => {
+    const { world, ids } = run();
     for (let t = 0; t < SHELTER_COOLDOWN_TICKS + 5; t++) {
       holdSpider(world, THREAT_OUT.x, THREAT_OUT.y); // one tile out of the radius
       tick(world, []);
@@ -853,38 +822,43 @@ describe('#377 — the idle reserve goes in when the spider threatens its colony
   });
 });
 
-describe('#377 — a rampage that does not threaten this colony leaves its idle reserve out, as at V67', () => {
-  /** The reserve, 40 ticks, the spider held as `place` puts it each tick. */
-  function run(version: number, place: (world: WorldState) => void): string[] {
-    const world = quiet(version);
+describe('#377 — a rampage that does not threaten this colony leaves its idle reserve out', () => {
+  /** The reserve, 40 ticks, the spider held as `place` puts it each tick: every worker
+   *  stays out, milling (on the surface, no flee timer, its mill target set), and the
+   *  reserve moves (it is not holding). */
+  function expectMillingOut(place: (world: WorldState) => void): void {
+    const world = quiet();
     const ids = reserve(world);
-    const frames: string[] = [];
+    const frames = new Set<string>();
     for (let t = 0; t < 40; t++) {
       place(world);
       tick(world, []);
-      frames.push(ids.map((id) => fingerprint(world, id)).join('|'));
+      for (const id of ids) {
+        expect(world.ants.zone[id]).toBe(Zone.Surface);
+        expect(world.ants.task[id]).toBe(AntTask.Idle);
+        expect(world.ants.fleeShelterUntilTick[id]).toBe(-1);
+        expect(world.ants.targetPosX[id]).not.toBe(-1);
+      }
+      frames.add(ids.map((id) => `${tileX(world, id)},${tileY(world, id)}`).join(' '));
     }
-    return frames;
+    expect(frames.size).toBeGreaterThan(1);
   }
 
-  it('hungry and patrolling far from its doors: V68 is V67, tick for tick', () => {
-    const place = (w: WorldState): void => holdSpider(w, LAIR.x, LAIR.y);
-    expect(run(V68, place)).toEqual(run(V67, place));
+  it('hungry and patrolling far from its doors: the reserve mills on the surface', () => {
+    expectMillingOut((w) => holdSpider(w, LAIR.x, LAIR.y));
   });
 
-  it('camping (on its way to) the enemy colony, far from the player: V68 is V67', () => {
-    const place = (w: WorldState): void => {
+  it('camping (on its way to) the enemy colony, far from the player: the reserve mills', () => {
+    expectMillingOut((w) => {
       holdSpider(w, LAIR.x, LAIR.y);
       w.spider!.state = 'Rampaging';
       w.spider!.rampageTargetColonyId = E;
-    };
-    expect(run(V68, place)).toEqual(run(V67, place));
+    });
   });
 
-  it('just out of the radius (13 tiles), hungry: V68 is V67; at 12 the reserve goes in', () => {
-    const out = (w: WorldState): void => holdSpider(w, THREAT_OUT.x, THREAT_OUT.y);
-    expect(run(V68, out)).toEqual(run(V67, out));
-    const world = quiet(V68);
+  it('just out of the radius (13 tiles), hungry: the reserve mills; at 12 it goes in', () => {
+    expectMillingOut((w) => holdSpider(w, THREAT_OUT.x, THREAT_OUT.y));
+    const world = quiet();
     const ids = reserve(world);
     for (let t = 0; t < 40; t++) {
       holdSpider(world, THREAT_EDGE.x, THREAT_EDGE.y);
@@ -897,7 +871,7 @@ describe('#377 — a rampage that does not threaten this colony leaves its idle 
   });
 
   it('camping the player colony from afar (on its way): it threatens — the reserve goes in', () => {
-    const world = quiet(V68);
+    const world = quiet();
     const ids = reserve(world);
     for (let t = 0; t < 20; t++) {
       holdSpider(world, LAIR.x, LAIR.y);
@@ -909,7 +883,7 @@ describe('#377 — a rampage that does not threaten this colony leaves its idle 
   });
 
   it('rampageThreatens: the camp target, or within the radius of an open entrance — of this colony', () => {
-    const world = quiet(V68);
+    const world = quiet();
     const player = world.colonies[P]!;
     const enemy = world.colonies[E]!;
     const at = (x: number, y: number, state: SpiderBehaviorState, target: number): void => {
@@ -945,16 +919,13 @@ describe('#377 — a rampage that does not threaten this colony leaves its idle 
     player.entrances[0]!.isOpen = false;
     expect(rampageThreatens(world, player)).toBe(false);
     player.entrances[0]!.isOpen = true;
-    // Not on a rampage (fed), or below V68: never.
+    // Not on a rampage (fed): never.
     world.spider!.hungerTicks = 0;
-    expect(rampageThreatens(world, player)).toBe(false);
-    world.spider!.hungerTicks = HUNGRY;
-    world.simVersion = V67;
     expect(rampageThreatens(world, player)).toBe(false);
   });
 
   it('rampageThreatRule (#397): the geometry alone, ungated; rampageThreatens is the shelter gate plus the rule', () => {
-    const world = quiet(V68);
+    const world = quiet();
     const player = world.colonies[P]!;
     const enemy = world.colonies[E]!;
     const placements: [{ x: number; y: number }, SpiderBehaviorState, number][] = [
@@ -967,31 +938,27 @@ describe('#377 — a rampage that does not threaten this colony leaves its idle 
     ];
     let rules = 0;
     let gatedOut = 0;
-    for (const version of [V67, V68]) {
-      for (const hunger of [HUNGRY, 0]) {
-        for (const open of [true, false]) {
-          for (const [tile, state, target] of placements) {
-            world.simVersion = version;
-            holdSpider(world, tile.x, tile.y);
-            world.spider!.state = state;
-            world.spider!.rampageTargetColonyId = target;
-            world.spider!.hungerTicks = hunger;
-            player.entrances[0]!.isOpen = open;
-            for (const colony of [player, enemy]) {
-              const rule = rampageThreatRule(world, colony);
-              expect(rampageThreatens(world, colony)).toBe(rampageShelterActive(world) && rule);
-              if (rule) rules++;
-              if (rule && !rampageShelterActive(world)) gatedOut++;
-            }
+    for (const hunger of [HUNGRY, 0]) {
+      for (const open of [true, false]) {
+        for (const [tile, state, target] of placements) {
+          holdSpider(world, tile.x, tile.y);
+          world.spider!.state = state;
+          world.spider!.rampageTargetColonyId = target;
+          world.spider!.hungerTicks = hunger;
+          player.entrances[0]!.isOpen = open;
+          for (const colony of [player, enemy]) {
+            const rule = rampageThreatRule(world, colony);
+            expect(rampageThreatens(world, colony)).toBe(rampageShelterActive(world) && rule);
+            if (rule) rules++;
+            if (rule && !rampageShelterActive(world)) gatedOut++;
           }
         }
       }
     }
     expect(rules).toBeGreaterThan(10); // not vacuous
     expect(gatedOut).toBeGreaterThan(5); // the rule holds where the shelter gate does not
-    // The rule asks only where the spider is: fed, below V68, camping our door.
+    // The rule asks only where the spider is: fed, camping our door.
     player.entrances[0]!.isOpen = true;
-    world.simVersion = V67;
     holdSpider(world, LAIR.x, LAIR.y);
     world.spider!.state = 'Rampaging';
     world.spider!.rampageTargetColonyId = P;
@@ -1007,7 +974,7 @@ describe('#377 — a rampage that does not threaten this colony leaves its idle 
 
 describe('#377 — it never walks toward the spider', () => {
   it('the spider camping the only door: the reserve holds out of its way, then goes in once it leaves', () => {
-    const world = quiet(V68);
+    const world = quiet();
     // Out of its chase range (Manhattan > 4 from the door).
     const ids = [spawn(world, P, 30, 64, Zone.Surface), spawn(world, P, 24, 70, Zone.Surface)];
     setSpider(world, 'rampaging', DOOR.x, DOOR.y);
@@ -1025,7 +992,7 @@ describe('#377 — it never walks toward the spider', () => {
     }
     expect(ids.map((id) => [tileX(world, id), tileY(world, id)])).toEqual(start);
     // It moves on to camp the enemy's door, far away: it no longer threatens the
-    // player's colony, whose reserve stays out (V67's milling).
+    // player's colony, whose reserve stays out (its ordinary milling).
     for (let t = 0; t < 200; t++) {
       const sp = world.spider!;
       sp.state = 'Rampaging';
@@ -1053,7 +1020,7 @@ describe('#377 — it never walks toward the spider', () => {
   });
 
   it('two doors, the spider camping one: the idle workers by it go down the other, by path', () => {
-    const world = quiet(V68);
+    const world = quiet();
     const colony = world.colonies[P]!;
     // A second open entrance 12 tiles east of the first, its shaft dug to the tunnel.
     const east = { x: 36, y: 64 };
@@ -1099,7 +1066,7 @@ describe('#377 — it never walks toward the spider', () => {
   it('seed 7, the enemy colony: a worker behind an obstacle walks round it to its door (by path)', () => {
     // An obstacle at x103–108, y58–60 stands between the enemy entrance (104,64) and
     // (104,56); a straight-line step at the door from there runs into it.
-    const world = quiet(V68);
+    const world = quiet();
     for (let x = 103; x <= 108; x++) {
       for (let y = 58; y <= 60; y++) expect(canEnterSurfaceTile(world, x, y)).toBe(false);
     }
@@ -1124,7 +1091,7 @@ describe('#377 — it never walks toward the spider', () => {
     // (104,64): 7 steps. The spider at (105,57), above the obstacle, is 4 tiles
     // (Manhattan) from (105,61) on that way, so it would turn to chase — though
     // 12 steps from the door by path. m + ds = 7 + 8 = d + 2R: the door is out.
-    const world = quiet(V68);
+    const world = quiet();
     for (let x = 104; x <= 108; x++) expect(canEnterSurfaceTile(world, x, 61)).toBe(true);
     const id = spawn(world, E, 108, 61, Zone.Surface);
     world.ants.targetPosX[id] = center(107);
@@ -1141,7 +1108,7 @@ describe('#377 — it never walks toward the spider', () => {
     // a fixed reach-1 way test for a cornered worker made it). Its step in leads
     // away from the spider, so it dashes; once the spider is on its tile the door
     // beside it reads the spider's danger, which is not consulted then (m = 0).
-    const world = quiet(V68);
+    const world = quiet();
     const id = spawn(world, P, DOOR.x + 1, DOOR.y, Zone.Surface);
     setSpider(world, 'chasing', DOOR.x + 2, DOOR.y);
     world.spider!.chaseTargetAntId = id;
@@ -1156,7 +1123,7 @@ describe('#377 — it never walks toward the spider', () => {
     // it, door (104,64). m = 5, out of range, so the whole way must keep out of it:
     // m + ds = 5 + 8 = d + 2R, and the way can run by (105,61), 4 from the spider.
     // Its first step, diagonal to (105,62), lands 5 away: a step rule would dash.
-    const world = quiet(V68);
+    const world = quiet();
     for (const [x, y] of [
       [106, 61],
       [105, 61],
@@ -1178,7 +1145,7 @@ describe('#377 — it never walks toward the spider', () => {
     // Worker (23,63), spider (25,63), door (24,64): the diagonal step onto the door
     // lands 2 from the spider, as the worker stands. (A way test by Manhattan box
     // held it here: m + ds = d + 2(m - 1).)
-    const world = quiet(V68);
+    const world = quiet();
     for (const [x, y] of [
       [23, 63],
       [24, 63],
@@ -1198,7 +1165,7 @@ describe('#377 — it never walks toward the spider', () => {
 
 describe('#377 — the alarm and the rampage', () => {
   it('after the all-clear, an idle shelterer stays in while the rampage lasts; a forager comes out', () => {
-    const world = quiet(V68);
+    const world = quiet();
     const colony = world.colonies[P]!;
     colony.alarmActive = true;
     const idle = spawn(world, P, DOOR.x, 0, Zone.Underground);
@@ -1232,7 +1199,7 @@ describe('#377 — the alarm and the rampage', () => {
 
 describe('#377 — a recruited shelterer leaves the shelter for its new work', () => {
   it('the fight ratio mid-rampage makes fighters of the whole sheltering reserve at once', () => {
-    const world = quiet(V68);
+    const world = quiet();
     const ids = reserve(world);
     world.spider!.hungerTicks = HUNGRY;
     for (let t = 0; t < 20; t++) {
@@ -1253,7 +1220,7 @@ describe('#377 — a recruited shelterer leaves the shelter for its new work', (
 
   /** The reserve sheltering from a hungry spider at its lair, 20 ticks in. */
   function shelteringReserve(): { world: WorldState; ids: number[] } {
-    const world = quiet(V68);
+    const world = quiet();
     const ids = reserve(world);
     world.spider!.hungerTicks = HUNGRY;
     for (let t = 0; t < 20; t++) {
@@ -1296,7 +1263,7 @@ describe('#377 — a recruited shelterer leaves the shelter for its new work', (
 
 describe('#377 — the dash and the hold, in detail', () => {
   it('two dashers on one tile: neither is bumped off the way in (a dasher claims no tile)', () => {
-    const world = quiet(V68);
+    const world = quiet();
     const a = spawn(world, P, 30, 64, Zone.Surface);
     const b = spawn(world, P, 30, 64, Zone.Surface);
     setSpider(world, 'hungryPatrol', THREAT_SPOT.x, THREAT_SPOT.y);
@@ -1308,7 +1275,7 @@ describe('#377 — the dash and the hold, in detail', () => {
   });
 
   it('rampageShelterDashRoutes: an Idle surface dasher with a target, alarm off, its colony threatened', () => {
-    const world = quiet(V68);
+    const world = quiet();
     holdSpider(world, THREAT_SPOT.x, THREAT_SPOT.y);
     const id = spawn(world, P, 27, 64, Zone.Surface);
     world.ants.fleeShelterUntilTick[id] = 0;
@@ -1319,7 +1286,7 @@ describe('#377 — the dash and the hold, in detail', () => {
     holdSpider(world, LAIR.x, LAIR.y);
     expect(rampageShelterDashRoutes(world, id)).toBe(false);
     holdSpider(world, THREAT_SPOT.x, THREAT_SPOT.y);
-    // The colony alarm governs its civilians as at V67 (the V42 straight line).
+    // The colony alarm governs its civilians (the V42 straight line).
     world.colonies[P]!.alarmActive = true;
     expect(rampageShelterDashRoutes(world, id)).toBe(false);
     world.colonies[P]!.alarmActive = false;
@@ -1338,38 +1305,33 @@ describe('#377 — the dash and the hold, in detail', () => {
     expect(rampageShelterDashRoutes(world, id)).toBe(true);
     world.spider!.hungerTicks = 0;
     expect(rampageShelterDashRoutes(world, id)).toBe(false);
-    world.spider!.hungerTicks = HUNGRY;
-    world.simVersion = V67;
-    expect(rampageShelterDashRoutes(world, id)).toBe(false);
   });
 
   it('a worker holding on the spider hunt reticle keeps the away step (it is not left on the strike tile)', () => {
-    for (const version of [V67, V68]) {
-      const world = quiet(version);
-      // The spider on the door, hunting the tile the worker stands on: the door
-      // reads its danger and the worker is within its chase range, so it holds.
-      setSpider(world, 'hungryPatrol', DOOR.x, DOOR.y);
-      const sp = world.spider!;
-      sp.state = 'Hunting';
-      sp.huntTargetTileX = 27;
-      sp.huntTargetTileY = 64;
-      sp.huntStartTick = world.tick;
-      world.scatterReticleTile = { x: 27, y: 64 };
-      const id = spawn(world, P, 27, 64, Zone.Surface);
-      tick(world, []);
-      // Step 13e pushed it off the reticle (on it exactly: north); the hold keeps that.
-      expect(world.ants.fleeShelterUntilTick[id]).toBe(-1);
-      expect([world.ants.targetPosX[id], world.ants.targetPosY[id]]).toEqual([
-        center(27),
-        center(63),
-      ]);
-    }
+    const world = quiet();
+    // The spider on the door, hunting the tile the worker stands on: the door
+    // reads its danger and the worker is within its chase range, so it holds.
+    setSpider(world, 'hungryPatrol', DOOR.x, DOOR.y);
+    const sp = world.spider!;
+    sp.state = 'Hunting';
+    sp.huntTargetTileX = 27;
+    sp.huntTargetTileY = 64;
+    sp.huntStartTick = world.tick;
+    world.scatterReticleTile = { x: 27, y: 64 };
+    const id = spawn(world, P, 27, 64, Zone.Surface);
+    tick(world, []);
+    // Step 13e pushed it off the reticle (on it exactly: north); the hold keeps that.
+    expect(world.ants.fleeShelterUntilTick[id]).toBe(-1);
+    expect([world.ants.targetPosX[id], world.ants.targetPosY[id]]).toEqual([
+      center(27),
+      center(63),
+    ]);
   });
 });
 
 describe('#377 — the choice between doors', () => {
   function twoDoors(): { world: WorldState; eastId: number } {
-    const world = quiet(V68);
+    const world = quiet();
     const colony = world.colonies[P]!;
     const eastId = allocateEntityId(world);
     colony.entrances.push({ entranceId: eastId, surfaceTileX: 36, surfaceTileY: 64, isOpen: true });
@@ -1400,7 +1362,7 @@ describe('#377 — the choice between doors', () => {
   it('nearer by path, not by Manhattan: round the obstacle is farther', () => {
     // The enemy colony: its door A (104,64) is 8 from (105,57) by Manhattan but 12
     // by path (round the obstacle at x103–108, y58–60); a door B at (114,57) is 9.
-    const world = quiet(V68);
+    const world = quiet();
     const colony = world.colonies[E]!;
     expect(
       colony.entrances.filter((e) => e.isOpen).map((e) => [e.surfaceTileX, e.surfaceTileY]),
@@ -1435,7 +1397,7 @@ describe('#377 — a door reading real danger that is not the spider (an enemy k
     world.ants.targetPosX[id] === -1;
 
   it('the spider out of the way: the worker holds (the V34 rule: never a door that reads real danger)', () => {
-    const world = quiet(V68);
+    const world = quiet();
     const id = spawn(world, P, NEAR_WORKER.x, NEAR_WORKER.y, Zone.Surface);
     setSpider(world, 'hungryPatrol', THREAT_SPOT.x, THREAT_SPOT.y);
     killAtDoor(world);
@@ -1444,7 +1406,7 @@ describe('#377 — a door reading real danger that is not the spider (an enemy k
   });
 
   it('cornered, the spider off its way: still not that door — it holds', () => {
-    const world = quiet(V68);
+    const world = quiet();
     const id = spawn(world, P, NEAR_WORKER.x, NEAR_WORKER.y, Zone.Surface);
     setSpider(world, 'hungryPatrol', NEAR_WORKER.x, NEAR_WORKER.y + 2);
     killAtDoor(world);
@@ -1453,7 +1415,7 @@ describe('#377 — a door reading real danger that is not the spider (an enemy k
   });
 
   it('the spider on its own tile: any way out — it runs for the door', () => {
-    const world = quiet(V68);
+    const world = quiet();
     const id = spawn(world, P, NEAR_WORKER.x, NEAR_WORKER.y, Zone.Surface);
     setSpider(world, 'hungryPatrol', NEAR_WORKER.x, NEAR_WORKER.y);
     killAtDoor(world);
@@ -1474,7 +1436,7 @@ describe('#377 — a door reading real danger that is not the spider (an enemy k
 // the occupancy pass gets its own table here. The spider camps the player's only door:
 // no way in is safe, so every Idle worker on the surface holds where it stands, and a
 // higher-id holder stacked on a lower-id friend's tile is shifted by
-// resolveSameColonyOccupancy — at V68 only to a tile no nearer the spider.
+// resolveSameColonyOccupancy only to a tile no nearer the spider.
 
 /** The occupancy pass's neighbour order: N, E, S, W. */
 const OCC_DIRS = [
@@ -1514,12 +1476,11 @@ describe('#393 (V68) — a holder bumped off a friend’s tile never lands neare
   /** One tick: lower-id idle `blockers`, then a friend, then the holder on the
    *  friend's tile, with the spider camping the player's door. */
   function bump(
-    version: number,
     hx: number,
     hy: number,
     blockers: readonly { x: number; y: number }[],
   ): { world: WorldState; h: number } {
-    const world = quiet(version);
+    const world = quiet();
     setSpider(world, 'rampaging', DOOR.x, DOOR.y);
     for (const b of blockers) spawn(world, P, b.x, b.y, Zone.Surface);
     spawn(world, P, hx, hy, Zone.Surface);
@@ -1536,15 +1497,15 @@ describe('#393 (V68) — a holder bumped off a friend’s tile never lands neare
     const hy = DOOR.y + oy;
     const m = fromDoor(hx, hy);
     it(`holder at (${ox}, ${oy}) from the camped door (m = ${m}): shifted away, or stays`, () => {
-      const world0 = quiet(V68);
+      const world0 = quiet();
       const open = (t: { x: number; y: number }): boolean => canEnterSurfaceTile(world0, t.x, t.y);
       const away = neighbours(hx, hy).filter((t) => open(t) && fromDoor(t.x, t.y) >= m);
       const toward = neighbours(hx, hy).filter((t) => open(t) && fromDoor(t.x, t.y) < m);
-      // The case discriminates: a tile toward the spider is open (the bump V67 makes
-      // when it comes first, or when the others are taken).
+      // The case discriminates: a tile toward the spider is open (the bump an
+      // unthreatened worker gets when it comes first, or when the others are taken).
       expect(toward.length).toBeGreaterThan(0);
       // A friend on its tile: it goes to the first open tile not nearer the spider.
-      const pair = bump(V68, hx, hy, []);
+      const pair = bump(hx, hy, []);
       expect([tileX(pair.world, pair.h), tileY(pair.world, pair.h)]).toEqual([
         away[0]!.x,
         away[0]!.y,
@@ -1553,12 +1514,9 @@ describe('#393 (V68) — a holder bumped off a friend’s tile never lands neare
       expect(pair.world.ants.targetPosX[pair.h]).toBe(-1);
       // Every such tile taken: it stays on its tile (a forced overlap) rather than
       // stepping toward the spider.
-      const boxed = bump(V68, hx, hy, away);
+      const boxed = bump(hx, hy, away);
       expect([tileX(boxed.world, boxed.h), tileY(boxed.world, boxed.h)]).toEqual([hx, hy]);
       expect(boxed.world.ants.fleeShelterUntilTick[boxed.h]).toBe(-1);
-      // V67 (and V68 before #393) bumps it onto a tile toward the spider.
-      const old = bump(V67, hx, hy, away);
-      expect(toward).toContainEqual({ x: tileX(old.world, old.h), y: tileY(old.world, old.h) });
     });
   }
 
@@ -1567,19 +1525,19 @@ describe('#393 (V68) — a holder bumped off a friend’s tile never lands neare
     // within SPIDER_CHASE_TRIGGER_RADIUS (4) of the spider.
     const hx = DOOR.x;
     const hy = DOOR.y + 5;
-    const boxed = bump(V68, hx, hy, [
+    const boxed = bump(hx, hy, [
       { x: hx + 1, y: hy },
       { x: hx, y: hy + 1 },
       { x: hx - 1, y: hy },
     ]);
     expect([tileX(boxed.world, boxed.h), tileY(boxed.world, boxed.h)]).toEqual([hx, hy]);
     // With E free it goes east (6 from the spider), not north (4).
-    const pair = bump(V68, hx, hy, []);
+    const pair = bump(hx, hy, []);
     expect([tileX(pair.world, pair.h), tileY(pair.world, pair.h)]).toEqual([hx + 1, hy]);
   });
 
   it('a stacked crowd of holders spreads out, never ends a tick nearer the spider, and settles', () => {
-    const world = quiet(V68);
+    const world = quiet();
     setSpider(world, 'rampaging', DOOR.x, DOOR.y);
     const pin = { ...world.spider! };
     const ids: number[] = [];
@@ -1637,22 +1595,21 @@ describe('#393 (V68) — a holder bumped off a friend’s tile never lands neare
   });
 });
 
-describe('#393 — the occupancy rule moves only a threatened colony’s Idle holders (V68 is V67 otherwise)', () => {
-  /** `ticks` frames of every spawned ant, the spider held as `place` puts it. */
-  function frames(
-    version: number,
+describe('#393 — the occupancy rule moves only a threatened colony’s Idle holders', () => {
+  /** Each tick's tiles of every spawned ant, the spider held as `place` puts it. */
+  function tilesPerTick(
     setup: (world: WorldState) => number[],
     place: (world: WorldState) => void,
     ticks = 4,
-  ): string[] {
-    const world = quiet(version);
+  ): [number, number][][] {
+    const world = quiet();
     place(world);
     const ids = setup(world);
-    const out: string[] = [];
+    const out: [number, number][][] = [];
     for (let t = 0; t < ticks; t++) {
       tick(world, []);
       place(world);
-      out.push(ids.map((id) => fingerprint(world, id)).join('|'));
+      out.push(ids.map((id): [number, number] => [tileX(world, id), tileY(world, id)]));
     }
     return out;
   }
@@ -1662,7 +1619,7 @@ describe('#393 — the occupancy rule moves only a threatened colony’s Idle ho
     w.spider!.rampageTargetColonyId = P;
   };
 
-  it('a colony the spider is not threatening: its stacked idle workers are bumped as at V67', () => {
+  it('a colony the spider is not threatening: its stacked idle workers are bumped as usual', () => {
     // The spider camps the enemy from its lair, south-east: with N taken, the first
     // free tile (E) is nearer it.
     const place = (w: WorldState): void => {
@@ -1675,10 +1632,18 @@ describe('#393 — the occupancy rule moves only a threatened colony’s Idle ho
       spawn(w, P, 30, 70, Zone.Surface),
       spawn(w, P, 30, 70, Zone.Surface),
     ];
-    expect(frames(V68, setup, place)).toEqual(frames(V67, setup, place));
+    // The stacked one goes east, nearer the spider, and stays there.
+    const tiles = tilesPerTick(setup, place);
+    for (const t of tiles) {
+      expect(t).toEqual([
+        [30, 69],
+        [30, 70],
+        [31, 70],
+      ]);
+    }
   });
 
-  it('under the alarm its idle workers claim no tile (the V49 muster rule), as at V67', () => {
+  it('under the alarm its idle workers claim no tile (the V49 muster rule)', () => {
     // Holding on a dangerous tile or walking home, an alarmed Idle worker on the
     // surface passes through friends (idleMusterPassesThroughFriends), so the
     // occupancy pass never reaches it: rampageShelterHolds' alarm test is belt and
@@ -1692,10 +1657,16 @@ describe('#393 — the occupancy rule moves only a threatened colony’s Idle ho
         spawn(w, P, DOOR.x, DOOR.y + 5, Zone.Surface),
       ];
     };
-    expect(frames(V68, setup, campDoor)).toEqual(frames(V67, setup, campDoor));
+    // Both hold, stacked on the one tile: nobody is bumped.
+    for (const t of tilesPerTick(setup, campDoor)) {
+      expect(t).toEqual([
+        [DOOR.x, DOOR.y + 5],
+        [DOOR.x, DOOR.y + 5],
+      ]);
+    }
   });
 
-  it('foragers of the threatened colony are bumped as at V67', () => {
+  it('foragers of the threatened colony are bumped as usual (north first, toward the spider)', () => {
     const setup = (w: WorldState): number[] => [
       spawn(
         w,
@@ -1716,15 +1687,25 @@ describe('#393 — the occupancy rule moves only a threatened colony’s Idle ho
         ForagingSubState.ReturningToNest,
       ),
     ];
-    expect(frames(V68, setup, campDoor, 1)).toEqual(frames(V67, setup, campDoor, 1));
+    expect(tilesPerTick(setup, campDoor, 1)).toEqual([
+      [
+        [DOOR.x, DOOR.y + 5],
+        [DOOR.x, DOOR.y + 4],
+      ],
+    ]);
   });
 
-  it('idle workers below ground in the threatened colony are bumped as at V67', () => {
+  it('idle workers below ground in the threatened colony are bumped as usual', () => {
     // In the tunnel just west of the shaft: E (the shaft) is the first open tile.
     const setup = (w: WorldState): number[] => [
       spawn(w, P, DOOR.x - 1, TUNNEL_Y, Zone.Underground),
       spawn(w, P, DOOR.x - 1, TUNNEL_Y, Zone.Underground),
     ];
-    expect(frames(V68, setup, campDoor, 1)).toEqual(frames(V67, setup, campDoor, 1));
+    expect(tilesPerTick(setup, campDoor, 1)).toEqual([
+      [
+        [DOOR.x - 1, TUNNEL_Y],
+        [DOOR.x, TUNNEL_Y],
+      ],
+    ]);
   });
 });

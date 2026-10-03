@@ -5,12 +5,7 @@
 // (GameScene's onBeforeTick calls runAIController only for non-player colonyIds).
 
 import type { AIStateRecord, WorldState } from '../sim/types.js';
-import {
-  SIM_VERSION_V61_AI_EARLY_STORAGE,
-  SIM_VERSION_V62_AI_NEST_DEFENCE,
-  SIM_VERSION_V63_AI_DEEP_QUEEN,
-  SIM_VERSION_V69_FOOD_FAIRNESS,
-} from '../sim/types.js';
+import { SIM_VERSION_V69_FOOD_FAIRNESS } from '../sim/types.js';
 import type { NestEntrance } from '../sim/colony/entrance.js';
 import type { ColonyId, ColonyRecord } from '../sim/colony/colony-store.js';
 import type {
@@ -61,8 +56,6 @@ export const AI_DIG_INTERVAL = 40 as const; // every 2 seconds @ 20Hz
  */
 export const AI_CHAMBER_INTERVAL = AI_DIG_INTERVAL * 4;
 export const AI_DIG_MARK_BUDGET = 5 as const;
-/** Preferred Queen chamber anchor row up to V62; from V63 see `aiQueenMinAnchorRow` (#374). */
-export const AI_QUEEN_CHAMBER_DEPTH = 18 as const;
 export const AI_FOOD_STORAGE_THRESHOLD = 8 as const;
 export const AI_NURSERY_THRESHOLD = 12 as const;
 
@@ -111,11 +104,8 @@ export const AI_STORAGE_RESERVE_MULTIPLE = 3 as const;
  * Tuning rationale: 4 tiles is wide enough that bootstrap can hit the gate
  * within reasonable tick budget at the v2 scenario's underground grid
  * dimensions, while still putting the Queen near its preferred row
- * (AI_QUEEN_CHAMBER_DEPTH up to V62; from V63 `aiQueenMinAnchorRow`, a floor, so
- * the band is [floor, floor + TOLERANCE])
- * (up to V62: footprint extends 3 rows below the anchor, so a Queen at delta=4
- * lands its bottom row at preferredDepth + 1 — well within the
- * acceptance criterion of "max chamber Y > 15").
+ * (`aiQueenMinAnchorRow`, a floor (#374, V63), so the band is
+ * [floor, floor + TOLERANCE]).
  */
 export const AI_PLACEMENT_DEPTH_TOLERANCE = 4 as const;
 
@@ -615,31 +605,24 @@ export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): voi
   // need 60Hz responsiveness; 4× slower than the dig interval is plenty.
   if (world.tick % AI_CHAMBER_INTERVAL !== 0) return;
 
-  // Queen chamber — if missing, try to place near AI_QUEEN_CHAMBER_DEPTH (up to
-  // V62; from V63 at or just below `aiQueenMinAnchorRow`, see #374 below).
-  // Includes pending Queen so we don't spam duplicate PlaceChamber commands
-  // into the queue between PlaceChamber issuance and Queen completion (the
-  // sim layer would reject them, but no point queuing them in the first
-  // place). Matches the FS / Nursery uniqueness pattern.
+  // Queen chamber — if missing, try to place at or just below
+  // `aiQueenMinAnchorRow` (#374 below). Includes pending Queen so we don't spam
+  // duplicate PlaceChamber commands into the queue between PlaceChamber issuance
+  // and Queen completion (the sim layer would reject them, but no point queuing
+  // them in the first place). Matches the FS / Nursery uniqueness pattern.
   //
   // #374 (V63) — the Queen anchor is at least a third of the way down
   // (`aiQueenMinAnchorRow`), and that row is also the preferred depth, so the
-  // Queen lands as soon as the bootstrap shaft reaches it. Up to V62 it landed
-  // within AI_PLACEMENT_DEPTH_TOLERANCE of AI_QUEEN_CHAMBER_DEPTH (row 14 at the
-  // earliest), a few rows under the larder, and raids met her before the food.
+  // Queen lands as soon as the bootstrap shaft reaches it, well under the larder,
+  // so a raid meets the food before her.
   if (!hasChamberOrPending(world, colony, ChamberType.Queen)) {
     const grid = world.undergroundGrids[colony.colonyId];
-    const deepQueen = world.simVersion >= SIM_VERSION_V63_AI_DEEP_QUEEN && grid !== undefined;
-    const minRow = deepQueen
-      ? aiQueenMinAnchorRow(grid.height, CHAMBER_DIMENSIONS[ChamberType.Queen].height)
-      : 0;
-    const placement = findOpenChamberSpot(
-      world,
-      colony,
-      deepQueen ? minRow : AI_QUEEN_CHAMBER_DEPTH,
-      ChamberType.Queen,
-      minRow,
-    );
+    // With no grid findOpenChamberSpot finds no spot, whatever the row.
+    const minRow =
+      grid === undefined
+        ? 0
+        : aiQueenMinAnchorRow(grid.height, CHAMBER_DIMENSIONS[ChamberType.Queen].height);
+    const placement = findOpenChamberSpot(world, colony, minRow, ChamberType.Queen, minRow);
     if (placement !== null) {
       const cmd: PlaceChamberCommand = {
         type: 'PlaceChamber',
@@ -658,17 +641,9 @@ export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): voi
   // chamberless fallback bucket, so the AI gate would never fire once the first
   // chamber filled.
   //
-  // Issue #33 (pre-V61 only; see #370 below) — also gate on Queen-completed-or-pending. Pre-fix the FS
-  // gate fired on tick 0 (starting food 1280 ≫ threshold=8) and the
-  // FS chamber landed at the entrance shaft floor (Y≈1). That single
-  // shallow chamber preempted the bootstrap dig (which only ran while
-  // chambers.length === 0) and the Queen never found a deep enough
-  // anchor. The Queen-first ordering mirrors a human player's natural
-  // build sequence and lets the bootstrap finish digging the entrance
-  // shaft before the FS lands on it.
   // FS uniqueness check: a duplicate-issuance window opens once the gate is
-  // satisfied (Queen-pending before V61; tick 0 from V61) and persists until the
-  // first FS PendingChamber transitions to a ChamberRecord. tick.ts dedupes
+  // satisfied (from tick 0) and persists until the first FS PendingChamber
+  // transitions to a ChamberRecord. tick.ts dedupes
   // by exact (anchorTileX, anchorTileY) so a second FS at the SAME spot is
   // rejected, but if the BFS picks a DIFFERENT valid anchor on a later
   // tick (e.g. when more Open tiles arrive and shift the spread-score
@@ -678,16 +653,15 @@ export function aiChamberPlacement(world: WorldState, colony: ColonyRecord): voi
   // here closes it. This rule places only the FIRST FoodStorage; more come
   // from the #290 D14 rule after the Nursery block below.
   //
-  // #370 (V61) — the first FoodStorage no longer waits for the Queen. While it
-  // did, a chamberless colony's pool filled (~tick 750), every forager parked
-  // holding food (no V27 backpressure without a FoodStorage, so none went Idle),
-  // auto-dig had no Idle worker, and the bootstrap shaft to the Queen depth crawled
-  // until ~tick 4 500. The #33 reason for the order is gone: the bootstrap above
-  // runs until a Queen chamber is COMPLETED, so a shallow FoodStorage cannot end it.
-  // Pre-V61 worlds keep the Queen-first order (their recorded command stream).
+  // #370 (V61) — the first FoodStorage does not wait for the Queen. While it did
+  // (issue #33: a shallow FoodStorage once ended the bootstrap dig before the Queen
+  // found a deep enough anchor), a chamberless colony's pool filled (~tick 750),
+  // every forager parked holding food (no V27 backpressure without a FoodStorage,
+  // so none went Idle), auto-dig had no Idle worker, and the bootstrap shaft to the
+  // Queen depth crawled until ~tick 4 500. The #33 reason for the order is gone: the
+  // bootstrap above runs until a Queen chamber is COMPLETED, so a shallow
+  // FoodStorage cannot end it.
   if (
-    (world.simVersion >= SIM_VERSION_V61_AI_EARLY_STORAGE ||
-      hasChamberOrPending(world, colony, ChamberType.Queen)) &&
     colonyFoodTotal(world, colony) >= AI_FOOD_STORAGE_THRESHOLD &&
     !hasChamberOrPending(world, colony, ChamberType.FoodStorage)
   ) {
@@ -1164,7 +1138,7 @@ function isDefenceRally(
  * call's commands): the decision still reads the colony's CURRENT rally, so the raid
  * keeps its hold radius, and the defence rally is compared against the rally as it
  * will be once the queue applies (queuedRally), so it is sent again behind the
- * clear — no tick without a rally, no early end. Off below V62.
+ * clear — no tick without a rally, no early end.
  */
 export function aiNestDefence(
   world: WorldState,
@@ -1173,7 +1147,6 @@ export function aiNestDefence(
   out?: { holdOperations: boolean },
 ): NestEntrance | null {
   if (out !== undefined) out.holdOperations = false;
-  if (world.simVersion < SIM_VERSION_V62_AI_NEST_DEFENCE) return null;
   if (aiState?.operationKind === 'Invasion') {
     // The raid clock means nothing while the army is out; a raid after the
     // invasion starts a fresh one.
@@ -1633,9 +1606,8 @@ function _emitSetRallyPoint(
 /**
  * True when the colony has a chamber of `chamberType`, or a PendingChamber
  * of that type. Used to gate AI placement decisions that need to wait for
- * a specific chamber to be in flight (e.g. issue #33 — before V61 FoodStorage waits
- * for Queen so the bootstrap dig can finish reaching the deeper Queen
- * preferredDepth before a shallow FS lands and stalls the dig).
+ * a specific chamber to be in flight (e.g. the uniqueness of the Queen, the
+ * Nursery and the first FoodStorage).
  */
 function hasChamberOrPending(
   world: WorldState,
