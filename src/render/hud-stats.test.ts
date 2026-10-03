@@ -13,9 +13,13 @@ import {
   queenHealthBarColor,
   queenHealthBarFillWidth,
   queenHealthState,
+  queenStoresRect,
   HUD_STATS_COLORS,
   HUD_STATS_LAYOUT,
 } from './hud-stats.js';
+import { antActivityPanelRect } from './ant-activity.js';
+import { buildHudLayout, captionWrapWidth, CAPTION_PAD_X } from './hud-layout.js';
+import { DEFAULT_LAYOUT } from './layout.js';
 import type { HudStats } from './hud-stats.js';
 import { createWorldState } from '../sim/types.js';
 import type { WorldState } from '../sim/types.js';
@@ -354,6 +358,47 @@ describe('queenLabelRect (09 HUD clarity pass — two-row layout)', () => {
     expect(label.x + label.w).toBeLessThanOrEqual(stats.x + stats.w);
     expect(label.y).toBeGreaterThanOrEqual(stats.y);
     expect(label.y + label.h).toBeLessThanOrEqual(stats.y + stats.h);
+  });
+});
+
+describe('queenStoresRect (#413 — the "Waiting for stores" strip)', () => {
+  const stats = { x: 8, y: 8, w: 200, h: 24 };
+  const { gapY, h, textInset } = HUD_STATS_LAYOUT.queenStores;
+
+  it('sits just under the stats rect, left-aligned with it, without touching it', () => {
+    const r = queenStoresRect(stats, 150);
+    expect(r.x).toBe(stats.x);
+    expect(r.y).toBe(stats.y + stats.h + gapY);
+    expect(r.y).toBeGreaterThan(stats.y + stats.h - 1);
+    expect(r.h).toBe(h);
+  });
+
+  it('is as wide as the text plus its padding (a fractional width rounds up)', () => {
+    expect(queenStoresRect(stats, 150).w).toBe(150 + 2 * textInset);
+    expect(queenStoresRect(stats, 150.2).w).toBe(151 + 2 * textInset);
+  });
+
+  // A little over the ~5.4 px a char of the line's 9px monospace
+  // (HUD_STATS_LAYOUT.queenStores.fontSize; storage-hint.spec.ts measures the strip the
+  // real renderer draws).
+  const CHAR_W = 5.5;
+
+  it('a three-digit line ("Waiting for stores: 100/108") ends left of the widest top caption', () => {
+    expect(HUD_STATS_LAYOUT.queenStores.fontSize).toBe('9px');
+    // GameScene centres top captions at (w/2, 60).
+    const hud = buildHudLayout(DEFAULT_LAYOUT);
+    const cx = DEFAULT_LAYOUT.w / 2;
+    const captionLeft = cx - (captionWrapWidth(cx, 60, hud) + 2 * CAPTION_PAD_X) / 2;
+    const r = queenStoresRect(hud.STATS, 27 * CHAR_W);
+    expect(r.x + r.w).toBeLessThanOrEqual(captionLeft);
+  });
+
+  it('lies under the ant-activity popup, which UIScene hides it behind', () => {
+    const r = queenStoresRect(stats, 150);
+    const panel = antActivityPanelRect(stats);
+    expect(r.x).toBeGreaterThanOrEqual(panel.x);
+    expect(r.x + r.w).toBeLessThanOrEqual(panel.x + panel.w);
+    expect(r.y + r.h).toBeGreaterThan(panel.y);
   });
 });
 

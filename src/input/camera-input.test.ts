@@ -46,6 +46,11 @@ import {
   spiderOrderChipState,
   resetSpiderOrderChipState,
 } from '../render/spider-order-chip-state.js';
+import {
+  queenStoresStripState,
+  resetQueenStoresStripState,
+} from '../render/queen-stores-strip-state.js';
+import { queenStoresRect } from '../render/hud-stats.js';
 
 // #238: isPointerOverHUD / registerDragPan now take the built HUD layout; at the
 // default 800×592 layout hud.* == the former HUD table.
@@ -186,6 +191,30 @@ describe('isPointerOverHUD', () => {
     const [x, y] = center(hud.UNDERGROUND_COLONY_TOGGLE);
     expect(isPointerOverHUD(x, y, hud, makeViewState('surface'))).toBe(false);
     expect(isPointerOverHUD(x, y, hud, makeViewState('underground'))).toBe(true);
+  });
+
+  it('#413: masks the "Waiting for stores" strip only while it is drawn, on both views', () => {
+    // The strip as UIScene sets it: under the stats rect, as wide as its text.
+    const strip = queenStoresRect(hud.STATS, 135);
+    const [x, y] = center(strip);
+    try {
+      resetQueenStoresStripState();
+      // Hidden: its spot is world (just under the stats rect, outside it).
+      expect(y).toBeGreaterThanOrEqual(hud.STATS.y + hud.STATS.h);
+      expect(isPointerOverHUD(x, y, hud, makeViewState('surface'))).toBe(false);
+      expect(isPointerOverHUD(x, y, hud, makeViewState('underground'))).toBe(false);
+      queenStoresStripState.rect = strip;
+      expect(isPointerOverHUD(x, y, hud, makeViewState('surface'))).toBe(true);
+      expect(isPointerOverHUD(x, y, hud, makeViewState('underground'))).toBe(true);
+      // Its painted edges, inclusive left/top and exclusive right/bottom.
+      const vs = makeViewState('surface');
+      expect(isPointerOverHUD(strip.x, strip.y, hud, vs)).toBe(true);
+      expect(isPointerOverHUD(strip.x + strip.w - 1, strip.y + strip.h - 1, hud, vs)).toBe(true);
+      expect(isPointerOverHUD(strip.x + strip.w, y, hud, vs)).toBe(false);
+      expect(isPointerOverHUD(x, strip.y + strip.h, hud, vs)).toBe(false);
+    } finally {
+      resetQueenStoresStripState();
+    }
   });
 
   it('#400: masks the spider-order chip only while it is drawn, on both views', () => {

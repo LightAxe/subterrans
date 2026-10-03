@@ -191,7 +191,8 @@ import { antActivityPanelState } from './ant-activity-panel-state.js';
 import { buildPlaytraceSummary, type GameOutcomeLabel } from './summary-builder.js';
 import { queenDeathCauseAt, roundEndReasonAt } from './ui-scene-logic.js';
 import type { RoundEndReason } from './playtrace-upload.js';
-import { colonyFoodTotal } from '../sim/food/food-api.js';
+import { colonyFoodCapacity, colonyFoodTotal } from '../sim/food/food-api.js';
+import { eggReserveFp } from '../sim/colony/lifecycle-system.js';
 import {
   raidCaptionText,
   createRaidCaptionState,
@@ -236,6 +237,7 @@ import { advanceQueenDanger, createQueenDangerState } from './queen-danger.js';
 import {
   advanceStorageHint,
   createStorageHintState,
+  queenStoresNeedFp,
   storageHintStale,
   STORAGE_HINT_HOLD_MS,
 } from './storage-hint.js';
@@ -356,6 +358,12 @@ interface UIScenePhase9 {
   endScreenTitle?(): string | null;
   // #400 — Dev/E2E observability for __phase9_test.getTooltipShown().
   tooltipShown?(): string | null;
+  // #413 — Dev/E2E observability for __phase9_test.getQueenStoresLine().
+  queenStoresLine?(): {
+    text: string;
+    color: string;
+    rect: { x: number; y: number; w: number; h: number };
+  } | null;
   // #290 PR 6 / #350 — true while nothing is showing and nothing is pending, so
   // recurring captions (raid news, the spider-rampage warning) may enter without
   // taking the slot a one-shot caption would need.
@@ -481,6 +489,26 @@ declare global {
       /** #400 — the HUD tooltip on screen now (its text), or null when none is up
        *  (UIScene.tooltipShown). Dev-build only. */
       getTooltipShown?(): string | null;
+      /** #413 — the queen's "Waiting for stores" line as UIScene last drew it (its
+       *  text, CSS colour and the strip it sits on, canvas px), or null while it is
+       *  hidden (UIScene.queenStoresLine). Dev-build only. */
+      getQueenStoresLine?(): {
+        text: string;
+        color: string;
+        rect: { x: number; y: number; w: number; h: number };
+      } | null;
+      /** #413 — the player colony's stores (colonyFoodTotal), storage capacity
+       *  (colonyFoodCapacity), egg reserve (eggReserveFp) and what the stores must
+       *  hold for the queen to lay next tick (storage-hint.ts queenStoresNeedFp), in
+       *  fp, and its larvae, read-only, so a spec can check the "Waiting for stores" line against what
+       *  gates the queen. Null before the first boot. Dev-build only. */
+      getPlayerStores?(): {
+        foodTotalFp: number;
+        capacityFp: number;
+        eggReserveFp: number;
+        needFp: number;
+        larvaeCount: number;
+      } | null;
       /** #372 — each caption this round, oldest first: the final full-opacity hold
        *  scheduled for it (ms) and whether it gave way. Dev-build only. */
       getCaptionHolds?(): { text: string; holdMs: number; yielded: boolean }[];
@@ -893,6 +921,18 @@ export class GameScene extends Phaser.Scene {
       getTick: (): number => this.world?.tick ?? -1,
       getCaptionsShown: (): string[] => this.getUIScene()?.captionsShown?.() ?? [],
       getTooltipShown: (): string | null => this.getUIScene()?.tooltipShown?.() ?? null,
+      getQueenStoresLine: () => this.getUIScene()?.queenStoresLine?.() ?? null,
+      getPlayerStores: () => {
+        const c = this.world?.colonies[PLAYER_COLONY_ID];
+        if (c === undefined) return null;
+        return {
+          foodTotalFp: colonyFoodTotal(this.world, c),
+          capacityFp: colonyFoodCapacity(c),
+          eggReserveFp: eggReserveFp(this.world, c),
+          needFp: queenStoresNeedFp(this.world, c),
+          larvaeCount: c.larvaeCount,
+        };
+      },
       getCaptionHolds: () => this.getUIScene()?.captionHolds?.() ?? [],
       getArmyWarningLog: (): ArmyWarningLogEntry[] => [...this.armyWarningLog],
       getRampageWarningTicks: (): number[] => [...this.rampageWarningTicks],
@@ -1112,7 +1152,8 @@ export class GameScene extends Phaser.Scene {
   // #375 — queen HP tracking for the damage pulse and the re-arming danger caption.
   private queenDanger = createQueenDangerState();
   private queenStarvationTriggered = false; // starvation onset caption/pulse guard
-  // #395 — "Build a Food Storage chamber so your queen can lay eggs." (storage-hint.ts).
+  // #395/#413 — the Food Storage hint: build the first larder, or (stores full) another
+  // (storage-hint.ts).
   private storageHint = createStorageHintState();
   // #290 PR 6 — raid captions: last-seen player raid counters + per-caption
   // throttle. Re-baselined in finishBoot (fresh or loaded world).
@@ -1956,8 +1997,9 @@ export class GameScene extends Phaser.Scene {
    * (queued commands folded in). Called before the game loop drains, while Playing
    * or Paused (the caption clock runs on while paused, and a paused designation
    * has not drained: no caption of its own would evict the hint), and again after
-   * the hint's own step (a tick can unblock storage with no command: a worker lost
-   * lowers the reserve).
+   * the hint's own step (a tick can unblock storage with no command: a larva
+   * maturing, #413, or a worker lost lowers the reserve; a Food Storage chamber
+   * completing raises capacity).
    */
   private withdrawStaleStorageHint(): void {
     if (!this.world) return;
@@ -2103,7 +2145,8 @@ export class GameScene extends Phaser.Scene {
     if (recurringOwed) uiScene?.yieldLongCaption?.();
 
     // #395 (V70) — the queen lays only while stores cover the egg reserve, which the
-    // entrance pool alone never can: tell the player when storage is what stops her
+    // entrance pool alone never can, and (#413) one larder only up to about 3 brood:
+    // tell the player when storage capacity is what stops her
     // (storage-hint.ts). Advanced only while UIScene is up, so the caption is never
     // marked shown without reaching the screen. The hint is retryable (offered again
     // every frame until it shows), so it gives way to every caption but a first-use

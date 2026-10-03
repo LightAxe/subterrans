@@ -67,6 +67,11 @@ export const HUD_STATS_COLORS = {
   antsTextCss: '#ffffff',
   foodTextCss: '#22bb44',
   queenLabelCss: '#ffffff',
+  // #413 — the queen's "Waiting for stores" line: the bar's warning yellow while
+  // storage is what holds her back (the egg reserve above capacity), grey while she
+  // only waits for food to come in.
+  queenStoresCappedCss: '#ddaa22',
+  queenStoresWaitingCss: '#bbbbbb',
 } as const;
 
 export const HUD_STATS_LAYOUT = {
@@ -90,6 +95,16 @@ export const HUD_STATS_LAYOUT = {
     text: 'Queen',
     w: 32, // 5 chars × ~6.4px monospace at 10px
     yOffset: 13, // matches row 2
+  },
+  // #413 — the queen's "Waiting for stores" line (storage-hint.ts queenStoresWait):
+  // its own dark strip just under the stats rect, sized to its text, shown only while
+  // the egg reserve holds her back. 9px: a sub-line of the stats, and narrow enough
+  // that a three-digit line ends left of the widest caption at the top.
+  queenStores: {
+    gapY: 2, // below the stats rect's bottom edge
+    h: 13,
+    textInset: 4, // the text's left and right padding inside the strip
+    fontSize: '9px',
   },
 } as const;
 
@@ -214,6 +229,25 @@ export function queenLabelRect(statsRect: {
     y: statsRect.y + yOffset,
     w,
     h: 10,
+  };
+}
+
+/**
+ * #413 — the strip the queen's "Waiting for stores" line is drawn on: left-aligned
+ * under the stats rect (hud.STATS), as wide as the line's text (`textW`, px) plus its
+ * padding. The ant-activity popup opens over the same spot (antActivityPanelRect),
+ * so UIScene hides the line while it is up.
+ */
+export function queenStoresRect(
+  statsRect: { x: number; y: number; w: number; h: number },
+  textW: number,
+): QueenLabelRect {
+  const { gapY, h, textInset } = HUD_STATS_LAYOUT.queenStores;
+  return {
+    x: statsRect.x,
+    y: statsRect.y + statsRect.h + gapY,
+    w: Math.ceil(textW) + 2 * textInset,
+    h,
   };
 }
 

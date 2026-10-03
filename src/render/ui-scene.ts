@@ -305,9 +305,11 @@ import {
   queenLabelRect,
   queenHealthBarColor,
   queenHealthBarFillWidth,
+  queenStoresRect,
   HUD_STATS_COLORS,
   HUD_STATS_LAYOUT,
 } from './hud-stats.js';
+import { formatQueenStoresLine, queenStoresWait } from './storage-hint.js';
 import {
   computeAntActivity,
   formatAntActivityLines,
@@ -347,6 +349,7 @@ import {
 } from './first-use-hints.js';
 import { hintStripState } from './hint-strip-state.js';
 import { spiderOrderChipState } from './spider-order-chip-state.js';
+import { queenStoresStripState } from './queen-stores-strip-state.js';
 import {
   SPIDER_ORDER_LABEL,
   drawSpiderOrderChip,
@@ -693,6 +696,12 @@ export class UIScene extends Phaser.Scene {
   private antsText!: Phaser.GameObjects.Text;
   private foodText!: Phaser.GameObjects.Text;
   private queenLabelText!: Phaser.GameObjects.Text;
+  // #413 — the queen's "Waiting for stores" line under the stats bar, and its text,
+  // colour and strip as last drawn (null while hidden; read via
+  // __phase9_test.getQueenStoresLine()).
+  private queenStoresText!: Phaser.GameObjects.Text;
+  private queenStoresColor: string = HUD_STATS_COLORS.queenStoresWaitingCss;
+  private queenStoresShown: { text: string; color: string; rect: HudRect } | null = null;
   private triangleLabels!: Phaser.GameObjects.Text[];
   private viewToggleText!: Phaser.GameObjects.Text;
   /** C1 — colony alarm toggle label; its text follows colony.alarmActive (the red
@@ -873,6 +882,17 @@ export class UIScene extends Phaser.Scene {
       fontFamily: 'monospace',
     });
     this.queenLabelText.setScrollFactor(0);
+
+    // #413 — the queen's "Waiting for stores" line, on its own strip under the
+    // stats rect; placed, coloured and shown per frame in update(). A size below the
+    // stats' 10px: a sub-line, and narrow enough to end left of the top captions.
+    this.queenStoresText = this.add.text(STATS_TEXT_X, STATS_ROW2_Y, '', {
+      color: HUD_STATS_COLORS.queenStoresWaitingCss,
+      fontSize: HUD_STATS_LAYOUT.queenStores.fontSize,
+      fontFamily: 'monospace',
+    });
+    this.queenStoresText.setScrollFactor(0);
+    this.queenStoresText.setVisible(false);
 
     // Slider extreme labels — static text, created once. Phase 10 / D-01:
     // 2 labels (Forage / Fight) replace the prior 3 triangle vertex labels.
@@ -1279,6 +1299,16 @@ export class UIScene extends Phaser.Scene {
         toggleAntActivityPanel();
         return;
       }
+      // #413 — the queen's "Waiting for stores" strip, while it is drawn: a status
+      // line, not a control, so a click on it does nothing; and it is absorbed here,
+      // like any HUD click, as isPointerOverHUD keeps it from the world. (While the
+      // ant-activity popup is up the strip is hidden: the popup covers its spot.)
+      if (
+        queenStoresStripState.rect !== null &&
+        this.isInsideRect(pointer.x, pointer.y, queenStoresStripState.rect)
+      ) {
+        return;
+      }
       // Panel-specific click handling while visible:
       //   - click inside the panel body absorbs the click (no-op, don't fall through)
       //   - click outside the panel dismisses it the same way context menus
@@ -1605,6 +1635,8 @@ export class UIScene extends Phaser.Scene {
     if (!world) {
       // #400 — no world, no chip: don't leave its band masking world input.
       spiderOrderChipState.visible = false;
+      // #413 — nor the "Waiting for stores" strip.
+      queenStoresStripState.rect = null;
       return;
     }
 
@@ -1678,6 +1710,41 @@ export class UIScene extends Phaser.Scene {
         this.gfx.fillStyle(queenHealthBarColor(s), 1);
         this.gfx.fillRect(bar.x, bar.y, fillW, bar.h);
       }
+    }
+
+    // #413 — "Waiting for stores: 24/30" while the egg reserve holds the queen
+    // back (storage-hint.ts queenStoresWait, on the live world like the stats above):
+    // her stores against what they must hold for her to lay (queenStoresNeedFp), in
+    // the warning colour once that is more than storage can hold. Hidden while the
+    // ant-activity popup, which opens over the same spot, is up.
+    const storesWait =
+      colony && !antActivityPanelState.visible ? queenStoresWait(world, PLAYER_COLONY_ID) : null;
+    if (storesWait) {
+      const line = formatQueenStoresLine(storesWait);
+      const color = storesWait.capped
+        ? HUD_STATS_COLORS.queenStoresCappedCss
+        : HUD_STATS_COLORS.queenStoresWaitingCss;
+      // setText is a no-op for the same text; setColor would re-render every frame.
+      this.queenStoresText.setText(line);
+      if (color !== this.queenStoresColor) {
+        this.queenStoresText.setColor(color);
+        this.queenStoresColor = color;
+      }
+      const strip = queenStoresRect(this.hud.STATS, this.queenStoresText.width);
+      this.gfx.fillStyle(HUD_STATS_COLORS.background, HUD_STATS_COLORS.backgroundAlpha);
+      this.gfx.fillRect(strip.x, strip.y, strip.w, strip.h);
+      this.queenStoresText.setPosition(
+        strip.x + HUD_STATS_LAYOUT.queenStores.textInset,
+        strip.y + 1,
+      );
+      this.queenStoresText.setVisible(true);
+      // The painted strip masks world input while it is up (isPointerOverHUD).
+      queenStoresStripState.rect = strip;
+      if (import.meta.env.DEV) this.queenStoresShown = { text: line, color, rect: strip };
+    } else {
+      this.queenStoresText.setVisible(false);
+      queenStoresStripState.rect = null;
+      this.queenStoresShown = null;
     }
 
     // Behavior slider widget (Phase 10 / D-01 — 1-D Forage↔Fight axis).
@@ -2551,6 +2618,13 @@ export class UIScene extends Phaser.Scene {
    *  outside Dev builds. Read through window.__phase9_test.getEndScreenTitle(). */
   endScreenTitle(): string | null {
     return import.meta.env.DEV ? this.endScreenTitleShown : null;
+  }
+
+  /** #413 — Dev/E2E-only: the queen's "Waiting for stores" line as last drawn (its
+   *  text, CSS colour and strip), or null while it is hidden (and outside Dev builds).
+   *  Read through window.__phase9_test.getQueenStoresLine(). */
+  queenStoresLine(): { text: string; color: string; rect: HudRect } | null {
+    return import.meta.env.DEV ? this.queenStoresShown : null;
   }
 
   /** #400 — Dev/E2E-only: the HUD tooltip on screen now (its text), or null. Read

@@ -18,7 +18,7 @@ import {
   saveLoadDialogItems,
   type SaveLoadDialogContext,
 } from '../../src/render/save-load-dialog-layout.js';
-import { buildHudLayout } from '../../src/render/hud-layout.js';
+import { buildHudLayout, captionWrapWidth, CAPTION_PAD_X } from '../../src/render/hud-layout.js';
 import { TOOL_ORDER, toolButtonRect } from '../../src/render/hud-controls.js';
 import { newGameScreenLayout, type Difficulty } from '../../src/render/boot-overlay-layout.js';
 import { CONTEXT_MENU } from '../../src/render/context-menu-layout.js';
@@ -80,6 +80,8 @@ export const SPIDER_ORDER_RECT: Rect = buildHudLayout(DEFAULT_LAYOUT).SPIDER_ORD
 export const COLONY_TOGGLE_RECT: Rect = buildHudLayout(DEFAULT_LAYOUT).UNDERGROUND_COLONY_TOGGLE;
 /** #372 — the minimap rect (160 × 160 in the bottom-right corner). */
 export const MINIMAP_RECT: Rect = buildHudLayout(DEFAULT_LAYOUT).MINIMAP;
+/** #413 — the HUD stats bar (Ants / Food / Queen). */
+export const STATS_RECT: Rect = buildHudLayout(DEFAULT_LAYOUT).STATS;
 /** The tool palette's three buttons (Command / Dig / Chamber), left to right. */
 export const TOOL_BUTTON_RECTS: readonly Rect[] = TOOL_ORDER.map((_, i) =>
   toolButtonRect(i, buildHudLayout(DEFAULT_LAYOUT).TOOLS),
@@ -117,3 +119,11 @@ export function contextMenuRowRect(anchorX: number, anchorY: number, row: number
     h: CONTEXT_MENU.ITEM_HEIGHT,
   };
 }
+
+/** #413 — the left edge of the widest caption GameScene shows at the top (centred at
+ *  (w/2, 60), wrapped by captionWrapWidth, padded CAPTION_PAD_X a side). HUD drawn
+ *  at the top-left (the queen's "Waiting for stores" line) ends left of it. */
+export const TOP_CAPTION_MIN_LEFT: number =
+  DEFAULT_LAYOUT.w / 2 -
+  (captionWrapWidth(DEFAULT_LAYOUT.w / 2, 60, buildHudLayout(DEFAULT_LAYOUT)) + 2 * CAPTION_PAD_X) /
+    2;

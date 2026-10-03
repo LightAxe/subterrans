@@ -1,9 +1,17 @@
-// storage-hint.spec.ts — #395: "Build a Food Storage chamber so your queen can lay
-// eggs." reaches the player in a real browser when storage is what stops the queen
-// laying (the V70 egg reserve tops storage capacity), and stays quiet once the
-// player has designated a Food Storage chamber that would cover it. Its 4 s hold
-// gives way to an army warning (#394) owed behind it, as the army warning's own
-// long hold gives way to news owed behind it.
+// storage-hint.spec.ts — #395/#413: the Food Storage hint reaches the player in a real
+// browser when storage is what stops the queen laying (the V70 egg reserve tops
+// storage capacity), and stays quiet once the player has designated a Food Storage
+// chamber that would cover it. Its 4 s hold gives way to an army warning (#394) owed
+// behind it, as the army warning's own long hold gives way to news owed behind it.
+// These fixtures have a Food Storage chamber already, so the hint reads "Your stores
+// are full — …", or with the stores under 3/4 full (the 'starve' save) "Your Food
+// Storage is too small — …" (#413; with none it says to build one,
+// storage-hint.test.ts).
+//
+// #413 (the last describe): the opening's full-larder stall, built by the colony's
+// own workers from the standard opening, shows that hint and the queen's
+// "Waiting for stores" line under the HUD stats; a larder with room shows the line
+// (not in the warning colour) and no hint.
 //
 // The condition, the dwell, the re-arm and the pending-chamber rule are pinned in
 // src/render/storage-hint.test.ts. What only a browser proves is the GameScene
@@ -19,12 +27,16 @@
 // Setup, without touching a running sim: the page builds the raid world
 // (raid-test-utils.ts: the player has a completed Queen chamber with the queen in
 // it and a completed Food Storage chamber, no workers, spider and AI off), carves
-// and adds a completed Nursery, and adds 60 fighters, so the reserve the queen needs
-// with no brood (her own runway, the new egg's larva and 60 workers) tops the one
-// larder's capacity. Food in the larder keeps everyone fed. Before saving through
-// the real save path (manualSave), the page checks the storage shortfall: above 0,
-// and no more than one Food Storage chamber would close. A reload boots the save
-// through Continue.
+// and adds a completed Nursery, and adds 3 fighters and 3 eggs, so what the queen
+// needs to lay (storage-hint.ts queenStoresNeedFp: her own runway, four larvae' worth
+// and 3 workers) tops the one larder's capacity: #413's full-larder stall. The
+// larder and the pool start full, which keeps everyone fed for the length of a test
+// and keeps the hint's copy "Your stores are full" (no one forages, so the stores
+// only fall: slowly, 3 fighters and the queen eating about 2.2 fp a tick, under 3/4
+// full near tick 830 — a test that offers the hint later would get the "too small"
+// copy). Before saving through the real
+// save path (manualSave), the page checks that storage is short, by no more than one
+// Food Storage chamber would close. A reload boots the save through Continue.
 
 import { test, expect, type Page } from '@playwright/test';
 import { ENEMY_COLONY_ID } from '../src/sim/constants.js';
@@ -33,9 +45,18 @@ import {
   DIALOG_NEW_GAME_RECT,
   SAVE_LOAD_ROW_RECT,
   SAVE_PROMPT_CONTINUE_RECT,
+  STATS_RECT,
+  TOP_CAPTION_MIN_LEFT,
 } from './helpers/geometry.js';
 
-const HINT = 'Build a Food Storage chamber so your queen can lay eggs.';
+/** storage-hint.ts STORAGE_FULL_HINT_TEXT: the hint for a colony with a larder (#413). */
+const HINT = 'Your stores are full — build another Food Storage so your queen can keep laying.';
+/** storage-hint.ts STORAGE_SMALL_HINT_TEXT: the same with the stores under 3/4 full
+ *  (the 'starve' save: none at all). */
+const SMALL_HINT = 'Your Food Storage is too small for your queen to keep laying — build another.';
+/** hud-stats.ts HUD_STATS_COLORS: the "Waiting for stores" line's two colours (#413). */
+const STORES_CAPPED_CSS = '#ddaa22';
+const STORES_WAITING_CSS = '#bbbbbb';
 /** storage-hint.ts STORAGE_HINT_DWELL_TICKS. */
 const DWELL_TICKS = 200;
 /** storage-hint.ts STORAGE_HINT_HOLD_MS. */
@@ -51,6 +72,8 @@ const PAST_RALLY_AND_HINT_MS = CAPTION_COURSE_MS + 300 + HOLD_MS + 400 + 1_000;
 /** Every army warning (a march, a gathering, an invasion: enemy-gathering.ts). */
 const ARMY_WARNING_PREFIX = 'An enemy army is';
 const RALLY_TEXT = 'Fighters will converge here.';
+/** onboarding-captions.ts foodMark: a Command tap on a food pile. */
+const FOOD_MARK_TEXT = 'Your foragers will prioritize this pile.';
 const CHAMBER_TEXT = 'Chambers give workers and brood a purpose. This one is a Food Storage.';
 /** ChamberType.FoodStorage. */
 const FOOD_STORAGE = 2;
@@ -64,10 +87,29 @@ interface TestHook {
   advanceCaptionClock?: (ms: number) => void;
   getCaptionQueue?: () => { active: string | null; pending: string | null };
   rallyPlayerAt?: (tileX: number, tileY: number) => boolean;
+  getPlayerRaidOrder?: () => {
+    raidType: number;
+    rally: { tileX: number; tileY: number } | null;
+  } | null;
+  getCameraState?: () => {
+    surface: { centerX: number; centerY: number; zoom: number };
+  };
   rallyColonyAt?: (colonyId: number, tileX: number, tileY: number) => boolean;
   isPaused?: () => boolean;
   placePlayerChamberAt?: (chamberType: number, tileX: number, tileY: number) => boolean;
   offerCaption?: (text: string) => boolean;
+  getQueenStoresLine?: () => {
+    text: string;
+    color: string;
+    rect: { x: number; y: number; w: number; h: number };
+  } | null;
+  getPlayerStores?: () => {
+    foodTotalFp: number;
+    capacityFp: number;
+    eggReserveFp: number;
+    needFp: number;
+    larvaeCount: number;
+  } | null;
 }
 
 async function freezeCaptionClock(page: Page, frozen: boolean): Promise<void> {
@@ -133,10 +175,10 @@ async function setPaused(page: Page, on: boolean): Promise<void> {
 
 /** Hold a caption on screen (caption clock stopped) before the hint is due — a
  *  rally caption, or `holder` offered through the dev hook — and wait for the hint
- *  to queue behind it. The clock is stopped only once the
- *  queue is idle: in the 'starve' save the queen's starvation and danger captions
+ *  (`hint`: its copy for the save) to queue behind it. The clock is stopped only once
+ *  the queue is idle: in the 'starve' save the queen's starvation and danger captions
  *  run back to back from about tick 41 to about tick 101. */
-async function queueHintBehindRally(page: Page, holder?: string): Promise<void> {
+async function queueHintBehindRally(page: Page, holder?: string, hint = HINT): Promise<void> {
   await expect.poll(() => simTick(page), { timeout: 40_000 }).toBeGreaterThanOrEqual(100);
   await expect
     .poll(() => captionQueue(page), { timeout: 10_000 })
@@ -155,7 +197,7 @@ async function queueHintBehindRally(page: Page, holder?: string): Promise<void> 
   expect(held).toBe(true);
   await expect
     .poll(() => captionQueue(page), { timeout: 40_000 })
-    .toEqual({ active: holder ?? RALLY_TEXT, pending: HINT });
+    .toEqual({ active: holder ?? RALLY_TEXT, pending: hint });
 }
 
 /** Offer a keyless event caption through UIScene's real showCaption (dev hook). */
@@ -196,9 +238,15 @@ async function simTick(page: Page): Promise<number> {
   );
 }
 
-type Variant = 'plain' | 'designate' | 'army' | 'starve';
+type Variant = 'plain' | 'designate' | 'army' | 'starve' | 'room' | 'hidden';
 
 /** Seed the save.
+ *  - 'hidden' (#413): 'plain' with no Nursery (its tunnel is still carved), so the
+ *    queen is not ready to lay: no "Waiting for stores" line, and no hint.
+ *  - 'room' (#413): 3 fighters, not 60, and 13.7 food stored (the larder 1500 fp,
+ *    the pool 2000): the reserve (14.8 food) fits in the larder, so the queen only
+ *    waits for food, which no one fetches (no foragers): she never lays, the
+ *    reserve never grows.
  *  - 'starve': no food at all, so the queen starves on the real tick path at tick
  *    300 (QUEEN_STARVE_AFTER_TICKS; no fighter dies first, and storage blocks her on
  *    every tick before), after the hint is due.
@@ -215,21 +263,29 @@ async function seedStorageSave(page: Page, variant: Variant): Promise<void> {
     // Paths are served by the Vite dev server (Playwright always runs it).
     const utilsPath = '/src/sim/raid-test-utils.ts';
     const foodUtilsPath = '/src/sim/food/food-test-utils.ts';
-    const lifecyclePath = '/src/sim/colony/lifecycle-system.ts';
     const savePath = '/src/platform/save.ts';
     const constantsPath = '/src/sim/constants.ts';
     const typesPath = '/src/sim/types.ts';
     const enumsPath = '/src/sim/enums.ts';
     const fixedPath = '/src/sim/fixed.ts';
     const tickPath = '/src/sim/tick.ts';
+    const foodApiPath = '/src/sim/food/food-api.ts';
+    const hintPath = '/src/render/storage-hint.ts';
+    const antStorePath = '/src/sim/ant/ant-store.ts';
+    const terrainPath = '/src/sim/terrain.ts';
     type Colony = {
       chambers: unknown[];
       colonyId: number;
       rallyPoint: { tileX: number; tileY: number } | null;
+      queenEntityId: number;
+      eggs: number[];
+      eggCount: number;
     };
     type World = {
       undergroundGrids: Record<number, unknown>;
       pendingChambers: Record<string, unknown>;
+      tick: number;
+      ants: { posX: Int32Array; posY: Int32Array };
     };
     const utils = (await import(/* @vite-ignore */ utilsPath)) as {
       raidWorld: (fp: number) => {
@@ -245,8 +301,15 @@ async function seedStorageSave(page: Page, variant: Variant): Promise<void> {
       setChamberStockForTest: (w: unknown, c: unknown, ch: unknown, fp: number) => void;
       setPoolFoodForTest: (w: unknown, c: unknown, fp: number) => void;
     };
-    const lifecycle = (await import(/* @vite-ignore */ lifecyclePath)) as {
-      eggReserveStorageShortfallFp: (w: unknown, c: unknown) => number;
+    const hint = (await import(/* @vite-ignore */ hintPath)) as {
+      queenStoresNeedFp: (w: unknown, c: unknown) => number;
+    };
+    const antStore = (await import(/* @vite-ignore */ antStorePath)) as {
+      initAnt: (ants: unknown, id: number, spec: Record<string, number>) => void;
+    };
+    const foodApi = (await import(/* @vite-ignore */ foodApiPath)) as {
+      colonyFoodTotal: (w: unknown, c: unknown) => number;
+      colonyFoodCapacity: (c: unknown) => number;
     };
     const save = (await import(/* @vite-ignore */ savePath)) as {
       manualSave: (seed: number, log: unknown[], w: unknown) => Promise<boolean>;
@@ -255,6 +318,8 @@ async function seedStorageSave(page: Page, variant: Variant): Promise<void> {
       PLAYER_COLONY_ID: number;
       ENEMY_COLONY_ID: number;
       FOOD_CHAMBER_CAPACITY: number;
+      BASE_FOOD_STORAGE_CAPACITY: number;
+      WORKER_LIFESPAN_TICKS: number;
     };
     const types = (await import(/* @vite-ignore */ typesPath)) as {
       allocateEntityId: (w: unknown) => number;
@@ -263,6 +328,9 @@ async function seedStorageSave(page: Page, variant: Variant): Promise<void> {
       ChamberType: { Nursery: number; FoodStorage: number };
     };
     const fixed = (await import(/* @vite-ignore */ fixedPath)) as { FP_SHIFT: number };
+    const zones = (await import(/* @vite-ignore */ terrainPath)) as {
+      Zone: { Underground: number };
+    };
     const sim = (await import(/* @vite-ignore */ tickPath)) as {
       tick: (w: unknown, commands: unknown[]) => unknown;
     };
@@ -273,27 +341,53 @@ async function seedStorageSave(page: Page, variant: Variant): Promise<void> {
     // A completed Nursery on the row-6 tunnel between the Queen chamber (x 10..14)
     // and the door shaft (x 24).
     utils.carve(grid, 17, 5, 20, 7);
-    r.player.chambers.push({
-      chamberId: types.allocateEntityId(r.world),
-      chamberType: enums.ChamberType.Nursery,
-      foodSlot: -1,
-      posX: 17 << fixed.FP_SHIFT,
-      posY: 5 << fixed.FP_SHIFT,
-      width: 4,
-      height: 3,
-    });
-    for (let i = 0; i < 60; i++) utils.addFighter(r.world, id, 26 + (i % 8), 6, id);
-    foodUtils.setChamberStockForTest(
-      r.world,
-      r.player,
-      r.playerLarder,
-      variant === 'starve' ? 0 : 5000,
-    );
+    if (variant !== 'hidden') {
+      r.player.chambers.push({
+        chamberId: types.allocateEntityId(r.world),
+        chamberType: enums.ChamberType.Nursery,
+        foodSlot: -1,
+        posX: 17 << fixed.FP_SHIFT,
+        posY: 5 << fixed.FP_SHIFT,
+        width: 4,
+        height: 3,
+      });
+    }
+    for (let i = 0; i < 3; i++) utils.addFighter(r.world, id, 26 + i, 6, id);
+    if (variant !== 'room') {
+      // Three eggs, where the queen lays them (eggs do not eat; none hatches in a test).
+      const q = r.player.queenEntityId;
+      for (let i = 0; i < 3; i++) {
+        const egg = types.allocateEntityId(r.world);
+        antStore.initAnt((r.world as unknown as { ants: unknown }).ants, egg, {
+          colonyId: id,
+          posX: r.world.ants.posX[q]!,
+          posY: r.world.ants.posY[q]!,
+          speed: 0,
+          lifespan: k.WORKER_LIFESPAN_TICKS,
+          zone: zones.Zone.Underground,
+          lastMealTick: r.world.tick,
+        });
+        r.player.eggs.push(egg);
+        r.player.eggCount += 1;
+      }
+    }
+    const larderFp = variant === 'starve' ? 0 : variant === 'room' ? 1500 : k.FOOD_CHAMBER_CAPACITY;
+    foodUtils.setChamberStockForTest(r.world, r.player, r.playerLarder, larderFp);
     if (variant === 'starve') foodUtils.setPoolFoodForTest(r.world, r.player, 0);
-    const shortfall = lifecycle.eggReserveStorageShortfallFp(r.world, r.player);
-    // Storage blocks the queen, and one more Food Storage chamber would cover it.
-    if (shortfall <= 0 || shortfall > k.FOOD_CHAMBER_CAPACITY) {
-      throw new Error(`unexpected storage shortfall ${shortfall}`);
+    else if (variant !== 'room') {
+      foodUtils.setPoolFoodForTest(r.world, r.player, k.BASE_FOOD_STORAGE_CAPACITY);
+    }
+    const need = hint.queenStoresNeedFp(r.world, r.player);
+    const capacity = foodApi.colonyFoodCapacity(r.player);
+    if (variant === 'room') {
+      // The larder can hold what she needs; the stores fall short of it.
+      const stores = foodApi.colonyFoodTotal(r.world, r.player);
+      if (need > capacity || stores >= need) {
+        throw new Error(`unexpected stores ${stores} / need ${need}`);
+      }
+    } else if (need <= capacity || need - capacity > k.FOOD_CHAMBER_CAPACITY) {
+      // Storage blocks the queen, and one more Food Storage chamber would cover it.
+      throw new Error(`unexpected storage shortfall ${need - capacity}`);
     }
     if (variant === 'army') {
       for (let i = 0; i < 8; i++) {
@@ -323,11 +417,183 @@ async function seedStorageSave(page: Page, variant: Variant): Promise<void> {
   }, variant);
 }
 
-async function bootStorageSave(page: Page, variant: Variant): Promise<void> {
+/**
+ * #413 — seed the opening's full-larder stall the way playtest 3 found it: a fresh
+ * Easy game (seed 3) given the standard opening at tick 0 (a shaft down, the Queen
+ * chamber, the Nursery and one Food Storage chamber, as `./p e3` plays it), run on
+ * the real tick path, without the enemy AI, until the storage hint's condition
+ * holds (about tick 1050: the queen has laid three eggs and her reserve, 28.9 food,
+ * is more than the larder's 28). Checked before saving: one larder, and the #395
+ * trigger (storage short with no brood waiting) does not fire. Returns the tick saved.
+ */
+async function seedOpeningStallSave(page: Page): Promise<number> {
+  return await page.evaluate(async () => {
+    // Paths are served by the Vite dev server (Playwright always runs it).
+    const scenarioPath = '/src/sim/scenario.ts';
+    const tickPath = '/src/sim/tick.ts';
+    const hintPath = '/src/render/storage-hint.ts';
+    const lifecyclePath = '/src/sim/colony/lifecycle-system.ts';
+    const savePath = '/src/platform/save.ts';
+    const constantsPath = '/src/sim/constants.ts';
+    const enumsPath = '/src/sim/enums.ts';
+    type World = {
+      tick: number;
+      colonies: Record<number, { chambers: { chamberType: number }[] }>;
+    };
+    const scenario = (await import(/* @vite-ignore */ scenarioPath)) as {
+      createScenario: (seed: number, difficulty: string) => World;
+    };
+    const sim = (await import(/* @vite-ignore */ tickPath)) as {
+      tick: (w: unknown, commands: unknown[]) => unknown;
+    };
+    const hint = (await import(/* @vite-ignore */ hintPath)) as {
+      storageHintCondition: (w: unknown, colonyId: number) => string;
+    };
+    const lifecycle = (await import(/* @vite-ignore */ lifecyclePath)) as {
+      eggReserveStorageShortfallFp: (w: unknown, c: unknown) => number;
+    };
+    const save = (await import(/* @vite-ignore */ savePath)) as {
+      manualSave: (seed: number, log: unknown[], w: unknown) => Promise<boolean>;
+    };
+    const k = (await import(/* @vite-ignore */ constantsPath)) as {
+      PLAYER_COLONY_ID: number;
+    };
+    const enums = (await import(/* @vite-ignore */ enumsPath)) as {
+      ChamberType: { Queen: number; Nursery: number; FoodStorage: number };
+    };
+    const id = k.PLAYER_COLONY_ID;
+    const T = enums.ChamberType;
+    const w = scenario.createScenario(3, 'Easy');
+    const cmds: unknown[] = [];
+    const dig = (tileX: number, tileY: number): void => {
+      cmds.push({ type: 'MarkDigTile', colonyId: id, tileX, tileY, issuedAtTick: 0 });
+    };
+    const chamber = (chamberType: number, anchorTileX: number, anchorTileY: number): void => {
+      cmds.push({
+        type: 'PlaceChamber',
+        colonyId: id,
+        chamberType,
+        anchorTileX,
+        anchorTileY,
+        issuedAtTick: 0,
+      });
+    };
+    for (let y = 2; y <= 8; y++) dig(24, y);
+    chamber(T.Queen, 22, 9);
+    for (let x = 25; x <= 30; x++) dig(x, 5);
+    chamber(T.Nursery, 31, 4);
+    for (let x = 21; x <= 23; x++) dig(x, 5);
+    chamber(T.FoodStorage, 17, 4);
+    sim.tick(w, cmds);
+    while (hint.storageHintCondition(w, id) !== 'blocked') {
+      if (w.tick > 4000) throw new Error('no storage stall by tick 4000');
+      sim.tick(w, []);
+    }
+    const colony = w.colonies[id]!;
+    const larders = colony.chambers.filter((c) => c.chamberType === T.FoodStorage).length;
+    if (larders !== 1) throw new Error(`expected one larder, found ${larders}`);
+    if (lifecycle.eggReserveStorageShortfallFp(w, colony) !== 0) {
+      throw new Error('the #395 trigger fires here: not the full-larder stall');
+    }
+    if (!(await save.manualSave(3, [], w))) throw new Error('manualSave failed');
+    return w.tick;
+  });
+}
+
+/** The queen's "Waiting for stores" line as drawn: text and colour (the strip it
+ *  sits on is checked once, in the stall test). */
+async function storesLine(page: Page): Promise<{ text: string; color: string } | null> {
+  const line = await storesLineDrawn(page);
+  return line === null ? null : { text: line.text, color: line.color };
+}
+
+async function storesLineDrawn(page: Page): Promise<{
+  text: string;
+  color: string;
+  rect: { x: number; y: number; w: number; h: number };
+} | null> {
+  return await page.evaluate(() => {
+    const t = (window as unknown as { __phase9_test?: TestHook }).__phase9_test;
+    if (t?.getQueenStoresLine === undefined) throw new Error('no getQueenStoresLine hook');
+    return t.getQueenStoresLine();
+  });
+}
+
+interface CamView {
+  centerX: number;
+  centerY: number;
+  zoom: number;
+}
+
+/** The surface camera (getCameraState). */
+async function surfaceCamera(page: Page): Promise<CamView> {
+  return await page.evaluate(() => {
+    const t = (window as unknown as { __phase9_test?: TestHook }).__phase9_test;
+    if (t?.getCameraState === undefined) throw new Error('no getCameraState hook');
+    const c = t.getCameraState().surface;
+    return { centerX: c.centerX, centerY: c.centerY, zoom: c.zoom };
+  });
+}
+
+/** The player's rally (getPlayerRaidOrder), live. */
+async function playerRally(page: Page): Promise<{ tileX: number; tileY: number } | null> {
+  return await page.evaluate(() => {
+    const t = (window as unknown as { __phase9_test?: TestHook }).__phase9_test;
+    const o = t?.getPlayerRaidOrder?.();
+    if (o === undefined || o === null) throw new Error('no getPlayerRaidOrder hook / no world');
+    return o.rally;
+  });
+}
+
+/** The centre of canvas rect `r`, in page coordinates. */
+async function pageCentre(
+  page: Page,
+  r: { x: number; y: number; w: number; h: number },
+): Promise<{ x: number; y: number }> {
+  const box = await page.locator('canvas').first().boundingBox();
+  if (!box) throw new Error('canvas has no bounding box');
+  return { x: box.x + r.x + r.w / 2, y: box.y + r.y + r.h / 2 };
+}
+
+/** A left drag from the centre of canvas rect `r`, 120 px right and 60 px down. */
+async function dragFrom(page: Page, r: { x: number; y: number; w: number; h: number }) {
+  const c = await pageCentre(page, r);
+  await page.mouse.move(c.x, c.y);
+  await page.mouse.down();
+  await page.mouse.move(c.x + 120, c.y + 60, { steps: 8 });
+  await page.mouse.up();
+}
+
+/** A wheel notch toward zoom-in at the centre of canvas rect `r`. */
+async function wheelAt(page: Page, r: { x: number; y: number; w: number; h: number }) {
+  const c = await pageCentre(page, r);
+  await page.mouse.move(c.x, c.y);
+  await page.mouse.wheel(0, -300);
+}
+
+async function playerStores(page: Page): Promise<{
+  foodTotalFp: number;
+  capacityFp: number;
+  eggReserveFp: number;
+  needFp: number;
+  larvaeCount: number;
+}> {
+  return await page.evaluate(() => {
+    const s = (
+      window as unknown as { __phase9_test?: TestHook }
+    ).__phase9_test?.getPlayerStores?.();
+    if (s === undefined || s === null) throw new Error('no getPlayerStores hook / no world');
+    return s;
+  });
+}
+
+async function bootStorageSave(page: Page, variant: Variant | 'stall'): Promise<number> {
   await page.goto('/');
   await waitForUiHook(page);
   await page.evaluate(() => localStorage.clear());
-  await seedStorageSave(page, variant);
+  let savedAt = 0;
+  if (variant === 'stall') savedAt = await seedOpeningStallSave(page);
+  else await seedStorageSave(page, variant);
   await page.reload();
   await waitForUiHook(page);
   await expect
@@ -340,6 +606,7 @@ async function bootStorageSave(page: Page, variant: Variant): Promise<void> {
     .toBe('save-prompt');
   await clickCanvasRect(page, SAVE_PROMPT_CONTINUE_RECT);
   await settleToPlaying(page);
+  return savedAt;
 }
 
 test.describe('#395 — Food Storage hint', () => {
@@ -475,7 +742,7 @@ test.describe('#395 — Food Storage hint', () => {
   test('a waiting hint never shows over the end screen when the queen dies', async ({ page }) => {
     test.setTimeout(90_000);
     await bootStorageSave(page, 'starve');
-    await queueHintBehindRally(page);
+    await queueHintBehindRally(page, undefined, SMALL_HINT);
     // The queen starves at tick 300 through the sim's own Defeat path (no seam).
     await expect.poll(() => activeOverlay(page), { timeout: 40_000 }).toBe('game-over');
     // With the caption clock still stopped, the game over itself emptied the queue.
@@ -484,7 +751,7 @@ test.describe('#395 — Food Storage hint', () => {
     // and a promoted hint's, nothing comes up over it.
     await advanceCaptionClock(page, PAST_RALLY_AND_HINT_MS);
     expect(await captionQueue(page)).toEqual({ active: null, pending: null });
-    expect(await captions(page)).not.toContain(HINT);
+    expect(await captions(page)).not.toContain(SMALL_HINT);
     // A late caption source (an autosave failure resolving now) is not admitted either.
     expect(await offerCaption(page, 'late caption')).toBe(false);
     expect(await captionQueue(page)).toEqual({ active: null, pending: null });
@@ -584,5 +851,117 @@ test.describe('#395 — Food Storage hint', () => {
     );
     const warningHold = holds.find((h) => h.text.startsWith(ARMY_WARNING_PREFIX));
     expect(warningHold).toEqual(expect.objectContaining({ holdMs: 4000, yielded: false }));
+  });
+});
+
+test.describe('#413 — storage is the population cap: the stall is taught', () => {
+  test('the opening stall shows the queen waiting for stores, then the stores-full hint once', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    const savedAt = await bootStorageSave(page, 'stall');
+    // Under the stats bar, from the first frames: the queen waits for stores the larder
+    // cannot hold, in the warning colour.
+    await expect
+      .poll(async () => (await storesLine(page))?.color ?? null, { timeout: 10_000 })
+      .toBe(STORES_CAPPED_CSS);
+    // Paused, the line and the colony's numbers come from the same world: the stores
+    // (the Food count's number) against what they must hold for her to lay (the egg
+    // reserve and the next meal of the queen and of each larva), which tops the 28 the
+    // larder holds.
+    await setPaused(page, true);
+    const stores = await playerStores(page);
+    expect(stores.capacityFp).toBe(28 * 256);
+    expect(stores.eggReserveFp).toBeGreaterThan(stores.capacityFp);
+    expect(stores.needFp - stores.eggReserveFp).toBe(2 + stores.larvaeCount);
+    const want = `Waiting for stores: ${stores.foodTotalFp >> 8}/${Math.ceil(stores.needFp / 256)}`;
+    await expect.poll(() => storesLine(page)).toEqual({ text: want, color: STORES_CAPPED_CSS });
+    // Its strip, measured in the real renderer, sits under the stats bar and ends left
+    // of the widest caption at the top (the hint, below, is a two-line one) — and so
+    // would a three-digit line ("Waiting for stores: 100/108", 27 chars), at the
+    // measured width a char (padding included, so an over-estimate).
+    const drawn = (await storesLineDrawn(page))!;
+    const strip = drawn.rect;
+    expect(strip.y).toBeGreaterThanOrEqual(STATS_RECT.y + STATS_RECT.h);
+    expect(strip.x + strip.w).toBeLessThanOrEqual(TOP_CAPTION_MIN_LEFT);
+    expect(strip.x + (27 * strip.w) / drawn.text.length).toBeLessThanOrEqual(TOP_CAPTION_MIN_LEFT);
+    await setPaused(page, false);
+    // The hint, after the dwell.
+    await expect.poll(() => captions(page), { timeout: 40_000, intervals: [50] }).toContain(HINT);
+    const shownBy = await simTick(page);
+    expect(shownBy).toBeGreaterThanOrEqual(savedAt + DWELL_TICKS);
+    // Once: the stall goes on (the line is still up) and it does not repeat.
+    await expect.poll(() => simTick(page), { timeout: 40_000 }).toBeGreaterThan(shownBy + 300);
+    expect((await captions(page)).filter((c) => c === HINT)).toHaveLength(1);
+    expect((await storesLine(page))?.color).toBe(STORES_CAPPED_CSS);
+  });
+
+  test('a larder with room: the queen waits for food, the line is no warning, and no hint', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await bootStorageSave(page, 'room');
+    // The reserve, 14.8 food, reads 15; the larder could hold it.
+    await expect
+      .poll(() => storesLine(page), { timeout: 10_000 })
+      .toEqual({
+        text: expect.stringMatching(/^Waiting for stores: \d+\/15$/),
+        color: STORES_WAITING_CSS,
+      });
+    await expect.poll(() => simTick(page), { timeout: 60_000 }).toBeGreaterThan(3 * DWELL_TICKS);
+    const shown = await captions(page);
+    expect(shown.filter((c) => c.includes('Food Storage'))).toEqual([]);
+    expect((await storesLine(page))?.color).toBe(STORES_WAITING_CSS);
+  });
+
+  test("the line's strip takes clicks, drags and the wheel off the world; hidden, it is world", async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    // Up (the 'plain' stall): a click, a drag and a wheel notch on the strip issue no
+    // command and leave the camera where it was.
+    await bootStorageSave(page, 'plain');
+    await expect.poll(() => storesLine(page), { timeout: 10_000 }).not.toBeNull();
+    const strip = (await storesLineDrawn(page))!.rect;
+    const camUp = await surfaceCamera(page);
+    await clickCanvasRect(page, strip);
+    await dragFrom(page, strip);
+    await wheelAt(page, strip);
+    const t0 = await simTick(page);
+    await expect.poll(() => simTick(page), { timeout: 20_000 }).toBeGreaterThan(t0 + 20);
+    expect(await playerRally(page)).toBeNull();
+    expect(await surfaceCamera(page)).toEqual(camUp);
+    const shownUp = await captions(page);
+    expect(shownUp).not.toContain(RALLY_TEXT);
+    expect(shownUp).not.toContain(FOOD_MARK_TEXT);
+    // Hidden (the same world with no Nursery: the queen is not held back), the same
+    // spot is world. The click is a Command tap there: a rally on empty ground (what
+    // lies under the strip in this world), or a food mark on a pile.
+    await bootStorageSave(page, 'hidden');
+    const tHidden = await simTick(page);
+    await expect.poll(() => simTick(page), { timeout: 20_000 }).toBeGreaterThan(tHidden + 5);
+    expect(await storesLine(page)).toBeNull();
+    expect(await surfaceCamera(page)).toEqual(camUp);
+    await clickCanvasRect(page, strip);
+    await expect
+      .poll(
+        async () =>
+          (await playerRally(page)) !== null || (await captions(page)).includes(FOOD_MARK_TEXT),
+        { timeout: 20_000 },
+      )
+      .toBe(true);
+    // The drag pans: down 60 px moves the camera up (the camera sits on the world's
+    // left edge, so the rightward part is clamped away; centerY is not).
+    const camBeforeDrag = await surfaceCamera(page);
+    await dragFrom(page, strip);
+    await expect
+      .poll(async () => (await surfaceCamera(page)).centerY, { timeout: 10_000 })
+      .not.toBe(camBeforeDrag.centerY);
+    // The wheel zooms.
+    const camBeforeWheel = await surfaceCamera(page);
+    await wheelAt(page, strip);
+    await expect
+      .poll(async () => (await surfaceCamera(page)).zoom, { timeout: 10_000 })
+      .not.toBe(camBeforeWheel.zoom);
   });
 });

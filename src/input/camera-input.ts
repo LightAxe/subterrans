@@ -28,6 +28,7 @@ import type { HudLayout } from '../render/hud-layout.js';
 import { antActivityPanelState } from '../render/ant-activity-panel-state.js';
 import { hintStripState } from '../render/hint-strip-state.js';
 import { spiderOrderChipState } from '../render/spider-order-chip-state.js';
+import { queenStoresStripState } from '../render/queen-stores-strip-state.js';
 import { type ViewState, worldPxDimensions } from '../render/camera.js';
 import {
   type CameraView,
@@ -138,6 +139,11 @@ export function isPointerOverHUD(
   // the rest of the time it is world, as it always was.
   if (spiderOrderChipState.visible) {
     zones.push(hud.SPIDER_ORDER);
+  }
+  // #413 — the queen's "Waiting for stores" strip under the stats bar, only while it
+  // is drawn (UIScene sets queenStoresStripState every frame; null while hidden).
+  if (queenStoresStripState.rect !== null) {
+    zones.push(queenStoresStripState.rect);
   }
   for (const zone of zones) {
     if (px >= zone.x && px < zone.x + zone.w && py >= zone.y && py < zone.y + zone.h) {
