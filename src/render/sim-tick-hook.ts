@@ -17,6 +17,7 @@ import { copyWorldState, type WorldState } from '../sim/types.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import { runAIController } from './ai-controller.js';
 import { noteRampageThreat, type RampageCaptionState } from './recurring-captions.js';
+import { noteQueenDangerTick, type QueenDangerState } from './queen-danger.js';
 
 /**
  * Before each sim tick, in order:
@@ -27,7 +28,10 @@ import { noteRampageThreat, type RampageCaptionState } from './recurring-caption
  *      tick later), still owes the warning; and, with `prevState` still the world
  *      before that tick, on the threat as that tick's rampage shelter saw it (an
  *      entrance it opened, by a spider it then moved out of reach);
- *   3. the prevState snapshot for render interpolation.
+ *   3. #416 review — the queen-danger tracker's look at `viewerColonyId`'s queen HP
+ *      (noteQueenDangerTick), so an HP loss that a later tick of the frame hides (a
+ *      starvation drain, then a meal and a heal tick) still counts as harm;
+ *   4. the prevState snapshot for render interpolation.
  */
 export function beforeSimTick(
   world: WorldState,
@@ -35,8 +39,10 @@ export function beforeSimTick(
   rampageCaption: RampageCaptionState,
   viewerColonyId: ColonyId,
   prevState: WorldState,
+  queenDanger: QueenDangerState,
 ): void {
   for (const aiCid of aiColonyIds) runAIController(world, aiCid);
   noteRampageThreat(rampageCaption, world, viewerColonyId, prevState);
+  noteQueenDangerTick(queenDanger, world, viewerColonyId);
   copyWorldState(world, prevState);
 }

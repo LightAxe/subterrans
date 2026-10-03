@@ -7,10 +7,14 @@ import {
   createQueenDangerState,
   stepQueenDanger,
   advanceQueenDanger,
+  noteQueenHp,
   QUEEN_DANGER_REARM_TICKS,
   QUEEN_DANGER_REARM_UNHURT_TICKS,
   type QueenDangerState,
 } from './queen-danger.js';
+import { beforeSimTick } from './sim-tick-hook.js';
+import { createRampageCaptionState } from './recurring-captions.js';
+import { createGameLoop, MAX_CATCHUP_TICKS, MS_PER_TICK } from '../platform/game-loop.js';
 import { checkAndTrigger, resetCaptions, untrigger } from './onboarding-captions.js';
 import { QUEEN_DAMAGE_SUPPRESS_TICKS } from './screen-effects.js';
 import { createScenario } from '../sim/scenario.js';
@@ -511,6 +515,95 @@ describe('#416 advanceQueenDanger against the sim: re-arms after 30 s unhurt, wh
     expect(h.pulses()).toBe(windows); // one drain per window
     expect(h.shown).toHaveLength(1);
     expect(h.world.ants.alive[h.q]).toBe(1);
+    // #227: a long run of full-scenario ticks — explicit generous timeout so the local
+    // coverage gate passes under v8 instrumentation.
+  }, 30_000);
+});
+
+describe('#416 review: harm inside a multi-tick frame (seen before every sim tick)', () => {
+  beforeEach(() => resetCaptions());
+
+  it('a loss seen between frames (noteQueenHp) is harm, though a heal hides it by the frame', () => {
+    const s = createQueenDangerState();
+    frame(s, 30, true, 100, false);
+    noteQueenHp(s, 29, 101); // a drain
+    noteQueenHp(s, 29, 102);
+    noteQueenHp(s, 30, 103); // a meal and a heal tick
+    expect(stepQueenDanger(s, 30, true, false, 104)).toEqual({ hurt: true, rearm: false });
+    expect(s.lastHarmTick).toBe(101); // dated to the drain, not the frame
+    expect(stepQueenDanger(s, 30, true, false, 105).hurt).toBe(false); // reported once
+    // And the 30 s run from the drain.
+    expect(hold(s, 30, true, false, 106, 101 + QUEEN_DANGER_REARM_UNHURT_TICKS + 5)).toEqual([
+      101 + QUEEN_DANGER_REARM_UNHURT_TICKS,
+    ]);
+  });
+
+  it('a drain, a meal and a heal inside one frame: dated to the drain, so no early re-arm', () => {
+    // GameScene's wiring without Phaser: the game loop with beforeSimTick as its
+    // onBeforeTick, then advanceQueenDanger once per render frame.
+    const world = createScenario(7, 'Normal');
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const q = stageQueenInNest(world, colony);
+    world.ants.hp[q] = QUEEN_HP_HOME;
+    const s = createQueenDangerState();
+    const prev = createScenario(7, 'Normal');
+    const rampage = createRampageCaptionState();
+    let unfedFrom = -1; // sim ticks [unfedFrom, unfedTo] run with the stores empty
+    let unfedTo = -1;
+    const loop = createGameLoop(
+      (w, cmds) => {
+        const empty = w.tick >= unfedFrom && w.tick <= unfedTo;
+        setColonyFoodForTest(w, colony, empty ? 0 : 2048);
+        return tick(w, cmds);
+      },
+      world,
+      { onBeforeTick: (w) => beforeSimTick(w, [], rampage, PLAYER_COLONY_ID, prev, s) },
+    );
+    const shown: number[] = [];
+    let pulses = 0;
+    /** One render frame that runs `n` sim ticks, then GameScene's frame step. */
+    const frameOf = (n: number): void => {
+      loop.update(n * MS_PER_TICK);
+      const f = advanceQueenDanger(s, world, colony);
+      if (f.pulse) pulses += 1;
+      if (f.caption !== null) shown.push(world.tick);
+    };
+    const runTo = (t: number): void => {
+      while (world.tick < t) frameOf(1);
+    };
+
+    runTo(100); // past the round-start grace
+    world.ants.hp[q] = 20; // fixture: a heavy blow (combat.ts applyDamage)
+    world.ants.lastHitTick[q] = world.tick - 1;
+    frameOf(1);
+    expect(shown).toHaveLength(1);
+    const hit = s.lastHarmTick!; // the fixture's own tick (a sim blow is seen a tick later)
+    // A heal tick H long after the blow (she is safe and healing again). The stores
+    // run empty for the QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS sim ticks up to D = H - 2,
+    // so she is drained 1 HP on D, eats on H - 1 and H, and heals 1 HP on H.
+    const H = (Math.floor((hit + 300) / QUEEN_HEAL_INTERVAL_TICKS) + 1) * QUEEN_HEAL_INTERVAL_TICKS;
+    const D = H - 2;
+    unfedFrom = D - QUEEN_STARVE_HP_DRAIN_INTERVAL_TICKS + 1;
+    unfedTo = D;
+    runTo(H - MAX_CATCHUP_TICKS + 1);
+    const hpBefore = world.ants.hp[q];
+    expect(hpBefore).toBeLessThan(QUEEN_HP_HOME - 5);
+    frameOf(MAX_CATCHUP_TICKS); // one frame: sim ticks H - 4 .. H
+    expect(world.tick).toBe(H + 1);
+    expect(world.ants.hp[q]).toBe(hpBefore); // the frame's end hides the drain…
+    expect(s.lastHarmTick).toBe(D + 1); // …but it was seen, before sim tick D + 1
+    expect(pulses).toBe(2);
+    expect(shown).toHaveLength(1); // same danger spell
+    // No re-arm 30 s after the blow…
+    runTo(hit + QUEEN_DANGER_REARM_UNHURT_TICKS + 1);
+    expect(s.lastHarmTick).toBe(D + 1);
+    // …only 30 s after the hidden drain, while she is still wounded.
+    runTo(D + 1 + QUEEN_DANGER_REARM_UNHURT_TICKS - 1);
+    expect(s.lastHarmTick).toBe(D + 1);
+    frameOf(1);
+    expect(s.lastHarmTick).toBeNull();
+    expect(world.ants.hp[q]).toBeLessThan(QUEEN_HP_HOME);
+    expect(world.ants.alive[q]).toBe(1);
     // #227: a long run of full-scenario ticks — explicit generous timeout so the local
     // coverage gate passes under v8 instrumentation.
   }, 30_000);
