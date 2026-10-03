@@ -121,8 +121,15 @@ reviews:
         bump, a bump that leaves MIN behind LATEST, and a bump for a bare
         constant retune or a render-only (draw / HUD / camera / input) change.
         Sim PRs opened under the old gated policy (#402 V69, #405 V70) are
-        exempt. The existing gates are legacy and stay until a separate reaping
-        decision.
+        exempt. The existing gates are legacy and production-dead (MIN ===
+        LATEST); issue #408 is the decision to reap them. A #408 reap PR deletes
+        a gate's legacy branch, its orphans and its old-version-pinned tests
+        with NO simVersion bump, and keeps the machinery (the simVersion field,
+        the SIM_VERSION_V* registry in types.ts, save-load validation,
+        BYTE_GATE_SIM_VERSION). Do not flag the reaping itself or ask to keep a
+        legacy branch; DO flag a reap edit that could change LATEST behaviour
+        (the wrong branch kept, a dropped statement, an operator-precedence
+        slip) or a test weakened beyond deleting its legacy half.
 
 chat:
   auto_reply: true
