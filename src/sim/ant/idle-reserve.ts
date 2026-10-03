@@ -33,7 +33,6 @@
 // (tick-bucket ^ antId) — no world.rngState draw.
 
 import {
-  SIM_VERSION_V55_ROUTED_HOMING,
   SIM_VERSION_V65_ALARM_INVASION,
   SIM_VERSION_V68_RAMPAGE_SHELTER,
   type WorldState,
@@ -1281,9 +1280,7 @@ export function idleMustersHome(world: WorldState, id: number): boolean {
 /**
  * #343 (V55): an idle surface worker walking back from beyond home range steps by
  * its colony's surface entrance flow field (obstacle-aware), as a homebound
- * forager, a V48 sentry and a V49 musterer do. Before V55 it stepped in a straight
- * line at its mill target, so an obstacle between it and home pinned it there,
- * out of reach of the colony's food, until it starved.
+ * forager, a V48 sentry and a V49 musterer do.
  *
  * True only for a worker whose ordinary mill step (targetPosX set by step 15b's
  * setMillTarget) is taking it home — every one of these holds:
@@ -1301,14 +1298,12 @@ export function idleMustersHome(world: WorldState, id: number): boolean {
  * `dangerGrid` is the colony's surface DangerTrail grid (undefined = no danger);
  * the movement loop passes the one it resolved once per tick, so this hot path
  * builds no grid-key string per ant (AGENTS.md hot-loop rule).
- * Always false below V55.
  */
 export function idleWalksHome(
   world: WorldState,
   id: number,
   dangerGrid: PheromoneGrid | undefined,
 ): boolean {
-  if (world.simVersion < SIM_VERSION_V55_ROUTED_HOMING) return false;
   const ants = world.ants;
   if (ants.task[id] !== AntTask.Idle || ants.zone[id] !== ZONE_SURFACE) return false;
   if (ants.fleeShelterUntilTick[id] !== -1 || ants.targetPosX[id] === -1) return false;
