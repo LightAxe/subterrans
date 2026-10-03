@@ -7,21 +7,7 @@
 import type { ColonyRecord } from './colony/colony-store.js';
 import type { NestEntrance } from './colony/entrance.js';
 import { RaidType } from './enums.js';
-import { SIM_VERSION_V60_RAID_ORDERS, type WorldState } from './types.js';
-
-/**
- * The raid type `colony`'s fighters act by: its stored `raidType` from V60, Loot
- * before (the only raid there was). It matters only while the rally is on an enemy
- * entrance; a colony whose rally is anywhere else behaves the same whatever it holds.
- */
-export function colonyRaidType(world: WorldState, colony: ColonyRecord): RaidType {
-  return world.simVersion >= SIM_VERSION_V60_RAID_ORDERS ? colony.raidType : RaidType.Loot;
-}
-
-/** The world has raid orders (V60+): read by the raid menu, badge and captions. */
-export function worldHasRaidOrders(world: WorldState): boolean {
-  return world.simVersion >= SIM_VERSION_V60_RAID_ORDERS;
-}
+import type { WorldState } from './types.js';
 
 /**
  * The entrance (open or closed) of a colony OTHER than `colonyId` whose surface
@@ -63,10 +49,10 @@ export function rallyEnemyEntrance(world: WorldState, colony: ColonyRecord): Nes
 /**
  * #352 (V60) — the enemy entrance `colony` is blockading: its raid type is Blockade
  * and its rally is on another colony's entrance (open or closed — fighters hold the
- * ground round a shaft still being dug as well). Null otherwise, and always below V60.
+ * ground round a shaft still being dug as well). Null otherwise.
  */
 export function blockadedEntrance(world: WorldState, colony: ColonyRecord): NestEntrance | null {
-  if (colonyRaidType(world, colony) !== RaidType.Blockade) return null;
+  if (colony.raidType !== RaidType.Blockade) return null;
   return rallyEnemyEntrance(world, colony);
 }
 

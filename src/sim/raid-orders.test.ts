@@ -11,13 +11,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
-import {
-  copyWorldState,
-  createWorldState,
-  SIM_VERSION_V59_INVADER_RETARGET,
-  SIM_VERSION_V60_RAID_ORDERS,
-  type WorldState,
-} from './types.js';
+import { copyWorldState, createWorldState, type WorldState } from './types.js';
 import {
   fighterMayLoot,
   tickRaidActions,
@@ -180,20 +174,6 @@ describe('the raid order on the colony (V60)', () => {
       expect(r.player.rallyPoint).toBeNull();
       expect(r.player.raidType).toBe(RaidType.Loot);
     }
-  });
-
-  it('below V60 the raid type is ignored: the rally is set, the colony stays Loot', () => {
-    const r = raidWorld();
-    const w = r.world;
-    w.simVersion = SIM_VERSION_V59_INVADER_RETARGET;
-    const at = { colonyId: P, tileX: r.enemyDoor.x, tileY: r.enemyDoor.y, issuedAtTick: 0 };
-    tick(w, [{ type: 'SetRallyPoint', ...at, raidType: RaidType.Spoil }]);
-    expect(r.player.rallyPoint).toEqual({ tileX: r.enemyDoor.x, tileY: r.enemyDoor.y });
-    expect(r.player.raidType).toBe(RaidType.Loot);
-    // Nor does a stored type act below V60 (a hand-set one here).
-    r.player.raidType = RaidType.Assault;
-    const id = addFighter(w, P, 100, 6, E);
-    expect(fighterMayLoot(w, r.player, id)).toBe(true);
   });
 
   it('copyWorldState copies the raid type', () => {
@@ -826,16 +806,6 @@ describe('with nothing left to take Loot, Deny and Spoil go for the queen first 
     });
   }
 
-  it('below V60 the same raider is left to the hunt (no aim from step 10e)', () => {
-    const r = raidWorld(0);
-    const w = r.world;
-    w.simVersion = SIM_VERSION_V59_INVADER_RETARGET;
-    rallyOn(r.player, r.enemyDoor);
-    const id = addFighter(w, P, 100, 6, E);
-    updateRaiders(w);
-    expect(w.ants.targetPosX[id]).toBe(-1);
-  });
-
   it('Loot with full stores: queen-first only once the larder is empty too', () => {
     const r = raidWorld(0);
     const w = r.world;
@@ -1296,13 +1266,7 @@ describe('Blockade (V60)', () => {
     }
   });
 
-  it('is inert below V60 and without the order: step 10c marks nobody and 10c2 routes nobody', () => {
-    const r = raidWorld(3000);
-    const w = r.world;
-    order(r, RaidType.Blockade);
-    w.simVersion = SIM_VERSION_V59_INVADER_RETARGET;
-    const [id] = blockaders(r, 1);
-    expect(run(w, 300, () => w.ants.zone[id!] === Zone.Underground)).toBeGreaterThan(0);
+  it('is inert without the order: step 10c marks nobody and 10c2 routes nobody', () => {
     const w2 = raidWorld(3000);
     order(w2, RaidType.Loot);
     const [b] = blockaders(w2, 1);
@@ -1311,6 +1275,5 @@ describe('Blockade (V60)', () => {
     w2.world.ants.targetPosX[b!] = 12345;
     updateBlockaders(w2.world);
     expect(w2.world.ants.targetPosX[b!]).toBe(12345);
-    expect(w2.world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V60_RAID_ORDERS);
   });
 });

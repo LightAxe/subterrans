@@ -3,7 +3,6 @@ import type { WorldState } from './types.js';
 import {
   allocateEntityId,
   INVALID_ENTITY_ID,
-  SIM_VERSION_V60_RAID_ORDERS,
   SIM_VERSION_V62_AI_NEST_DEFENCE,
   SIM_VERSION_V65_ALARM_INVASION,
 } from './types.js';
@@ -830,11 +829,9 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         if (!isTileCoord(cmd.tileY, SURFACE_GRID_HEIGHT)) break;
         // #352 (V60): the rally carries its raid type (absent = Loot). A present
         // value that is not a RaidType is a malformed command: dropped whole, like
-        // a bad coordinate. Below V60 the field is ignored (the colony stays Loot).
-        if (world.simVersion >= SIM_VERSION_V60_RAID_ORDERS) {
-          if (cmd.raidType !== undefined && !isRaidType(cmd.raidType)) break;
-          colony.raidType = cmd.raidType ?? RaidType.Loot;
-        }
+        // a bad coordinate.
+        if (cmd.raidType !== undefined && !isRaidType(cmd.raidType)) break;
+        colony.raidType = cmd.raidType ?? RaidType.Loot;
         colony.rallyPoint = { tileX: cmd.tileX, tileY: cmd.tileY };
         break;
       }
@@ -843,7 +840,7 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         if (colony === undefined) break;
         colony.rallyPoint = null;
         // #352 (V60): the raid type goes with the rally.
-        if (world.simVersion >= SIM_VERSION_V60_RAID_ORDERS) colony.raidType = RaidType.Loot;
+        colony.raidType = RaidType.Loot;
         break;
       }
       case 'SetAIRaidClock': {
@@ -1538,7 +1535,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
   // Step 10c2 (V60, #352): blockades — the surface fighters step 10c left to a
   // Blockade raid order hold posts round the enemy entrance and chase intruders
   // (ant-blockade.ts). Before 10d, so a spider priority still overrides them.
-  // Inert below V60 and for a colony not blockading.
+  // Inert for a colony not blockading.
   updateBlockaders(world);
 
   // Step 10d: spider priority fighter routing (S3).

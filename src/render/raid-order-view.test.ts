@@ -24,7 +24,6 @@ import {
   raidOrderOfRally,
   raidOrderOnTile,
   raidOrderOption,
-  worldHasRaidOrders,
 } from './raid-order-view.js';
 import { drawGhostDelta } from './draw-command-legibility.js';
 import type { GhostDelta } from './command-ghosts.js';
@@ -52,7 +51,7 @@ import { contextMenuState, hideContextMenu } from './context-menu-state.js';
 import { handleSetRallyPoint, tryOpenRaidMenu } from '../input/surface-input.js';
 import { RaidType } from '../sim/enums.js';
 import { createScenario } from '../sim/scenario.js';
-import { SIM_VERSION_V59_INVADER_RETARGET, type WorldState } from '../sim/types.js';
+import type { WorldState } from '../sim/types.js';
 import { ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
 import { makeCameraView } from './camera-adapter.js';
 import type { ViewState } from './camera.js';
@@ -166,7 +165,7 @@ describe('the order caption', () => {
     expect(raidOrderCaption(RaidType.Assault)).toMatch(/queen/);
   });
 
-  it('raidOrderOfRally: an enemy entrance in a V60 world gives the command’s type (Loot if none)', () => {
+  it('raidOrderOfRally: an enemy entrance gives the command’s type (Loot if none)', () => {
     const w = world();
     const d = enemyDoor(w);
     const cmd = (extra: Partial<SetRallyPointCommand>): SetRallyPointCommand => ({
@@ -187,16 +186,13 @@ describe('the order caption', () => {
       raidOrderOfRally(w, PLAYER_COLONY_ID, cmd({ raidType: null as unknown as RaidType })),
     ).toBeNull();
     expect(raidOrderOfRally(w, PLAYER_COLONY_ID, cmd({ tileX: d.x - 20 }))).toBeNull();
-    w.simVersion = SIM_VERSION_V59_INVADER_RETARGET;
-    expect(raidOrderOfRally(w, PLAYER_COLONY_ID, cmd({}))).toBeNull();
   });
 });
 
 describe('activeRaidOrder and the rally badge', () => {
-  it('is the stored type only while the rally is on an enemy entrance in a V60 world', () => {
+  it('is the stored type only while the rally is on an enemy entrance', () => {
     const w = world();
     const c = w.colonies[PLAYER_COLONY_ID]!;
-    expect(worldHasRaidOrders(w)).toBe(true);
     expect(activeRaidOrder(w, PLAYER_COLONY_ID)).toBeNull(); // no rally
     const d = enemyDoor(w);
     c.rallyPoint = { tileX: d.x, tileY: d.y };
@@ -207,9 +203,6 @@ describe('activeRaidOrder and the rally badge', () => {
     const own = c.entrances[0]!;
     c.rallyPoint = { tileX: own.surfaceTileX, tileY: own.surfaceTileY };
     expect(activeRaidOrder(w, PLAYER_COLONY_ID)).toBeNull(); // own entrance: tunnel defence
-    c.rallyPoint = { tileX: d.x, tileY: d.y };
-    w.simVersion = SIM_VERSION_V59_INVADER_RETARGET;
-    expect(activeRaidOrder(w, PLAYER_COLONY_ID)).toBeNull();
   });
 
   it('draws a dark square above the tile and a distinct letter per order', () => {
@@ -319,7 +312,7 @@ describe('raid news captions under an order', () => {
 });
 
 describe('input: opening the raid menu and sending the pick', () => {
-  it('opens on an enemy entrance on the surface, in a V60 world, and nowhere else', () => {
+  it('opens on an enemy entrance on the surface, and nowhere else', () => {
     const w = world();
     const d = enemyDoor(w);
     expect(tryOpenRaidMenu(w, surfaceView(), 30, 40, d.x, d.y)).toBe(true);
@@ -334,8 +327,6 @@ describe('input: opening the raid menu and sending the pick', () => {
     expect(
       tryOpenRaidMenu(w, { ...surfaceView(), activeView: 'underground' }, 0, 0, d.x, d.y),
     ).toBe(false);
-    w.simVersion = SIM_VERSION_V59_INVADER_RETARGET;
-    expect(tryOpenRaidMenu(w, surfaceView(), 0, 0, d.x, d.y)).toBe(false);
     expect(contextMenuState.pendingShow).toBe(false);
   });
 

@@ -12,11 +12,7 @@
 //   6. Version-gated: bumping SAVE_FORMAT_VERSION invalidates old saves (intentional for beta)
 
 import type { WorldState, EntityId, AIStateRecord, SpiderState } from '../sim/types.js';
-import {
-  LATEST_SIM_VERSION,
-  SIM_VERSION_V71_HEALTH_MODEL,
-  SIM_VERSION_V60_RAID_ORDERS,
-} from '../sim/types.js';
+import { LATEST_SIM_VERSION, SIM_VERSION_V71_HEALTH_MODEL } from '../sim/types.js';
 import { AI_MAX_OPERATION_FIGHTERS, SPIDER_HUNT_INTERVAL_TICKS } from '../sim/constants.js';
 import type { AntComponents } from '../sim/ant/ant-store.js';
 import {
@@ -715,7 +711,7 @@ interface SerializedColony {
   /** C1 (V42) — colony alarm stance. Absent on pre-V42 saves → false on load. */
   alarmActive?: boolean;
   /** #352 (V60) — the rally's raid type (RaidType). Written only when it is not
-   *  Loot, so a pre-V60 save (always Loot) is unchanged; absent → Loot on load. */
+   *  Loot; absent → Loot on load. */
   raidType?: number;
   eggIntervalNumerator: number;
 }
@@ -1064,8 +1060,8 @@ function serializeColony(c: ColonyRecord): SerializedColony {
     priorityFoodPileId: c.priorityFoodPileId,
     alarmActive: c.alarmActive,
     eggIntervalNumerator: c.eggIntervalNumerator,
-    // #352 (V60): only a non-Loot raid type is written (a pre-V60 world is always
-    // Loot), so every older save and every Loot colony serializes byte-identically.
+    // #352 (V60): only a non-Loot raid type is written, so every Loot colony
+    // serializes as it did before raid orders existed.
     ...(c.raidType !== RaidType.Loot ? { raidType: c.raidType } : {}),
   };
 }
@@ -1943,13 +1939,6 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
       throw new Error(`Invalid colonies key: ${cidStr}`);
     }
     colonies[Number(cidStr)] = deserializeColony(sc);
-    // #352 — only a V60+ world ever sets a raid type other than Loot.
-    if (
-      validatedSimVersion < SIM_VERSION_V60_RAID_ORDERS &&
-      colonies[Number(cidStr)]!.raidType !== RaidType.Loot
-    ) {
-      throw new Error(`Invalid colony.raidType before V60: ${String(sc.raidType)}`);
-    }
   }
   const undergroundGrids: Record<ColonyId, UndergroundGrid> = {};
   for (const [cidStr, sg] of Object.entries(s.undergroundGrids)) {

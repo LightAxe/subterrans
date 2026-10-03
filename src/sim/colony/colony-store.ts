@@ -239,7 +239,7 @@ export interface ColonyRecord {
   /** #352 (V60) — the raid type of this colony's rally (RaidType): what its
    *  fighters do when the rally is on an enemy entrance. Set with the rally by the
    *  SetRallyPoint command (absent = Loot) and reset to Loot when the rally is
-   *  cleared; always Loot before V60. Serialized only when not Loot. */
+   *  cleared. Serialized only when not Loot. */
   raidType: RaidType;
 
   /** S4 V21+ — world tick at which the queen most recently laid an egg.

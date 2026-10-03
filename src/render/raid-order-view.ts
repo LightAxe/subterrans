@@ -16,7 +16,7 @@
 
 import { RaidType, isRaidType } from '../sim/enums.js';
 import type { SetRallyPointCommand } from '../sim/commands.js';
-import { enemyEntranceAt, rallyEnemyEntrance, worldHasRaidOrders } from '../sim/raid-order.js';
+import { enemyEntranceAt, rallyEnemyEntrance } from '../sim/raid-order.js';
 import type { WorldState } from '../sim/types.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import { CONTEXT_MENU, type ContextMenuRow } from './context-menu-layout.js';
@@ -114,14 +114,11 @@ export function raidOrderCaption(type: RaidType): string {
  */
 export const RAID_ORDER_CAPTION_SUPERSEDE_KEY = 'raidOrder';
 
-export { worldHasRaidOrders };
-
 /**
- * The raid order `colonyId`'s rally is giving right now, or null: a V60+ world
- * whose colony is rallied on another colony's entrance (open or closed).
+ * The raid order `colonyId`'s rally is giving right now, or null when its rally is
+ * not on another colony's entrance (open or closed).
  */
 export function activeRaidOrder(world: WorldState, colonyId: ColonyId): RaidType | null {
-  if (!worldHasRaidOrders(world)) return null;
   const colony = world.colonies[colonyId];
   if (colony === undefined || rallyEnemyEntrance(world, colony) === null) return null;
   return colony.raidType;
@@ -145,8 +142,8 @@ export function raidOrderOnTile(
 }
 
 /**
- * The raid order a rally command gives, or null when it gives none: a V60+ world
- * and the rally tile is another colony's entrance (open or closed). The type is
+ * The raid order a rally command gives, or null when it gives none: the rally tile
+ * must be another colony's entrance (open or closed). The type is
  * the command's `raidType`, Loot when absent; a malformed one (which the sim drops
  * with the command) gives none. Read before the tick applies the command (the
  * drained batch), so it takes the command's word, not the colony's.
@@ -156,7 +153,6 @@ export function raidOrderOfRally(
   colonyId: ColonyId,
   cmd: SetRallyPointCommand,
 ): RaidType | null {
-  if (!worldHasRaidOrders(world)) return null;
   // Only an ABSENT type is Loot: a present null is malformed, as the sim treats it.
   const type = cmd.raidType === undefined ? RaidType.Loot : cmd.raidType;
   if (!isRaidType(type)) return null;

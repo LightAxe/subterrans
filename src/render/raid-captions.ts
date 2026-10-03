@@ -52,7 +52,7 @@ export const RAID_CAPTION_TEXTS: Record<RaidCaptionKind, string> = {
 
 /**
  * #352 — the text for `kind` under the raid order the colony is giving (null: no
- * raid order, or a pre-V60 world). A Deny raid's news names it; Loot keeps the
+ * raid order). A Deny raid's news names it; Loot keeps the
  * plain #290 wording, and 'spoiling' only ever fires under Spoil.
  */
 export function raidCaptionText(kind: RaidCaptionKind, order: RaidType | null): string {
