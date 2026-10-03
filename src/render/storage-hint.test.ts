@@ -1,11 +1,15 @@
 // storage-hint.test.ts — #395: "Build a Food Storage chamber so your queen can lay
 // eggs." shows when storage is what stops the queen laying (V70 egg reserve), once
-// per spell, re-armed after storage has covered the reserve for a while.
+// per spell, re-armed after storage has covered the reserve for a while. (#413: with
+// a larder already, the hint says the stores are full; the full-larder stall, the
+// cooldown and the "Waiting for stores" line are in storage-hint-stall.test.ts.)
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   advanceStorageHint,
   createStorageHintState,
   storageHintCondition,
+  STORAGE_FULL_HINT_TEXT,
+  STORAGE_HINT_COOLDOWN_TICKS,
   STORAGE_HINT_DWELL_TICKS,
   STORAGE_HINT_REARM_TICKS,
   storageHintStale,
@@ -46,6 +50,8 @@ import {
 } from '../sim/hunger.js';
 
 const TEXT = 'Build a Food Storage chamber so your queen can lay eggs.';
+/** #413 — the hint's copy for a colony that has a Food Storage chamber already. */
+const FULL = STORAGE_FULL_HINT_TEXT;
 const RUNWAY = QUEEN_EGG_RESERVE_RUNWAY_TICKS;
 const QUEEN_FP = runwayFoodFp(QUEEN_HUNGER, RUNWAY);
 const LARVA_FP = runwayFoodFp(LARVA_HUNGER, RUNWAY);
@@ -188,7 +194,7 @@ describe('eggReserveStorageShortfallFp (#395, V70)', () => {
     expect(noBroodReserve(0)).toBeGreaterThan(capacity(0));
   });
 
-  it('brood already laid does not count (the larder brood ceiling is not a build problem)', () => {
+  it('brood already laid does not count (the reserve with no brood waiting)', () => {
     const { world, colony } = scenario();
     addChamber(world, colony, ChamberType.FoodStorage);
     addAnts(world, colony, 10, 'larva');
@@ -323,19 +329,23 @@ describe('storageHintCondition', () => {
     expect(storageHintCondition(world, PLAYER_COLONY_ID)).toBe('blocked');
   });
 
-  it('a big brood in an adequate larder is covered (not a build problem)', () => {
+  it('#413: a brood that takes the reserve past the larder is blocked (the storage cap)', () => {
     const { world, colony } = scenario();
     readyToLay(world, colony);
     addChamber(world, colony, ChamberType.FoodStorage);
     addAnts(world, colony, 12, 'larva');
-    expect(storageHintCondition(world, PLAYER_COLONY_ID)).toBe('covered');
+    // Storage covers the reserve with no brood waiting, so this is not the #395 case.
+    expect(eggReserveStorageShortfallFp(world, colony)).toBe(0);
+    expect(eggReserveFp(world, colony)).toBeGreaterThan(capacity(1));
+    expect(storageHintCondition(world, PLAYER_COLONY_ID)).toBe('blocked');
   });
 });
 
 describe('advanceStorageHint', () => {
   beforeEach(() => resetCaptions());
 
-  /** A world where storage blocks the queen, and a switch to cover it. */
+  /** A world where storage blocks the queen, and a switch to cover it. It has a Food
+   *  Storage chamber, so the hint is FULL (#413). */
   function blockedWorld(): {
     world: WorldState;
     cover: () => void;
@@ -385,7 +395,7 @@ describe('advanceStorageHint', () => {
       expect(advanceStorageHint(s, world, PLAYER_COLONY_ID, false)).toBeNull();
     }
     // The first frame that may offer it shows it at once (no fresh dwell), then not again.
-    expect(run(s, world, due + 6, due + 20)).toEqual([`${due + 6}:${TEXT}`]);
+    expect(run(s, world, due + 6, due + 20)).toEqual([`${due + 6}:${FULL}`]);
   });
 
   it('shows once after blocking for the dwell, then not again', () => {
@@ -393,7 +403,7 @@ describe('advanceStorageHint', () => {
     const s = createStorageHintState();
     expect(run(s, world, 1000, 1000 + STORAGE_HINT_DWELL_TICKS - 1)).toEqual([]);
     expect(run(s, world, 1000 + STORAGE_HINT_DWELL_TICKS, 5000)).toEqual([
-      `${1000 + STORAGE_HINT_DWELL_TICKS}:${TEXT}`,
+      `${1000 + STORAGE_HINT_DWELL_TICKS}:${FULL}`,
     ]);
   });
 
@@ -407,7 +417,7 @@ describe('advanceStorageHint', () => {
     const back = STORAGE_HINT_DWELL_TICKS + 1;
     expect(run(s, world, back, back + STORAGE_HINT_DWELL_TICKS - 1)).toEqual([]);
     expect(run(s, world, back + STORAGE_HINT_DWELL_TICKS, back + STORAGE_HINT_DWELL_TICKS)).toEqual(
-      [`${back + STORAGE_HINT_DWELL_TICKS}:${TEXT}`],
+      [`${back + STORAGE_HINT_DWELL_TICKS}:${FULL}`],
     );
   });
 
@@ -426,7 +436,7 @@ describe('advanceStorageHint', () => {
     const { world, cover, uncover } = blockedWorld();
     const s = createStorageHintState();
     const t0 = STORAGE_HINT_DWELL_TICKS;
-    expect(run(s, world, 0, t0)).toEqual([`${t0}:${TEXT}`]);
+    expect(run(s, world, 0, t0)).toEqual([`${t0}:${FULL}`]);
 
     // Covered one tick short of the re-arm time, then blocked again: no second hint.
     cover();
@@ -437,14 +447,16 @@ describe('advanceStorageHint', () => {
     expect(run(s, world, b1, b1 + 3 * STORAGE_HINT_DWELL_TICKS)).toEqual([]);
 
     // Covered for the full re-arm time: blocked again shows it again, after the dwell.
+    // (#413: past the cooldown since it was shown, so only the covered time decides.)
     cover();
-    const c2 = b1 + 3 * STORAGE_HINT_DWELL_TICKS + 1;
+    const c2 = t0 + STORAGE_HINT_COOLDOWN_TICKS;
+    expect(c2).toBeGreaterThan(b1 + 3 * STORAGE_HINT_DWELL_TICKS);
     expect(run(s, world, c2, c2 + STORAGE_HINT_REARM_TICKS)).toEqual([]);
     uncover();
     const b2 = c2 + STORAGE_HINT_REARM_TICKS + 1;
     expect(run(s, world, b2, b2 + STORAGE_HINT_DWELL_TICKS - 1)).toEqual([]);
     expect(run(s, world, b2 + STORAGE_HINT_DWELL_TICKS, b2 + 2 * STORAGE_HINT_DWELL_TICKS)).toEqual(
-      [`${b2 + STORAGE_HINT_DWELL_TICKS}:${TEXT}`],
+      [`${b2 + STORAGE_HINT_DWELL_TICKS}:${FULL}`],
     );
   });
 
@@ -454,7 +466,8 @@ describe('advanceStorageHint', () => {
     const t0 = STORAGE_HINT_DWELL_TICKS;
     run(s, world, 0, t0);
     cover();
-    const c1 = t0 + 1;
+    // #413: past the cooldown since it was shown, so only the covered run decides.
+    const c1 = t0 + STORAGE_HINT_COOLDOWN_TICKS;
     run(s, world, c1, c1 + STORAGE_HINT_REARM_TICKS - 2);
     // One 'neither' frame (blocked, but a larder is pending) breaks the covered run.
     uncover();
@@ -473,9 +486,9 @@ describe('advanceStorageHint', () => {
     const { world } = blockedWorld();
     const s = createStorageHintState();
     const t0 = STORAGE_HINT_DWELL_TICKS;
-    expect(run(s, world, 0, t0)).toEqual([`${t0}:${TEXT}`]);
+    expect(run(s, world, 0, t0)).toEqual([`${t0}:${FULL}`]);
     untrigger('foodStorageNeeded'); // UIScene: dropped on overflow
-    expect(run(s, world, t0 + 1, t0 + 5)).toEqual([`${t0 + 1}:${TEXT}`]);
+    expect(run(s, world, t0 + 1, t0 + 5)).toEqual([`${t0 + 1}:${FULL}`]);
   });
 
   it('a tick that goes back (a load) restarts the dwell rather than firing at once', () => {
@@ -484,7 +497,7 @@ describe('advanceStorageHint', () => {
     run(s, world, 5000, 5000 + STORAGE_HINT_DWELL_TICKS - 1);
     expect(run(s, world, 100, 100 + STORAGE_HINT_DWELL_TICKS - 1)).toEqual([]);
     expect(run(s, world, 100 + STORAGE_HINT_DWELL_TICKS, 100 + STORAGE_HINT_DWELL_TICKS)).toEqual([
-      `${100 + STORAGE_HINT_DWELL_TICKS}:${TEXT}`,
+      `${100 + STORAGE_HINT_DWELL_TICKS}:${FULL}`,
     ]);
   });
 
@@ -495,12 +508,15 @@ describe('advanceStorageHint', () => {
     cover();
     run(s, world, 9000, 9000 + STORAGE_HINT_REARM_TICKS - 2);
     // Load an older save: the covered clock restarts at the earlier tick, so the
-    // full re-arm time from there re-arms it.
-    run(s, world, 300, 300 + STORAGE_HINT_REARM_TICKS);
+    // full re-arm time from there re-arms it (#413: loaded past the cooldown since
+    // the hint was shown, which would hold the re-arm back otherwise).
+    const load = 300 + STORAGE_HINT_COOLDOWN_TICKS;
+    expect(load).toBeLessThan(9000);
+    run(s, world, load, load + STORAGE_HINT_REARM_TICKS);
     uncover();
-    const b = 300 + STORAGE_HINT_REARM_TICKS + 1;
+    const b = load + STORAGE_HINT_REARM_TICKS + 1;
     expect(run(s, world, b, b + STORAGE_HINT_DWELL_TICKS)).toEqual([
-      `${b + STORAGE_HINT_DWELL_TICKS}:${TEXT}`,
+      `${b + STORAGE_HINT_DWELL_TICKS}:${FULL}`,
     ]);
   });
 

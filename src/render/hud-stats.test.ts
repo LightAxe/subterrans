@@ -13,9 +13,13 @@ import {
   queenHealthBarColor,
   queenHealthBarFillWidth,
   queenHealthState,
+  queenStoresRect,
   HUD_STATS_COLORS,
   HUD_STATS_LAYOUT,
 } from './hud-stats.js';
+import { antActivityPanelRect } from './ant-activity.js';
+import { buildHudLayout, captionWrapWidth, CAPTION_PAD_X } from './hud-layout.js';
+import { DEFAULT_LAYOUT } from './layout.js';
 import type { HudStats } from './hud-stats.js';
 import { createWorldState } from '../sim/types.js';
 import type { WorldState } from '../sim/types.js';
@@ -354,6 +358,50 @@ describe('queenLabelRect (09 HUD clarity pass — two-row layout)', () => {
     expect(label.x + label.w).toBeLessThanOrEqual(stats.x + stats.w);
     expect(label.y).toBeGreaterThanOrEqual(stats.y);
     expect(label.y + label.h).toBeLessThanOrEqual(stats.y + stats.h);
+  });
+});
+
+describe('queenStoresRect (#413 — the "Waiting for stores" strip)', () => {
+  const stats = { x: 8, y: 8, w: 200, h: 24 };
+  const { gapY, h, textInset } = HUD_STATS_LAYOUT.queenStores;
+
+  it('sits just under the stats rect, left-aligned with it, without touching it', () => {
+    const r = queenStoresRect(stats, 150);
+    expect(r.x).toBe(stats.x);
+    expect(r.y).toBe(stats.y + stats.h + gapY);
+    expect(r.y).toBeGreaterThan(stats.y + stats.h - 1);
+    expect(r.h).toBe(h);
+  });
+
+  it('is as wide as the text plus its padding (a fractional width rounds up)', () => {
+    expect(queenStoresRect(stats, 150).w).toBe(150 + 2 * textInset);
+    expect(queenStoresRect(stats, 150.2).w).toBe(151 + 2 * textInset);
+  });
+
+  // ~6 px a char at the line's 10px monospace (storage-hint.spec.ts checks the strip
+  // the real renderer draws).
+  const CHAR_W = 6;
+
+  it('a two-digit line ends left of the widest caption at the top', () => {
+    // GameScene centres top captions at (w/2, 60); "Waiting for stores: 99/99" is 25 chars.
+    const hud = buildHudLayout(DEFAULT_LAYOUT);
+    const cx = DEFAULT_LAYOUT.w / 2;
+    const captionLeft = cx - (captionWrapWidth(cx, 60, hud) + 2 * CAPTION_PAD_X) / 2;
+    const r = queenStoresRect(hud.STATS, 25 * CHAR_W);
+    expect(r.x + r.w).toBeLessThanOrEqual(captionLeft);
+  });
+
+  it('a worst-case line ("Waiting for stores: 999/999") fits the stats width', () => {
+    const r = queenStoresRect(stats, 27 * CHAR_W);
+    expect(r.x + r.w).toBeLessThanOrEqual(stats.x + stats.w);
+  });
+
+  it('lies under the ant-activity popup, which UIScene hides it behind', () => {
+    const r = queenStoresRect(stats, 150);
+    const panel = antActivityPanelRect(stats);
+    expect(r.x).toBeGreaterThanOrEqual(panel.x);
+    expect(r.x + r.w).toBeLessThanOrEqual(panel.x + panel.w);
+    expect(r.y + r.h).toBeGreaterThan(panel.y);
   });
 });
 

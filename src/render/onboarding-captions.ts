@@ -35,7 +35,9 @@ const CAPTION_TEXTS: Record<CaptionKey, string> = {
   spiderRampage: 'The spider has gone hungry and is hunting on the surface.',
   queenDamage: 'Your queen is in danger.',
   queenStarvation: 'Your queen is growing hungry.',
-  // #395 (V70): storage cannot hold the egg reserve (storage-hint.ts).
+  // #395 (V70): storage cannot hold the egg reserve (storage-hint.ts). The text for a
+  // colony with no Food Storage chamber; one with a larder already is told its stores
+  // are full (#413, storage-hint.ts STORAGE_FULL_HINT_TEXT, under this same key).
   foodStorageNeeded: 'Build a Food Storage chamber so your queen can lay eggs.',
   autosaveFailed: 'Autosave failed — storage full or blocked.',
 };

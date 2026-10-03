@@ -1,9 +1,15 @@
-// storage-hint.spec.ts — #395: "Build a Food Storage chamber so your queen can lay
-// eggs." reaches the player in a real browser when storage is what stops the queen
-// laying (the V70 egg reserve tops storage capacity), and stays quiet once the
-// player has designated a Food Storage chamber that would cover it. Its 4 s hold
-// gives way to an army warning (#394) owed behind it, as the army warning's own
-// long hold gives way to news owed behind it.
+// storage-hint.spec.ts — #395/#413: the Food Storage hint reaches the player in a real
+// browser when storage is what stops the queen laying (the V70 egg reserve tops
+// storage capacity), and stays quiet once the player has designated a Food Storage
+// chamber that would cover it. Its 4 s hold gives way to an army warning (#394) owed
+// behind it, as the army warning's own long hold gives way to news owed behind it.
+// These fixtures have a Food Storage chamber already, so the hint reads "Your stores
+// are full — …" (#413; with none it says to build one, storage-hint.test.ts).
+//
+// #413 (the last describe): the opening's full-larder stall, built by the colony's
+// own workers from the standard opening, shows that hint and the queen's
+// "Waiting for stores" line under the HUD stats; a larder with room shows the line
+// (not in the warning colour) and no hint.
 //
 // The condition, the dwell, the re-arm and the pending-chamber rule are pinned in
 // src/render/storage-hint.test.ts. What only a browser proves is the GameScene
@@ -33,9 +39,15 @@ import {
   DIALOG_NEW_GAME_RECT,
   SAVE_LOAD_ROW_RECT,
   SAVE_PROMPT_CONTINUE_RECT,
+  STATS_RECT,
+  TOP_CAPTION_MIN_LEFT,
 } from './helpers/geometry.js';
 
-const HINT = 'Build a Food Storage chamber so your queen can lay eggs.';
+/** storage-hint.ts STORAGE_FULL_HINT_TEXT: the hint for a colony with a larder (#413). */
+const HINT = 'Your stores are full — build another Food Storage so your queen can keep laying.';
+/** hud-stats.ts HUD_STATS_COLORS: the "Waiting for stores" line's two colours (#413). */
+const STORES_CAPPED_CSS = '#ddaa22';
+const STORES_WAITING_CSS = '#bbbbbb';
 /** storage-hint.ts STORAGE_HINT_DWELL_TICKS. */
 const DWELL_TICKS = 200;
 /** storage-hint.ts STORAGE_HINT_HOLD_MS. */
@@ -68,6 +80,12 @@ interface TestHook {
   isPaused?: () => boolean;
   placePlayerChamberAt?: (chamberType: number, tileX: number, tileY: number) => boolean;
   offerCaption?: (text: string) => boolean;
+  getQueenStoresLine?: () => {
+    text: string;
+    color: string;
+    rect: { x: number; y: number; w: number; h: number };
+  } | null;
+  getPlayerStores?: () => { foodTotalFp: number; capacityFp: number; eggReserveFp: number } | null;
 }
 
 async function freezeCaptionClock(page: Page, frozen: boolean): Promise<void> {
@@ -196,9 +214,13 @@ async function simTick(page: Page): Promise<number> {
   );
 }
 
-type Variant = 'plain' | 'designate' | 'army' | 'starve';
+type Variant = 'plain' | 'designate' | 'army' | 'starve' | 'room';
 
 /** Seed the save.
+ *  - 'room' (#413): 3 fighters, not 60, and 13.7 food stored (the larder 1500 fp,
+ *    the pool 2000): the reserve (14.8 food) fits in the larder, so the queen only
+ *    waits for food, which no one fetches (no foragers): she never lays, the
+ *    reserve never grows.
  *  - 'starve': no food at all, so the queen starves on the real tick path at tick
  *    300 (QUEEN_STARVE_AFTER_TICKS; no fighter dies first, and storage blocks her on
  *    every tick before), after the hint is due.
@@ -222,6 +244,7 @@ async function seedStorageSave(page: Page, variant: Variant): Promise<void> {
     const enumsPath = '/src/sim/enums.ts';
     const fixedPath = '/src/sim/fixed.ts';
     const tickPath = '/src/sim/tick.ts';
+    const foodApiPath = '/src/sim/food/food-api.ts';
     type Colony = {
       chambers: unknown[];
       colonyId: number;
@@ -247,6 +270,11 @@ async function seedStorageSave(page: Page, variant: Variant): Promise<void> {
     };
     const lifecycle = (await import(/* @vite-ignore */ lifecyclePath)) as {
       eggReserveStorageShortfallFp: (w: unknown, c: unknown) => number;
+      eggReserveFp: (w: unknown, c: unknown) => number;
+    };
+    const foodApi = (await import(/* @vite-ignore */ foodApiPath)) as {
+      colonyFoodTotal: (w: unknown, c: unknown) => number;
+      colonyFoodCapacity: (c: unknown) => number;
     };
     const save = (await import(/* @vite-ignore */ savePath)) as {
       manualSave: (seed: number, log: unknown[], w: unknown) => Promise<boolean>;
@@ -282,18 +310,28 @@ async function seedStorageSave(page: Page, variant: Variant): Promise<void> {
       width: 4,
       height: 3,
     });
-    for (let i = 0; i < 60; i++) utils.addFighter(r.world, id, 26 + (i % 8), 6, id);
+    const fighters = variant === 'room' ? 3 : 60;
+    for (let i = 0; i < fighters; i++) utils.addFighter(r.world, id, 26 + (i % 8), 6, id);
     foodUtils.setChamberStockForTest(
       r.world,
       r.player,
       r.playerLarder,
-      variant === 'starve' ? 0 : 5000,
+      variant === 'starve' ? 0 : variant === 'room' ? 1500 : 5000,
     );
     if (variant === 'starve') foodUtils.setPoolFoodForTest(r.world, r.player, 0);
-    const shortfall = lifecycle.eggReserveStorageShortfallFp(r.world, r.player);
-    // Storage blocks the queen, and one more Food Storage chamber would cover it.
-    if (shortfall <= 0 || shortfall > k.FOOD_CHAMBER_CAPACITY) {
-      throw new Error(`unexpected storage shortfall ${shortfall}`);
+    if (variant === 'room') {
+      // The larder can hold the reserve; the stores fall short of it.
+      const reserve = lifecycle.eggReserveFp(r.world, r.player);
+      const stores = foodApi.colonyFoodTotal(r.world, r.player);
+      if (reserve > foodApi.colonyFoodCapacity(r.player) || stores >= reserve) {
+        throw new Error(`unexpected stores ${stores} / reserve ${reserve}`);
+      }
+    } else {
+      const shortfall = lifecycle.eggReserveStorageShortfallFp(r.world, r.player);
+      // Storage blocks the queen, and one more Food Storage chamber would cover it.
+      if (shortfall <= 0 || shortfall > k.FOOD_CHAMBER_CAPACITY) {
+        throw new Error(`unexpected storage shortfall ${shortfall}`);
+      }
     }
     if (variant === 'army') {
       for (let i = 0; i < 8; i++) {
@@ -323,11 +361,127 @@ async function seedStorageSave(page: Page, variant: Variant): Promise<void> {
   }, variant);
 }
 
-async function bootStorageSave(page: Page, variant: Variant): Promise<void> {
+/**
+ * #413 — seed the opening's full-larder stall the way playtest 3 found it: a fresh
+ * Easy game (seed 3) given the standard opening at tick 0 (a shaft down, the Queen
+ * chamber, the Nursery and one Food Storage chamber, as `./p e3` plays it), run on
+ * the real tick path, without the enemy AI, until the storage hint's condition
+ * holds (about tick 1050: the queen has laid three eggs and her reserve, 28.9 food,
+ * is more than the larder's 28). Checked before saving: one larder, and the #395
+ * trigger (storage short with no brood waiting) does not fire. Returns the tick saved.
+ */
+async function seedOpeningStallSave(page: Page): Promise<number> {
+  return await page.evaluate(async () => {
+    // Paths are served by the Vite dev server (Playwright always runs it).
+    const scenarioPath = '/src/sim/scenario.ts';
+    const tickPath = '/src/sim/tick.ts';
+    const hintPath = '/src/render/storage-hint.ts';
+    const lifecyclePath = '/src/sim/colony/lifecycle-system.ts';
+    const savePath = '/src/platform/save.ts';
+    const constantsPath = '/src/sim/constants.ts';
+    const enumsPath = '/src/sim/enums.ts';
+    type World = {
+      tick: number;
+      colonies: Record<number, { chambers: { chamberType: number }[] }>;
+    };
+    const scenario = (await import(/* @vite-ignore */ scenarioPath)) as {
+      createScenario: (seed: number, difficulty: string) => World;
+    };
+    const sim = (await import(/* @vite-ignore */ tickPath)) as {
+      tick: (w: unknown, commands: unknown[]) => unknown;
+    };
+    const hint = (await import(/* @vite-ignore */ hintPath)) as {
+      storageHintCondition: (w: unknown, colonyId: number) => string;
+    };
+    const lifecycle = (await import(/* @vite-ignore */ lifecyclePath)) as {
+      eggReserveStorageShortfallFp: (w: unknown, c: unknown) => number;
+    };
+    const save = (await import(/* @vite-ignore */ savePath)) as {
+      manualSave: (seed: number, log: unknown[], w: unknown) => Promise<boolean>;
+    };
+    const k = (await import(/* @vite-ignore */ constantsPath)) as {
+      PLAYER_COLONY_ID: number;
+    };
+    const enums = (await import(/* @vite-ignore */ enumsPath)) as {
+      ChamberType: { Queen: number; Nursery: number; FoodStorage: number };
+    };
+    const id = k.PLAYER_COLONY_ID;
+    const T = enums.ChamberType;
+    const w = scenario.createScenario(3, 'Easy');
+    const cmds: unknown[] = [];
+    const dig = (tileX: number, tileY: number): void => {
+      cmds.push({ type: 'MarkDigTile', colonyId: id, tileX, tileY, issuedAtTick: 0 });
+    };
+    const chamber = (chamberType: number, anchorTileX: number, anchorTileY: number): void => {
+      cmds.push({
+        type: 'PlaceChamber',
+        colonyId: id,
+        chamberType,
+        anchorTileX,
+        anchorTileY,
+        issuedAtTick: 0,
+      });
+    };
+    for (let y = 2; y <= 8; y++) dig(24, y);
+    chamber(T.Queen, 22, 9);
+    for (let x = 25; x <= 30; x++) dig(x, 5);
+    chamber(T.Nursery, 31, 4);
+    for (let x = 21; x <= 23; x++) dig(x, 5);
+    chamber(T.FoodStorage, 17, 4);
+    sim.tick(w, cmds);
+    while (hint.storageHintCondition(w, id) !== 'blocked') {
+      if (w.tick > 4000) throw new Error('no storage stall by tick 4000');
+      sim.tick(w, []);
+    }
+    const colony = w.colonies[id]!;
+    const larders = colony.chambers.filter((c) => c.chamberType === T.FoodStorage).length;
+    if (larders !== 1) throw new Error(`expected one larder, found ${larders}`);
+    if (lifecycle.eggReserveStorageShortfallFp(w, colony) !== 0) {
+      throw new Error('the #395 trigger fires here: not the full-larder stall');
+    }
+    if (!(await save.manualSave(3, [], w))) throw new Error('manualSave failed');
+    return w.tick;
+  });
+}
+
+/** The queen's "Waiting for stores" line as drawn: text and colour (the strip it
+ *  sits on is checked once, in the stall test). */
+async function storesLine(page: Page): Promise<{ text: string; color: string } | null> {
+  const line = await storesLineDrawn(page);
+  return line === null ? null : { text: line.text, color: line.color };
+}
+
+async function storesLineDrawn(page: Page): Promise<{
+  text: string;
+  color: string;
+  rect: { x: number; y: number; w: number; h: number };
+} | null> {
+  return await page.evaluate(() => {
+    const t = (window as unknown as { __phase9_test?: TestHook }).__phase9_test;
+    if (t?.getQueenStoresLine === undefined) throw new Error('no getQueenStoresLine hook');
+    return t.getQueenStoresLine();
+  });
+}
+
+async function playerStores(
+  page: Page,
+): Promise<{ foodTotalFp: number; capacityFp: number; eggReserveFp: number }> {
+  return await page.evaluate(() => {
+    const s = (
+      window as unknown as { __phase9_test?: TestHook }
+    ).__phase9_test?.getPlayerStores?.();
+    if (s === undefined || s === null) throw new Error('no getPlayerStores hook / no world');
+    return s;
+  });
+}
+
+async function bootStorageSave(page: Page, variant: Variant | 'stall'): Promise<number> {
   await page.goto('/');
   await waitForUiHook(page);
   await page.evaluate(() => localStorage.clear());
-  await seedStorageSave(page, variant);
+  let savedAt = 0;
+  if (variant === 'stall') savedAt = await seedOpeningStallSave(page);
+  else await seedStorageSave(page, variant);
   await page.reload();
   await waitForUiHook(page);
   await expect
@@ -340,6 +494,7 @@ async function bootStorageSave(page: Page, variant: Variant): Promise<void> {
     .toBe('save-prompt');
   await clickCanvasRect(page, SAVE_PROMPT_CONTINUE_RECT);
   await settleToPlaying(page);
+  return savedAt;
 }
 
 test.describe('#395 — Food Storage hint', () => {
@@ -584,5 +739,59 @@ test.describe('#395 — Food Storage hint', () => {
     );
     const warningHold = holds.find((h) => h.text.startsWith(ARMY_WARNING_PREFIX));
     expect(warningHold).toEqual(expect.objectContaining({ holdMs: 4000, yielded: false }));
+  });
+});
+
+test.describe('#413 — storage is the population cap: the stall is taught', () => {
+  test('the opening stall shows the queen waiting for stores, then the stores-full hint once', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    const savedAt = await bootStorageSave(page, 'stall');
+    // Under the stats bar, from the first frames: the queen waits for stores the larder
+    // cannot hold, in the warning colour.
+    await expect
+      .poll(async () => (await storesLine(page))?.color ?? null, { timeout: 10_000 })
+      .toBe(STORES_CAPPED_CSS);
+    // Paused, the line and the colony's numbers come from the same world: the stores
+    // (the Food count's number) against the egg reserve, which tops the 28 the larder holds.
+    await setPaused(page, true);
+    const stores = await playerStores(page);
+    expect(stores.capacityFp).toBe(28 * 256);
+    expect(stores.eggReserveFp).toBeGreaterThan(stores.capacityFp);
+    const want = `Waiting for stores: ${stores.foodTotalFp >> 8}/${Math.ceil(stores.eggReserveFp / 256)}`;
+    await expect.poll(() => storesLine(page)).toEqual({ text: want, color: STORES_CAPPED_CSS });
+    // Its strip, measured in the real renderer, ends left of the widest caption at the
+    // top (the hint, below, is a two-line one), under the stats bar.
+    const strip = (await storesLineDrawn(page))!.rect;
+    expect(strip.x + strip.w).toBeLessThanOrEqual(TOP_CAPTION_MIN_LEFT);
+    expect(strip.y).toBeGreaterThanOrEqual(STATS_RECT.y + STATS_RECT.h);
+    await setPaused(page, false);
+    // The hint, after the dwell.
+    await expect.poll(() => captions(page), { timeout: 40_000, intervals: [50] }).toContain(HINT);
+    const shownBy = await simTick(page);
+    expect(shownBy).toBeGreaterThanOrEqual(savedAt + DWELL_TICKS);
+    // Once: the stall goes on (the line is still up) and it does not repeat.
+    await expect.poll(() => simTick(page), { timeout: 40_000 }).toBeGreaterThan(shownBy + 300);
+    expect((await captions(page)).filter((c) => c === HINT)).toHaveLength(1);
+    expect((await storesLine(page))?.color).toBe(STORES_CAPPED_CSS);
+  });
+
+  test('a larder with room: the queen waits for food, the line is no warning, and no hint', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await bootStorageSave(page, 'room');
+    // The reserve, 14.8 food, reads 15; the larder could hold it.
+    await expect
+      .poll(() => storesLine(page), { timeout: 10_000 })
+      .toEqual({
+        text: expect.stringMatching(/^Waiting for stores: \d+\/15$/),
+        color: STORES_WAITING_CSS,
+      });
+    await expect.poll(() => simTick(page), { timeout: 60_000 }).toBeGreaterThan(3 * DWELL_TICKS);
+    const shown = await captions(page);
+    expect(shown.filter((c) => c.includes('Food Storage'))).toEqual([]);
+    expect((await storesLine(page))?.color).toBe(STORES_WAITING_CSS);
   });
 });
