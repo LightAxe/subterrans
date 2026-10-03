@@ -12,7 +12,6 @@ import type { WorldState, SpiderState, SpiderBehaviorState } from './types.js';
 import {
   createWorldState,
   allocateEntityId,
-  SIM_VERSION_V53_NO_LOOT_WHEN_FULL,
   SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES,
   LATEST_SIM_VERSION,
 } from './types.js';
@@ -395,30 +394,6 @@ describe('V54 (#337) — timed-out rampage rotates entrances', () => {
       expect(world.spider!.state).toBe('Rampaging');
       expect(world.spider!.rampageEntranceId).toBe(103);
     });
-  });
-
-  it('V53 world: a timeout sets no cursor and the next rampage is the unpinned 60/40 pick', () => {
-    const world = makeWorld(SIM_VERSION_V53_NO_LOOT_WHEN_FULL);
-    world.spider = makeSpider();
-    campExpired(world, 101);
-    step(world);
-    expect(world.spider.state).toBe('Patrolling');
-    expect(world.spider.rampageRotationEntranceId).toBe(-1);
-    expect(world.spider.rampageRotationTick).toBe(-1);
-    step(world);
-    expect(world.spider.state).toBe('Rampaging');
-    expect(world.spider.rampageEntranceId).toBe(-1);
-  });
-
-  it('V53 world: a stray cursor (corrupt load) is ignored', () => {
-    const world = makeWorld(SIM_VERSION_V53_NO_LOOT_WHEN_FULL);
-    // Only 101 open, cursor on it, cooldown not elapsed: V54 would refuse to rampage.
-    entranceById(world, 103).isOpen = false;
-    entranceById(world, 105).isOpen = false;
-    world.spider = makeSpider({ rampageRotationEntranceId: 101, rampageRotationTick: T0 });
-    step(world);
-    expect(world.spider.state).toBe('Rampaging');
-    expect(world.spider.rampageEntranceId).toBe(-1);
   });
 });
 

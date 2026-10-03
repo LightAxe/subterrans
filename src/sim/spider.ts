@@ -3,7 +3,6 @@
 // All decisions are deterministic from WorldState + tick; no world.rngState draws.
 
 import type { WorldState, SpiderState } from './types.js';
-import { SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES } from './types.js';
 import { emitEvent } from './telemetry.js';
 import { pheromoneKeySuffix } from './pheromone/pheromone-store.js';
 import { depositDangerCross } from './pheromone/danger.js';
@@ -366,8 +365,8 @@ function findNearestEntrance(
  * (`rampageEntranceId`): the camp is that entrance while it is open, and null once it
  * is not (the Rampaging case then ends the rampage as sealed, and the next one rotates
  * on; falling back to another entrance of the colony could land on the one the spider
- * just timed out on). Without a pin (the pre-V54 rule, and V54's first rampage of a
- * hungry spell) it is the nearest open entrance of `rampageTargetColonyId`. Returns the
+ * just timed out on). Without a pin (the first rampage of a hungry spell) it is the
+ * nearest open entrance of `rampageTargetColonyId`. Returns the
  * shared scratch out-param (read it before the next call) or null.
  */
 function campedEntrance(
@@ -1071,8 +1070,7 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
   //    earlier this tick. Any meal — predation OR self-defense — resets hunger.
   if (spider.killedThisTick === 1) {
     spider.hungerTicks = 0;
-    // V54 (#337): it found food, so the entrance rotation ends. Never set before V54,
-    // so this is a no-op there.
+    // V54 (#337): it found food, so the entrance rotation ends.
     spider.rampageRotationEntranceId = -1;
     spider.rampageRotationTick = -1;
     if (!isFighterAdjacent(world, spider) && spider.state !== 'Feeding') {
@@ -1187,10 +1185,7 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
           // V54 (#337): after a timed-out rampage the spider rotates to the next
           // entrance (pickRotationEntrance) instead of the 60/40 colony pick; with
           // nowhere to rotate to yet (single-entrance cooldown) it does not rampage.
-          const rotating =
-            !entered &&
-            world.simVersion >= SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES &&
-            spider.rampageRotationEntranceId >= 0;
+          const rotating = !entered && spider.rampageRotationEntranceId >= 0;
           const rotateTo = rotating ? pickRotationEntrance(world, spider) : null;
           if (!entered && (!rotating || rotateTo !== null)) {
             // Camp a colony entrance and eat the first ant there.
@@ -1288,10 +1283,7 @@ function tickSpiderV23(world: WorldState, spider: SpiderState): void {
         // moves on to another one (pickRotationEntrance). Only a camp that caught
         // nothing counts: a rampage that got a kill (one with a fighter adjacent keeps
         // the spider Rampaging) found food, and that ends the rotation instead.
-        if (
-          world.simVersion >= SIM_VERSION_V54_SPIDER_ROTATES_ENTRANCES &&
-          spider.rampageKillsThisRampage === 0
-        ) {
+        if (spider.rampageKillsThisRampage === 0) {
           const timedOut = campedEntrance(world, spider);
           if (timedOut !== null) {
             spider.rampageRotationEntranceId = timedOut.entranceId;
