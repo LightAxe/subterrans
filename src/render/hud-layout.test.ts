@@ -27,6 +27,8 @@ describe('buildHudLayout', () => {
       TOOLS: { x: 632, y: 36, w: 128, h: 40, BUTTON_W: 40, GAP: 4 },
       MINIMAP: { x: 632, y: 424, w: 160, h: 160 },
       SAVE_ICON: { x: 772, y: 8, w: 20, h: 20 },
+      // W3 — added after the legacy table; every other zone is unchanged.
+      OPPONENT_STATUS: { x: 504, y: 10, w: 260, h: 14 },
     };
     // C1 added ALARM_TOGGLE, a genuinely NEW zone, and #320 deliberately widened
     // VIEW_TOGGLE (80 → 128), UNDERGROUND_COLONY_TOGGLE (112 → 128) and
@@ -101,11 +103,27 @@ describe('buildHudLayout', () => {
     }
   });
 
+  it('keeps the opponent-status label clear of the STATS row and the save icon', () => {
+    const hud = buildHudLayout(DEFAULT_LAYOUT);
+    const label = hud.OPPONENT_STATUS;
+    // Right-anchored: sits entirely left of the save icon...
+    expect(label.x + label.w).toBeLessThanOrEqual(hud.SAVE_ICON.x);
+    // ...and entirely right of the stats row.
+    expect(label.x).toBeGreaterThanOrEqual(hud.STATS.x + hud.STATS.w);
+    // ...and inside the canvas.
+    expect(label.x).toBeGreaterThanOrEqual(0);
+    expect(label.y + label.h).toBeLessThanOrEqual(DEFAULT_LAYOUT.h);
+    // ...and above the right column: the tool palette and (#400) the spider-order chip.
+    expect(label.y + label.h).toBeLessThanOrEqual(hud.TOOLS.y);
+    expect(label.y + label.h).toBeLessThanOrEqual(hud.SPIDER_ORDER.y);
+  });
+
   it('reflows right/bottom-anchored zones with the layout size', () => {
     const hud = buildHudLayout(createLayoutContext(1000, 700));
     expect(hud.MINIMAP.x).toBe(832); // 1000 - 168
     expect(hud.MINIMAP.y).toBe(532); // 700 - 168
     expect(hud.SAVE_ICON.x).toBe(972); // 1000 - 28
+    expect(hud.OPPONENT_STATUS.x).toBe(704); // 1000 - 296
     expect(hud.SPEED.x).toBe(420); // 1000/2 - 80
     expect(hud.TRIANGLE.y).toBe(640); // 700 - 60
     // Top-left-anchored zones are size-independent.
