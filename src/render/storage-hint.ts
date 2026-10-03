@@ -237,13 +237,12 @@ export function advanceStorageHint(
     state.coveredSinceTick = null;
   }
   // Storage built since the caption was offered: the stall it was about is over.
-  if (
-    colony !== undefined &&
-    state.capacityAtOffer !== null &&
-    colonyFoodCapacity(colony) > state.capacityAtOffer
-  ) {
-    state.capacityAtOffer = colonyFoodCapacity(colony);
-    state.rearmDue = true;
+  if (colony !== undefined && state.capacityAtOffer !== null) {
+    const capacity = colonyFoodCapacity(colony);
+    if (capacity > state.capacityAtOffer) {
+      state.capacityAtOffer = capacity;
+      state.rearmDue = true;
+    }
   }
   // Re-arm (a no-op while it has not shown since the last re-arm) once the stall has
   // cleared and the cooldown is up, whatever storage says by then.

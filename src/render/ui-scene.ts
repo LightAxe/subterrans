@@ -349,6 +349,7 @@ import {
 } from './first-use-hints.js';
 import { hintStripState } from './hint-strip-state.js';
 import { spiderOrderChipState } from './spider-order-chip-state.js';
+import { queenStoresStripState } from './queen-stores-strip-state.js';
 import {
   SPIDER_ORDER_LABEL,
   drawSpiderOrderChip,
@@ -1298,6 +1299,16 @@ export class UIScene extends Phaser.Scene {
         toggleAntActivityPanel();
         return;
       }
+      // #413 — the queen's "Waiting for stores" strip, while it is drawn: a status
+      // line, not a control, so a click on it does nothing; and it is absorbed here,
+      // like any HUD click, as isPointerOverHUD keeps it from the world. (While the
+      // ant-activity popup is up the strip is hidden: the popup covers its spot.)
+      if (
+        queenStoresStripState.rect !== null &&
+        this.isInsideRect(pointer.x, pointer.y, queenStoresStripState.rect)
+      ) {
+        return;
+      }
       // Panel-specific click handling while visible:
       //   - click inside the panel body absorbs the click (no-op, don't fall through)
       //   - click outside the panel dismisses it the same way context menus
@@ -1624,6 +1635,8 @@ export class UIScene extends Phaser.Scene {
     if (!world) {
       // #400 — no world, no chip: don't leave its band masking world input.
       spiderOrderChipState.visible = false;
+      // #413 — nor the "Waiting for stores" strip.
+      queenStoresStripState.rect = null;
       return;
     }
 
@@ -1725,9 +1738,12 @@ export class UIScene extends Phaser.Scene {
         strip.y + 1,
       );
       this.queenStoresText.setVisible(true);
+      // The painted strip masks world input while it is up (isPointerOverHUD).
+      queenStoresStripState.rect = strip;
       if (import.meta.env.DEV) this.queenStoresShown = { text: line, color, rect: strip };
     } else {
       this.queenStoresText.setVisible(false);
+      queenStoresStripState.rect = null;
       this.queenStoresShown = null;
     }
 

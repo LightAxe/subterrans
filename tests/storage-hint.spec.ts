@@ -72,6 +72,8 @@ const PAST_RALLY_AND_HINT_MS = CAPTION_COURSE_MS + 300 + HOLD_MS + 400 + 1_000;
 /** Every army warning (a march, a gathering, an invasion: enemy-gathering.ts). */
 const ARMY_WARNING_PREFIX = 'An enemy army is';
 const RALLY_TEXT = 'Fighters will converge here.';
+/** onboarding-captions.ts foodMark: a Command tap on a food pile. */
+const FOOD_MARK_TEXT = 'Your foragers will prioritize this pile.';
 const CHAMBER_TEXT = 'Chambers give workers and brood a purpose. This one is a Food Storage.';
 /** ChamberType.FoodStorage. */
 const FOOD_STORAGE = 2;
@@ -85,6 +87,13 @@ interface TestHook {
   advanceCaptionClock?: (ms: number) => void;
   getCaptionQueue?: () => { active: string | null; pending: string | null };
   rallyPlayerAt?: (tileX: number, tileY: number) => boolean;
+  getPlayerRaidOrder?: () => {
+    raidType: number;
+    rally: { tileX: number; tileY: number } | null;
+  } | null;
+  getCameraState?: () => {
+    surface: { centerX: number; centerY: number; zoom: number };
+  };
   rallyColonyAt?: (colonyId: number, tileX: number, tileY: number) => boolean;
   isPaused?: () => boolean;
   placePlayerChamberAt?: (chamberType: number, tileX: number, tileY: number) => boolean;
@@ -229,9 +238,11 @@ async function simTick(page: Page): Promise<number> {
   );
 }
 
-type Variant = 'plain' | 'designate' | 'army' | 'starve' | 'room';
+type Variant = 'plain' | 'designate' | 'army' | 'starve' | 'room' | 'hidden';
 
 /** Seed the save.
+ *  - 'hidden' (#413): 'plain' with no Nursery (its tunnel is still carved), so the
+ *    queen is not ready to lay: no "Waiting for stores" line, and no hint.
  *  - 'room' (#413): 3 fighters, not 60, and 13.7 food stored (the larder 1500 fp,
  *    the pool 2000): the reserve (14.8 food) fits in the larder, so the queen only
  *    waits for food, which no one fetches (no foragers): she never lays, the
@@ -330,15 +341,17 @@ async function seedStorageSave(page: Page, variant: Variant): Promise<void> {
     // A completed Nursery on the row-6 tunnel between the Queen chamber (x 10..14)
     // and the door shaft (x 24).
     utils.carve(grid, 17, 5, 20, 7);
-    r.player.chambers.push({
-      chamberId: types.allocateEntityId(r.world),
-      chamberType: enums.ChamberType.Nursery,
-      foodSlot: -1,
-      posX: 17 << fixed.FP_SHIFT,
-      posY: 5 << fixed.FP_SHIFT,
-      width: 4,
-      height: 3,
-    });
+    if (variant !== 'hidden') {
+      r.player.chambers.push({
+        chamberId: types.allocateEntityId(r.world),
+        chamberType: enums.ChamberType.Nursery,
+        foodSlot: -1,
+        posX: 17 << fixed.FP_SHIFT,
+        posY: 5 << fixed.FP_SHIFT,
+        width: 4,
+        height: 3,
+      });
+    }
     for (let i = 0; i < 3; i++) utils.addFighter(r.world, id, 26 + i, 6, id);
     if (variant !== 'room') {
       // Three eggs, where the queen lays them (eggs do not eat; none hatches in a test).
@@ -504,6 +517,58 @@ async function storesLineDrawn(page: Page): Promise<{
     if (t?.getQueenStoresLine === undefined) throw new Error('no getQueenStoresLine hook');
     return t.getQueenStoresLine();
   });
+}
+
+interface CamView {
+  centerX: number;
+  centerY: number;
+  zoom: number;
+}
+
+/** The surface camera (getCameraState). */
+async function surfaceCamera(page: Page): Promise<CamView> {
+  return await page.evaluate(() => {
+    const t = (window as unknown as { __phase9_test?: TestHook }).__phase9_test;
+    if (t?.getCameraState === undefined) throw new Error('no getCameraState hook');
+    const c = t.getCameraState().surface;
+    return { centerX: c.centerX, centerY: c.centerY, zoom: c.zoom };
+  });
+}
+
+/** The player's rally (getPlayerRaidOrder), live. */
+async function playerRally(page: Page): Promise<{ tileX: number; tileY: number } | null> {
+  return await page.evaluate(() => {
+    const t = (window as unknown as { __phase9_test?: TestHook }).__phase9_test;
+    const o = t?.getPlayerRaidOrder?.();
+    if (o === undefined || o === null) throw new Error('no getPlayerRaidOrder hook / no world');
+    return o.rally;
+  });
+}
+
+/** The centre of canvas rect `r`, in page coordinates. */
+async function pageCentre(
+  page: Page,
+  r: { x: number; y: number; w: number; h: number },
+): Promise<{ x: number; y: number }> {
+  const box = await page.locator('canvas').first().boundingBox();
+  if (!box) throw new Error('canvas has no bounding box');
+  return { x: box.x + r.x + r.w / 2, y: box.y + r.y + r.h / 2 };
+}
+
+/** A left drag from the centre of canvas rect `r`, 120 px right and 60 px down. */
+async function dragFrom(page: Page, r: { x: number; y: number; w: number; h: number }) {
+  const c = await pageCentre(page, r);
+  await page.mouse.move(c.x, c.y);
+  await page.mouse.down();
+  await page.mouse.move(c.x + 120, c.y + 60, { steps: 8 });
+  await page.mouse.up();
+}
+
+/** A wheel notch toward zoom-in at the centre of canvas rect `r`. */
+async function wheelAt(page: Page, r: { x: number; y: number; w: number; h: number }) {
+  const c = await pageCentre(page, r);
+  await page.mouse.move(c.x, c.y);
+  await page.mouse.wheel(0, -300);
 }
 
 async function playerStores(page: Page): Promise<{
@@ -847,5 +912,56 @@ test.describe('#413 — storage is the population cap: the stall is taught', () 
     const shown = await captions(page);
     expect(shown.filter((c) => c.includes('Food Storage'))).toEqual([]);
     expect((await storesLine(page))?.color).toBe(STORES_WAITING_CSS);
+  });
+
+  test("the line's strip takes clicks, drags and the wheel off the world; hidden, it is world", async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    // Up (the 'plain' stall): a click, a drag and a wheel notch on the strip issue no
+    // command and leave the camera where it was.
+    await bootStorageSave(page, 'plain');
+    await expect.poll(() => storesLine(page), { timeout: 10_000 }).not.toBeNull();
+    const strip = (await storesLineDrawn(page))!.rect;
+    const camUp = await surfaceCamera(page);
+    await clickCanvasRect(page, strip);
+    await dragFrom(page, strip);
+    await wheelAt(page, strip);
+    const t0 = await simTick(page);
+    await expect.poll(() => simTick(page), { timeout: 20_000 }).toBeGreaterThan(t0 + 20);
+    expect(await playerRally(page)).toBeNull();
+    expect(await surfaceCamera(page)).toEqual(camUp);
+    const shownUp = await captions(page);
+    expect(shownUp).not.toContain(RALLY_TEXT);
+    expect(shownUp).not.toContain(FOOD_MARK_TEXT);
+    // Hidden (the same world with no Nursery: the queen is not held back), the same
+    // spot is world. The click is a Command tap there: a rally on empty ground (what
+    // lies under the strip in this world), or a food mark on a pile.
+    await bootStorageSave(page, 'hidden');
+    const tHidden = await simTick(page);
+    await expect.poll(() => simTick(page), { timeout: 20_000 }).toBeGreaterThan(tHidden + 5);
+    expect(await storesLine(page)).toBeNull();
+    expect(await surfaceCamera(page)).toEqual(camUp);
+    await clickCanvasRect(page, strip);
+    await expect
+      .poll(
+        async () =>
+          (await playerRally(page)) !== null || (await captions(page)).includes(FOOD_MARK_TEXT),
+        { timeout: 20_000 },
+      )
+      .toBe(true);
+    // The drag pans: down 60 px moves the camera up (the camera sits on the world's
+    // left edge, so the rightward part is clamped away; centerY is not).
+    const camBeforeDrag = await surfaceCamera(page);
+    await dragFrom(page, strip);
+    await expect
+      .poll(async () => (await surfaceCamera(page)).centerY, { timeout: 10_000 })
+      .not.toBe(camBeforeDrag.centerY);
+    // The wheel zooms.
+    const camBeforeWheel = await surfaceCamera(page);
+    await wheelAt(page, strip);
+    await expect
+      .poll(async () => (await surfaceCamera(page)).zoom, { timeout: 10_000 })
+      .not.toBe(camBeforeWheel.zoom);
   });
 });
