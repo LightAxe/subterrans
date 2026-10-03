@@ -500,13 +500,14 @@ declare global {
       /** #413 — the player colony's stores (colonyFoodTotal), storage capacity
        *  (colonyFoodCapacity), egg reserve (eggReserveFp) and what the stores must
        *  hold for the queen to lay next tick (storage-hint.ts queenStoresNeedFp), in
-       *  fp, read-only, so a spec can check the "Waiting for stores" line against what
+       *  fp, and its larvae, read-only, so a spec can check the "Waiting for stores" line against what
        *  gates the queen. Null before the first boot. Dev-build only. */
       getPlayerStores?(): {
         foodTotalFp: number;
         capacityFp: number;
         eggReserveFp: number;
         needFp: number;
+        larvaeCount: number;
       } | null;
       /** #372 — each caption this round, oldest first: the final full-opacity hold
        *  scheduled for it (ms) and whether it gave way. Dev-build only. */
@@ -929,6 +930,7 @@ export class GameScene extends Phaser.Scene {
           capacityFp: colonyFoodCapacity(c),
           eggReserveFp: eggReserveFp(this.world, c),
           needFp: queenStoresNeedFp(this.world, c),
+          larvaeCount: c.larvaeCount,
         };
       },
       getCaptionHolds: () => this.getUIScene()?.captionHolds?.() ?? [],

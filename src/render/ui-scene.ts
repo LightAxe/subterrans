@@ -1701,9 +1701,9 @@ export class UIScene extends Phaser.Scene {
 
     // #413 — "Waiting for stores: 24/30" while the egg reserve holds the queen
     // back (storage-hint.ts queenStoresWait, on the live world like the stats above):
-    // her stores against the reserve, in the warning colour once the reserve is more
-    // than storage can hold. Hidden while the ant-activity popup, which opens over
-    // the same spot, is up.
+    // her stores against what they must hold for her to lay (queenStoresNeedFp), in
+    // the warning colour once that is more than storage can hold. Hidden while the
+    // ant-activity popup, which opens over the same spot, is up.
     const storesWait =
       colony && !antActivityPanelState.visible ? queenStoresWait(world, PLAYER_COLONY_ID) : null;
     if (storesWait) {

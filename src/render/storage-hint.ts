@@ -34,7 +34,7 @@
 //     once the stores reach the reserve less one larva's runway, so they are near full
 //     (87–97% each time in a 10-game sweep of playtest 3's novice bot);
 //   - one or more, the stores lower (a famine, a raid, a load): STORAGE_SMALL_HINT_TEXT,
-//     "Your stores are too small …", which holds whatever the stores read.
+//     "Your Food Storage is too small …", which holds whatever the stores read.
 //
 // The condition has to hold for STORAGE_HINT_DWELL_TICKS before the hint shows, which
 // gives a player who is about to designate a larder a moment to do it (a designated
@@ -96,9 +96,11 @@ export const STORAGE_HINT_HOLD_MS = 4000;
 export const STORAGE_FULL_HINT_TEXT =
   'Your stores are full — build another Food Storage so your queen can keep laying.';
 
-/** #413 — the same, with the stores lower than that: the cause, not the symptom. */
+/** #413 — the same, with the stores lower than that: the cause, not the symptom (not
+ *  "stores", which on the HUD is the food count: in a famine that would read as "too
+ *  little food"). */
 export const STORAGE_SMALL_HINT_TEXT =
-  'Your stores are too small for your queen to keep laying — build another Food Storage.';
+  'Your Food Storage is too small for your queen to keep laying — build another.';
 
 /** #413 — "full", for the hint's copy: the stores at least 3/4 of capacity (the HUD
  *  Food count reads nearly full). */

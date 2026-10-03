@@ -1,8 +1,9 @@
 // storage-hint.test.ts — #395: "Build a Food Storage chamber so your queen can lay
 // eggs." shows when storage is what stops the queen laying (V70 egg reserve), once
 // per spell, re-armed after storage has covered the reserve for a while. (#413: with
-// a larder already, the hint says the stores are full; the full-larder stall, the
-// cooldown and the "Waiting for stores" line are in storage-hint-stall.test.ts.)
+// a larder already the hint says the stores are full, or the Food Storage too small;
+// the full-larder stall, the cooldown and the "Waiting for stores" line are in
+// storage-hint-stall.test.ts.)
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   advanceStorageHint,

@@ -4,7 +4,9 @@
 // chamber that would cover it. Its 4 s hold gives way to an army warning (#394) owed
 // behind it, as the army warning's own long hold gives way to news owed behind it.
 // These fixtures have a Food Storage chamber already, so the hint reads "Your stores
-// are full — …" (#413; with none it says to build one, storage-hint.test.ts).
+// are full — …", or with the stores under 3/4 full (the 'starve' save) "Your Food
+// Storage is too small — …" (#413; with none it says to build one,
+// storage-hint.test.ts).
 //
 // #413 (the last describe): the opening's full-larder stall, built by the colony's
 // own workers from the standard opening, shows that hint and the queen's
@@ -30,7 +32,9 @@
 // and 3 workers) tops the one larder's capacity: #413's full-larder stall. The
 // larder and the pool start full, which keeps everyone fed for the length of a test
 // and keeps the hint's copy "Your stores are full" (no one forages, so the stores
-// only fall: slowly, 3 fighters and the queen eating). Before saving through the real
+// only fall: slowly, 3 fighters and the queen eating about 2.2 fp a tick, under 3/4
+// full near tick 830 — a test that offers the hint later would get the "too small"
+// copy). Before saving through the real
 // save path (manualSave), the page checks that storage is short, by no more than one
 // Food Storage chamber would close. A reload boots the save through Continue.
 
@@ -49,8 +53,7 @@ import {
 const HINT = 'Your stores are full — build another Food Storage so your queen can keep laying.';
 /** storage-hint.ts STORAGE_SMALL_HINT_TEXT: the same with the stores under 3/4 full
  *  (the 'starve' save: none at all). */
-const SMALL_HINT =
-  'Your stores are too small for your queen to keep laying — build another Food Storage.';
+const SMALL_HINT = 'Your Food Storage is too small for your queen to keep laying — build another.';
 /** hud-stats.ts HUD_STATS_COLORS: the "Waiting for stores" line's two colours (#413). */
 const STORES_CAPPED_CSS = '#ddaa22';
 const STORES_WAITING_CSS = '#bbbbbb';
@@ -96,6 +99,7 @@ interface TestHook {
     capacityFp: number;
     eggReserveFp: number;
     needFp: number;
+    larvaeCount: number;
   } | null;
 }
 
@@ -502,9 +506,13 @@ async function storesLineDrawn(page: Page): Promise<{
   });
 }
 
-async function playerStores(
-  page: Page,
-): Promise<{ foodTotalFp: number; capacityFp: number; eggReserveFp: number; needFp: number }> {
+async function playerStores(page: Page): Promise<{
+  foodTotalFp: number;
+  capacityFp: number;
+  eggReserveFp: number;
+  needFp: number;
+  larvaeCount: number;
+}> {
   return await page.evaluate(() => {
     const s = (
       window as unknown as { __phase9_test?: TestHook }
@@ -794,13 +802,13 @@ test.describe('#413 — storage is the population cap: the stall is taught', () 
       .toBe(STORES_CAPPED_CSS);
     // Paused, the line and the colony's numbers come from the same world: the stores
     // (the Food count's number) against what they must hold for her to lay (the egg
-    // reserve and the queen's next meal; no larvae yet), which tops the 28 the larder
-    // holds.
+    // reserve and the next meal of the queen and of each larva), which tops the 28 the
+    // larder holds.
     await setPaused(page, true);
     const stores = await playerStores(page);
     expect(stores.capacityFp).toBe(28 * 256);
     expect(stores.eggReserveFp).toBeGreaterThan(stores.capacityFp);
-    expect(stores.needFp - stores.eggReserveFp).toBe(2);
+    expect(stores.needFp - stores.eggReserveFp).toBe(2 + stores.larvaeCount);
     const want = `Waiting for stores: ${stores.foodTotalFp >> 8}/${Math.ceil(stores.needFp / 256)}`;
     await expect.poll(() => storesLine(page)).toEqual({ text: want, color: STORES_CAPPED_CSS });
     // Its strip, measured in the real renderer, sits under the stats bar and ends left
