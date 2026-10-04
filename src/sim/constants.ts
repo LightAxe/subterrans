@@ -110,16 +110,6 @@ export const FOOD_PER_ANT_BASELINE = 60;
 export const QUEEN_EGG_INTERVAL_DIFFICULTY_NUMERATOR = [5, 4, 3] as const;
 
 /**
- * S5 — Match time cap in ticks, for worlds before V67 only. In those worlds both
- * queens surviving to this tick triggers TimeoutTiebreak; winner determined by living
- * worker count. 24 000 ticks = 20 minutes at 20 Hz. From V67 (#376,
- * SIM_VERSION_V67_NO_MATCH_TIMEOUT) a match has no time limit and nothing reads this
- * for a new world.
- */
-// structural — frozen legacy value: only pre-V67 saves read it, so a retune could only change how old saves' matches end, never balance.
-export const MATCH_TIMEOUT_TICKS = 24_000;
-
-/**
  * S5 — Colony food-store threshold (fixed-point) below which a colony is
  * considered "too starved to recover" for Stalemate detection.
  * Both colonies must be below this threshold AND all food piles must be gone.

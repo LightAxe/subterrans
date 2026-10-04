@@ -1,20 +1,20 @@
 // #376 (V67) — no match timeout, through the whole tick.
 //
-// Up to V66 a match with both queens alive at MATCH_TIMEOUT_TICKS (24 000) ended
-// there, won by living worker count. From V67 it goes on until a queen dies. Running
-// a real match to tick 24 000 takes seconds per seed, so each world here is a fresh
+// Before #376 a match with both queens alive at tick 24 000 (the old cap) ended there,
+// won by living worker count. Now it goes on until a queen dies. Running a real
+// match to tick 24 000 takes seconds per seed, so each world here is a fresh
 // scenario moved to just before the old cap (its hunger clocks moved with it, as a
 // real long session would have them), then played with the enemy AI through it.
 //
 // Pins:
-//   - a new (V67) world crosses the old cap with no outcome and no round_end, and
-//     then ends the ordinary way, when a queen dies — with that death's end-screen
-//     copy, never the timeout's;
-//   - a V66 world still ends on the tick it always did, won by worker count, with
-//     the timeout copy;
-//   - save/load exactly at the old cap: a V67 world plays on byte-identically to
-//     the unsaved one (the V66-save arm was retired by #400: MIN_ACCEPTED is V71 or later);
-//   - control: a queen death long before the old cap still ends a V67 match.
+//   - a new world crosses the old cap with no outcome and no round_end, and then
+//     ends the ordinary way, when a queen dies — with that death's end-screen copy,
+//     never the timeout's;
+//   - save/load exactly at the old cap: the world plays on byte-identically to the
+//     unsaved one;
+//   - control: a queen death long before the old cap still ends the match.
+// (#400 retired the V66-save arm and #408 the V66-world arm, with the gate:
+// MIN_ACCEPTED is V71 or later, so no V66 world exists.)
 //
 // #388 — such a long match can fill the 2000-event telemetry buffer with structural
 // events. The event that ends it must still be recorded: with the buffer full, a
@@ -23,7 +23,7 @@
 //
 // #389 — the end screen's cause line (the survey's line; the GameOver overlay's
 // fallback when there is no narrative) names how the match really ended — a
-// stalemate or timeout with both queens alive is never "both queens died" — even
+// stalemate with both queens alive is never "both queens died" — even
 // with the event that ended it lost.
 import { describe, it, expect } from 'vitest';
 import { tick } from '../sim/tick.js';
@@ -31,13 +31,11 @@ import { createScenario } from '../sim/scenario.js';
 import {
   allocateEntityId,
   LATEST_SIM_VERSION,
-  SIM_VERSION_V66_QUEEN_STARVES_HP,
   SIM_VERSION_V67_NO_MATCH_TIMEOUT,
   type WorldState,
 } from '../sim/types.js';
 import {
   ENEMY_COLONY_ID,
-  MATCH_TIMEOUT_TICKS,
   PLAYER_COLONY_ID,
   WORKER_BASE_SPEED,
   WORKER_LIFESPAN_TICKS,
@@ -64,24 +62,23 @@ import {
 import { hashWorldState } from './world-hash.js';
 import { deserializeWorldState, serializeWorldState } from './save.js';
 
-const V66 = SIM_VERSION_V66_QUEEN_STARVES_HP; // the last version with the Timeout
+/** The match cap before #376 (V67): both queens alive at this tick ended the match. */
+const OLD_MATCH_CAP_TICKS = 24_000;
 /** Where each world starts: 40 ticks short of the old cap. */
-const START_TICK = MATCH_TIMEOUT_TICKS - 40;
+const START_TICK = OLD_MATCH_CAP_TICKS - 40;
 /** Copy that only the timeout's end screen uses. */
 const TIMEOUT_COPY = /timed out|time ran out/i;
 
 /**
- * A fresh scenario at `simVersion` (LATEST when omitted), moved to START_TICK, with
- * one extra player worker so the worker count has a winner (the player). The
+ * A fresh scenario moved to START_TICK, with one extra player worker so the worker
+ * count has a winner (the player): the old timeout would have ended the match. The
  * queens and workers are just fed, as they would be in a long session. Other
  * tick-stamped clocks stay at 0, so schedules keyed on elapsed time (eggs, the
  * spider, the AI's minimum ticks) all come due at once: an unrealistic world, but
- * every near-cap V67 case here has a V66 twin on the same seed and fixture, so the
- * A/B holds.
+ * the pins here hold for any world past the old cap.
  */
-function worldNearOldCap(seed: number, simVersion?: number): WorldState {
+function worldNearOldCap(seed: number): WorldState {
   const world = createScenario(seed, 'Normal');
-  if (simVersion !== undefined) world.simVersion = simVersion;
   const player = world.colonies[PLAYER_COLONY_ID]!;
   const twin = player.workers[0]!; // the extra worker starts where this one stands
   const id = allocateEntityId(world);
@@ -131,12 +128,12 @@ describe('#376 V67 — a match has no time limit (whole tick)', () => {
     expect(world.simVersion).toBe(LATEST_SIM_VERSION);
     expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V67_NO_MATCH_TIMEOUT);
     // Through the old cap and well past it: nothing ends the match.
-    while (world.tick < MATCH_TIMEOUT_TICKS + 200) {
+    while (world.tick < OLD_MATCH_CAP_TICKS + 200) {
       expect(step(world), `tick ${world.tick}`).toBe(GameOutcome.None);
     }
     expect(roundEnds(world)).toBe(0);
-    // Non-vacuity: both queens alive and a worker-count winner, so a V66 world
-    // would have ended at the cap (the V66 test below).
+    // Non-vacuity: both queens alive and a worker-count winner, so the old timeout
+    // would have ended the match at the cap, a Victory.
     for (const cid of [PLAYER_COLONY_ID, ENEMY_COLONY_ID]) {
       expect(world.ants.alive[world.colonies[cid]!.queenEntityId], `queen ${cid}`).toBe(1);
     }
@@ -162,39 +159,13 @@ describe('#376 V67 — a match has no time limit (whole tick)', () => {
     expect(attribution.narrativeSeed).not.toMatch(TIMEOUT_COPY);
   }, 60_000);
 
-  it('a V66 world still ends at the cap, won by worker count, with the timeout copy', () => {
-    const world = worldNearOldCap(7, V66);
-    let outcome: GameOutcome = GameOutcome.None;
-    let endTick = -1;
-    while (world.tick < MATCH_TIMEOUT_TICKS + 5) {
-      outcome = step(world);
-      if (outcome !== GameOutcome.None) {
-        endTick = world.tick;
-        break;
-      }
-    }
-    // The tick run with world.tick === MATCH_TIMEOUT_TICKS ends it; tick() has
-    // advanced the counter by one on return.
-    expect(endTick).toBe(MATCH_TIMEOUT_TICKS + 1);
-    expect(outcome).toBe(GameOutcome.Victory);
-    const ev = world.events.find((e) => e.type === 'round_end');
-    expect(ev?.type === 'round_end' && ev.payload).toEqual({
-      reason: 'TimeoutTiebreak',
-      playerWorkerCount: livingWorkers(world, PLAYER_COLONY_ID),
-      aiWorkerCount: livingWorkers(world, ENEMY_COLONY_ID),
-    });
-    const attribution = buildOutcomeAttribution(world.events, 'Victory');
-    expect(attribution.primaryCause).toBe('TimeoutTiebreak');
-    expect(attribution.narrativeSeed).toBe('The round timed out; your colony outlasted the enemy.');
-  }, 60_000);
-
-  it('save/load exactly at the old cap: a V67 world plays on byte-identically, with no outcome', () => {
+  it('save/load exactly at the old cap: the world plays on byte-identically, with no outcome', () => {
     const world = worldNearOldCap(11);
-    while (world.tick < MATCH_TIMEOUT_TICKS) step(world);
+    while (world.tick < OLD_MATCH_CAP_TICKS) step(world);
     const loaded = saveLoad(world);
     expect(loaded.simVersion).toBe(world.simVersion); // sticky
     expect(hashWorldState(loaded)).toBe(hashWorldState(world));
-    while (world.tick < MATCH_TIMEOUT_TICKS + 100) {
+    while (world.tick < OLD_MATCH_CAP_TICKS + 100) {
       expect(step(world), `live tick ${world.tick}`).toBe(GameOutcome.None);
       expect(step(loaded), `loaded tick ${loaded.tick}`).toBe(GameOutcome.None);
       if (world.tick % 10 === 0) {
@@ -208,10 +179,7 @@ describe('#376 V67 — a match has no time limit (whole tick)', () => {
     }
   }, 60_000);
 
-  // (#400 retired 'a V66 save loaded at the old cap still times out': MIN_ACCEPTED is
-  // V71 or later, so no V66 save loads.)
-
-  it('control: a queen death well before the old cap ends a V67 match, with no timeout copy', () => {
+  it('control: a queen death well before the old cap ends the match, with no timeout copy', () => {
     const world = worldNearOldCap(7);
     // eslint-disable-next-line no-restricted-syntax -- test fixture: stage the world tick
     world.tick = 5000;
@@ -296,7 +264,7 @@ describe('#388 — a full event buffer still records the end of the match', () =
   it('a queen death after the buffer filled: cause, narrative and roundEndReason survive', () => {
     const world = worldNearOldCap(7);
     fillEventBuffer(world);
-    while (world.tick < MATCH_TIMEOUT_TICKS + 50) step(world); // play on with it full
+    while (world.tick < OLD_MATCH_CAP_TICKS + 50) step(world); // play on with it full
     let outcome: GameOutcome = GameOutcome.None;
     const deadline = world.tick + 400;
     while (outcome === GameOutcome.None && world.tick < deadline) {
@@ -403,19 +371,5 @@ describe('#389 — the end-screen title and cause line name the real round-end r
     expect(endOfMatchView(world, outcome).subtitle).toBe('Your queen starved');
     loseTerminalEvents(world);
     expect(endOfMatchView(world, outcome).subtitle).toBe('');
-  }, 60_000);
-
-  it('a V66 timeout: says time ran out — and still so with its round_end lost', () => {
-    const world = worldNearOldCap(7, V66);
-    let outcome: GameOutcome = GameOutcome.None;
-    while (outcome === GameOutcome.None && world.tick <= MATCH_TIMEOUT_TICKS) outcome = step(world);
-    expect(outcome).toBe(GameOutcome.Victory); // the player has the extra worker
-    expect(endOfMatchView(world, outcome).subtitle).toBe(
-      'Time ran out — your colony had more workers',
-    );
-    loseTerminalEvents(world);
-    const view = endOfMatchView(world, outcome);
-    expect(view.narrative).toBeNull();
-    expect(view.subtitle).toBe('Time ran out — your colony had more workers');
   }, 60_000);
 });

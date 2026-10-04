@@ -7,8 +7,7 @@
 
 import { GameOutcome } from '../sim/game-over.js';
 import type { SimEvent } from '../sim/telemetry.js';
-import { SIM_VERSION_V67_NO_MATCH_TIMEOUT, type WorldState } from '../sim/types.js';
-import { MATCH_TIMEOUT_TICKS } from '../sim/constants.js';
+import type { WorldState } from '../sim/types.js';
 import { isAlive } from '../sim/ant/ant-store.js';
 import type { RoundEndReason } from './playtrace-upload.js';
 
@@ -24,8 +23,9 @@ export type QueenDeathCause = Extract<SimEvent, { type: 'queen_death' }>['payloa
  * Used by UIScene to configure the GameOver overlay and survey titles.
  * `reason` is roundEndReasonAt's: #389 — a MutualDestruction is a double queen
  * death only when a queen death ended the match; a tiebreak draw (the stalemate,
- * or a pre-V67 timeout on equal worker counts) leaves both queens alive, and an
- * unknown reason is no evidence either way, so those read DRAW.
+ * or a TimeoutTiebreak round_end on equal worker counts, which the sim no longer
+ * emits) leaves both queens alive, and an unknown reason is no evidence either way,
+ * so those read DRAW.
  */
 export function formatOutcomeTitle(
   outcome: GameOutcome,
@@ -82,13 +82,13 @@ export function queenDeathCauseAt(events: readonly SimEvent[], deathTick: number
  *
  * Without one (an event buffer that lost it, as one could before #388), the world
  * still tells: a dead queen means a queen death. With every queen alive only a
- * tiebreak ends a match — the timeout when checkTiebreaks' timeout test held on
- * that tick (worlds before V67 only, #376), otherwise the stalemate, which the
- * sim always ends as a draw. null when even that cannot say: every queen alive
- * and an outcome no tiebreak gives (the forceGameOver dev seam's Defeat).
+ * tiebreak ends a match, and with no match timeout (#376, V67) that is the
+ * stalemate, which the sim always ends as a draw. null when even that cannot say:
+ * every queen alive and an outcome no tiebreak gives (the forceGameOver dev seam's
+ * Defeat).
  */
 export function roundEndReasonAt(
-  world: Pick<WorldState, 'events' | 'colonies' | 'ants' | 'simVersion'>,
+  world: Pick<WorldState, 'events' | 'colonies' | 'ants'>,
   deathTick: number,
   outcome: GameOutcome,
 ): RoundEndReason | null {
@@ -102,9 +102,6 @@ export function roundEndReasonAt(
     if (!Object.hasOwn(world.colonies, key)) continue;
     const colony = world.colonies[Number(key)];
     if (colony !== undefined && !isAlive(world.ants, colony.queenEntityId)) return 'QueenDeath';
-  }
-  if (world.simVersion < SIM_VERSION_V67_NO_MATCH_TIMEOUT && deathTick >= MATCH_TIMEOUT_TICKS) {
-    return 'TimeoutTiebreak';
   }
   return outcome === GameOutcome.MutualDestruction ? 'StalemateTiebreak' : null;
 }
@@ -147,8 +144,9 @@ export function formatCauseSubtitle(
       : '';
   }
   if (reason === 'TimeoutTiebreak') {
-    // Worlds before V67 only (#376): both queens alive at the match time cap,
-    // decided by living worker count.
+    // Both queens alive at the old match time cap, decided by living worker
+    // count. The sim no longer emits it (#376 removed the timeout at V67; #408
+    // reaped its gate); the copy stays with the wire enum's value.
     switch (outcome) {
       case GameOutcome.Victory:
         return 'Time ran out — your colony had more workers';
