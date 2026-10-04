@@ -39,7 +39,7 @@ import {
   surfaceGoalDistance,
 } from '../surface-routing.js';
 import { UndergroundTileState, Zone, ugGet, type UndergroundGrid } from '../terrain.js';
-import { SIM_VERSION_V62_AI_NEST_DEFENCE, type WorldState } from '../types.js';
+import type { WorldState } from '../types.js';
 import {
   pickInvaderUndergroundStep,
   pickNearestHostileUnderground,
@@ -48,7 +48,6 @@ import {
   fighterIsRecalled,
   fighterWalksHomeToEat,
   invaderExitsByEntranceField,
-  invaderTakesReachableExit,
   defenderWalksToEntrance,
   sentryHoldsBelow,
   sentryPassesThroughFriends,
@@ -656,9 +655,8 @@ export function tickAntMovement(
       // its colony's entrances, closed ones included: a designated shaft is dug from
       // the top) down the surface goal field seeded at that entrance. A closed
       // entrance is not on the entrance flow field, and the field's nearest open
-      // entrance need not be the digger's target. Before V57 it stepped in a
-      // straight line and an obstacle in the way pinned it. Off the goal field it
-      // keeps the straight-line step below. (The policy lives in ant-dig:
+      // entrance need not be the digger's target. Off the goal field it keeps the
+      // straight-line step below. (The policy lives in ant-dig:
       // surfaceDiggerRoutesToEntrance; the step in entrance-routed-step.)
       if (!stepped && surfaceDiggerRoutesToEntrance(world, id)) {
         const step = entranceRoutedStep(world, posX, posY, entranceTargetX, entranceTargetY);
@@ -949,18 +947,15 @@ export function tickAntMovement(
               }
             }
             const exitGrid = world.undergroundGrids[gridColonyId];
-            // V52 (#290 PR 5): a hauler only gets here off its nest's entrance
-            // flow field (above); it takes the same reachable-exit step.
-            // #346 (V55): so does a recalled invader (rally cleared) off that field.
-            // Which invaders take it: invaderTakesReachableExit.
-            if (exitGrid !== undefined && invaderTakesReachableExit(world, id, hauling)) {
+            // Any invader on the recall route (isRecalling, above) takes the
+            // reachable-exit step whenever this nest has entrances (the guard
+            // above) and a grid.
+            if (exitGrid !== undefined) {
               // V51 (#290 PR 4, D11): a hungry invader walks out by the
               // wall-aware BFS step (hungryExitStep), toward the first OPEN
               // entrance of this nest it can actually reach, so neither a bend
               // in the tunnel nor a nearer, unconnected stub shaft can pin it
-              // until it starves. Before V55 a plain recalled invader (fed, not
-              // hauling) took the straight-line step below at the nearest
-              // entrance, and a U-bend in the tunnel pinned it (#346).
+              // until it starves.
               const step = hungryExitStep(
                 world,
                 exitGrid,
@@ -1051,10 +1046,7 @@ export function tickAntMovement(
           // the raiders instead of stacking behind one duel. No invader reachable:
           // step at 10c's target.
           let step = NO_FREE_HOSTILE;
-          if (
-            world.simVersion >= SIM_VERSION_V62_AI_NEST_DEFENCE &&
-            defenderChasesInvader(world, id)
-          ) {
+          if (defenderChasesInvader(world, id)) {
             step = invaderHuntStep(world, id, ants.colonyId[id]!, claimsNoTile, true);
           }
           if (step === NO_FREE_HOSTILE) step = defenderUndergroundStep(world, id);
@@ -1941,8 +1933,8 @@ export function tickAntMovement(
 // ---------------------------------------------------------------------------
 /**
  * V51 (#290 PR 4, D11) — the step a hungry invader at (tileX, tileY) in a foreign
- * nest takes toward an exit (from V52 also a hauler off its field, from V55 #346
- * also a recalled invader off it): the nest's OPEN entrances in the recall order
+ * nest takes toward an exit (also a hauler off its field (V52) and a recalled
+ * invader off it (#346, V55)): the nest's OPEN entrances in the recall order
  * (nearest by |dx| + y, ties to the lower index), the first one whose shaft top
  * (column, y 0) the wall-aware BFS (pickInvaderUndergroundStep) can reach. An
  * "open" entrance only needs its top two shaft tiles dug, so a nearer stub need

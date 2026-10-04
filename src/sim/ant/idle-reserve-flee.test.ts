@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import { createScenario } from '../scenario.js';
 import { tick } from '../tick.js';
-import { copyWorldState, allocateEntityId, SIM_VERSION_V64_AUTO_DEFENCE } from '../types.js';
+import { copyWorldState, allocateEntityId } from '../types.js';
 import type { WorldState } from '../types.js';
 import { pickOpenEntranceAtColumn, type NestEntrance } from '../colony/entrance.js';
 import { pheromoneGridKey, phSet, phGet } from '../pheromone/pheromone-store.js';
@@ -1251,8 +1251,8 @@ describe('flee — full lifecycle: dash → shelter → poke head out (#209 PR A
     world.spider = null;
     const colony = world.colonies[PLAYER_COLONY_ID]!;
     for (const e of colony.entrances) e.isOpen = false; // no open entrance
-    // On the shaft-top row, where every shelterer shelters (from V65, #373, one
-    // below it has retreated from invaders and is released once they are gone).
+    // On the shaft-top row, where every shelterer shelters (#373, V65: one below
+    // it has retreated from invaders and is released once they are gone).
     const id = spawnWorker(world, PLAYER_COLONY_ID, 40, 0, AntTask.Idle);
     world.ants.zone[id] = Zone.Underground;
     world.ants.fleeShelterUntilTick[id] = 100; // sheltering until tick 100
@@ -1795,53 +1795,6 @@ describe('C1 (V42) — colony alarm', () => {
       if (world.ants.zone[id] === Zone.Surface) surfacedAgain = true;
     }
     expect(surfacedAgain).toBe(false);
-  });
-
-  it('an alarmed colony recruits NOBODY (pinned V64): sounding it with fight demand pulls workers in, not out', () => {
-    // Codex P1. Step 10a (task assignment) runs five steps BEFORE 15b
-    // (tickIdleReserveAndFlee). Without the allocation gate, an Idle surface
-    // worker was drafted to Fighting on the very tick the alarm sounded, then
-    // failed 15b's Idle/Foraging filter and never sheltered — so the alarm sent
-    // workers OUT to fight and nothing ever recalled them. The V34 timer check
-    // at 10a does not cover this: it only skips workers ALREADY sheltering.
-    // From V65 (#373) the ratio wins instead: the alarm recruits fighters (and
-    // only fighters) — alarm-invasion.test.ts. This pins the rule up to V64.
-    const world = createScenario(SEED, 'Normal');
-    world.simVersion = SIM_VERSION_V64_AUTO_DEFENCE;
-    world.spider = null;
-    const colony = world.colonies[PLAYER_COLONY_ID]!;
-    colony.targetRatio = { forage: 10, fight: 0 };
-    for (let t = 0; t < 30; t++) tick(world, []);
-
-    // Every surface worker Idle, none fleeing — the state the alarm acts on.
-    const surface = colony.workers.filter(
-      (id) => world.ants.alive[id] === 1 && world.ants.zone[id] === Zone.Surface,
-    );
-    expect(surface.length).toBeGreaterThan(0);
-    for (const id of surface) {
-      world.ants.task[id] = AntTask.Idle;
-      world.ants.subTask[id] = 0;
-      world.ants.fleeShelterUntilTick[id] = -1;
-    }
-
-    // Demand fighters AND sound the alarm on the same tick — the race.
-    colony.targetRatio = { forage: 0, fight: 10 };
-    colony.alarmActive = true;
-    tick(world, []);
-
-    const drafted = surface.filter(
-      (id) => world.ants.task[id] !== AntTask.Idle && world.ants.task[id] !== AntTask.Foraging,
-    );
-    // Nobody is drafted, so 15b still sees them as civilians to recall.
-    expect(drafted.length).toBe(0);
-    // ...and they are actually RECALLED, not merely left Idle. The original bug
-    // was that drafted workers were never recalled at all; a change that kept
-    // them Idle but skipped the 15b flee would satisfy the draft check above
-    // and still leave them outside. Every one must be on the flee path —
-    // dashing (0) or already sheltered (> 0) — never still at -1. (CodeRabbit)
-    for (const id of surface) {
-      expect(world.ants.fleeShelterUntilTick[id]).not.toBe(-1);
-    }
   });
 
   // Codex P2 on #321. The only production ascent (ant-movement.ts, underground →

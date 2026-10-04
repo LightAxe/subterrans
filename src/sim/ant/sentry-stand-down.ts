@@ -5,7 +5,7 @@ import { FIGHT_AGGRO_RADIUS, SURFACE_GRID_HEIGHT, SURFACE_GRID_WIDTH } from '../
 import { AntTask, FightingSubState } from '../enums.js';
 import { FP_SHIFT } from '../fixed.js';
 import { Zone } from '../terrain.js';
-import { SIM_VERSION_V64_AUTO_DEFENCE, type WorldState } from '../types.js';
+import type { WorldState } from '../types.js';
 import type { ColonyRecord } from '../colony/colony-store.js';
 import { getScratch } from '../scratch.js';
 
@@ -35,9 +35,9 @@ const STAND_DOWN_SPIDER_RADIUS = FIGHT_AGGRO_RADIUS * 3;
  * A released ant is Idle for step 10a THIS tick.
  */
 export function standDownSurplusSentries(world: WorldState, colony: ColonyRecord): void {
-  // (Any rally, an AI probe's included: from V64 the fighters outside a probe's
-  // cohort are sentries, but none stands down while the probe runs — kept as it
-  // was, so the probe's cohort-only rule changes nothing here.)
+  // (Any rally, an AI probe's included: the fighters outside a probe's cohort
+  // (#372, V64) are sentries, but none stands down while the probe runs, so the
+  // probe's cohort-only rule changes nothing here.)
   if (colony.rallyPoint != null) return;
   if (colony.alarmActive === true) return;
   if (world.spiderPriorityColonyId === colony.colonyId) return;
@@ -53,12 +53,10 @@ export function standDownSurplusSentries(world: WorldState, colony: ColonyRecord
   // 10c's breach (step 8 runs first and the scratch must not be read before it is
   // rebuilt), so an intruder no shaft reaches also holds the stand-down: rare, and
   // keeping a fighter too many is the safe side.
-  if (world.simVersion >= SIM_VERSION_V64_AUTO_DEFENCE) {
-    for (let o = 0; o < ants.alive.length; o++) {
-      if (ants.alive[o] !== 1 || ants.zone[o] !== Zone.Underground) continue;
-      if (ants.currentGridColonyId[o] === colony.colonyId && ants.colonyId[o] !== colony.colonyId) {
-        return;
-      }
+  for (let o = 0; o < ants.alive.length; o++) {
+    if (ants.alive[o] !== 1 || ants.zone[o] !== Zone.Underground) continue;
+    if (ants.currentGridColonyId[o] === colony.colonyId && ants.colonyId[o] !== colony.colonyId) {
+      return;
     }
   }
 
