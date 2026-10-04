@@ -84,7 +84,7 @@ The review checklist:
 - [ ] No variable timestep usage
 - [ ] Tests cover new simulation logic
 - [ ] Deterministic replay is not broken (replay tests pass)
-- [ ] A sim-behaviour change bumps `LATEST_SIM_VERSION` and sets `MIN_ACCEPTED_SIM_VERSION` to the same value, with **no** `simVersion >=` gate (pre-1.0 policy, below)
+- [ ] A sim-behaviour change bumps `LATEST_SIM_VERSION` and sets `MIN_ACCEPTED_SIM_VERSION` to the same value, with **no** `simVersion >=` gate (pre-1.0 policy, below; `no-new-gates.test.ts` fails on one)
 - [ ] New bit-packed keys or grid-size assumptions carry a compile-time guard (entrance-flow.ts pattern) + a docs/phase-4-preflight.md row
 
 ## Review guidelines
@@ -120,7 +120,11 @@ Use strong language deliberately — these are non-negotiable invariants of the 
   - LATEST is the newest registered version;
   - once past the transition below, MIN equals LATEST.
 
-  The "no gates" rule itself is a review rule; the test does not check it.
+  The "no gates" rule is a review rule, and `src/platform/no-new-gates.test.ts` backs it mechanically. In non-test code under `src/`, `scripts/` and `bench/`, the test fails on two things:
+  - any `SIM_VERSION_V<n>` reference outside the registry's declarations in `src/sim/types.ts` and the `MIN_ACCEPTED_SIM_VERSION` line (and its import) in `src/platform/save.ts`;
+  - any relational comparison of a `simVersion` value outside `snapshot-window.ts`'s window check.
+
+  A version bump touches only those two places, so the guard never fires on one. The guard is deleted at 1.0 (ARCHITECTURE.md Principle 7, "Re-enabling simVersion gates (post-1.0)").
 - **Still required. Block on these:**
   - **Determinism within a build:** the same seed and commands give the same game, proven by replay tests and save/load-continue tests.
   - **CLNY-08 colony parity:** every rule is colony-agnostic.
@@ -146,7 +150,7 @@ Use strong language deliberately — these are non-negotiable invariants of the 
   Do not raise them. Authors should decline them by citing this section. The valid `simVersion` findings are:
   - a sim behaviour change with no bump;
   - a bump that leaves MIN behind LATEST (after the transition);
-  - a new gate;
+  - a new gate (`no-new-gates.test.ts` also fails on one);
   - a bump for a bare constant retune or a render-only change.
 
 ### Sim/render boundary (FNDN-04, FNDN-07)

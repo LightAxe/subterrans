@@ -36,6 +36,10 @@ export type EntityId = number; // incrementing counter from 0, no recycling per 
  * change adds a SIM_VERSION_V* constant, points LATEST_SIM_VERSION at it, and sets
  * MIN_ACCEPTED_SIM_VERSION (platform/save.ts) to the same value. Do NOT wrap the new
  * behaviour in a `simVersion >=` gate; older saves are rejected instead.
+ * src/platform/no-new-gates.test.ts fails on a SIM_VERSION_V* reference outside this
+ * file's top-level declarations (the entries and the LATEST line) and the MIN line
+ * (and its import) in save.ts, and on a `simVersion` comparison anywhere but the
+ * snapshot window check.
  *
  * HISTORY: the entries below, up to V70, record the earlier gated policy. Their gates
  * let an older save replay under the algorithm it was recorded with. #247, #342 and

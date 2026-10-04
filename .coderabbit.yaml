@@ -123,15 +123,18 @@ reviews:
         The pre-1.0 gates were reaped in #408, so none remain: in non-test
         code, a SIM_VERSION_V* reference outside the registry's declarations
         (src/sim/types.ts) and the MIN_ACCEPTED_SIM_VERSION line (and its
-        import) in src/platform/save.ts is a new gate. Keep the machinery: the
-        simVersion field, the SIM_VERSION_V* registry, save-load validation,
-        createScenario's simVersion argument, BYTE_GATE_SIM_VERSION. Do not ask
-        to remove it. It is the post-1.0 plan (ARCHITECTURE.md Principle 7,
-        "Re-enabling simVersion gates"). A gate-reap PR (that principle's
-        playbook) keeps LATEST byte-identical. In one, DO flag an edit that
-        could change LATEST behaviour (the wrong branch kept, a dropped
-        statement, an operator-precedence slip) and a test weakened beyond
-        deleting its legacy half.
+        import) in src/platform/save.ts is a new gate, and so is a relational
+        comparison of a simVersion value outside the window check in
+        src/platform/snapshot-window.ts (src/platform/no-new-gates.test.ts
+        fails on both). Keep the machinery: the simVersion field, the
+        SIM_VERSION_V* registry, save-load validation, createScenario's
+        simVersion argument, BYTE_GATE_SIM_VERSION. Do not ask to remove it.
+        It is the post-1.0 plan (ARCHITECTURE.md Principle 7, "Re-enabling
+        simVersion gates"). A gate-reap PR (that principle's playbook) keeps
+        LATEST byte-identical. In one, DO flag an edit that could change
+        LATEST behaviour (the wrong branch kept, a dropped statement, an
+        operator-precedence slip) and a test weakened beyond deleting its
+        legacy half.
 
 chat:
   auto_reply: true

@@ -313,7 +313,12 @@ Saves below `MIN_ACCEPTED_SIM_VERSION` are rejected outright. There is no migrat
   - #408 deleted the goldens and the pins on the reaped gates.
   - A few pre-V50 pins on rules that have no gate remain. They are harmless.
 - **Out-of-window snapshots replay on their own build.** A snapshot outside `[MIN, LATEST]` (an F9 export or a playtrace) must be replayed on the build that recorded it. `scripts/analyze-snapshot.ts` says so and points at a build. For a playtrace that is the recording build itself, from its `gameVersion` git SHA. An F9 export has no build id, so the CLI points at the last commit at that `simVersion`. If origin/main never reached that version, it lists the branch commits that touched it. That commit is not necessarily the recording build: a bare constant retune at the same `simVersion` (retunes never bump it) can still make the replay diverge.
-- **Transition and guard.** Sim PRs opened under the earlier policy (#402 V69, #405 V70) landed gated with MIN left at V50. The first sim PR after them, #400 (V71), set `MIN === LATEST`. `version-policy.test.ts` enforces the MIN/LATEST rules. "No gates" is a review rule.
+- **Transition and guards.** Sim PRs opened under the earlier policy (#402 V69, #405 V70) landed gated with MIN left at V50. The first sim PR after them, #400 (V71), set `MIN === LATEST`.
+  - `version-policy.test.ts` enforces the MIN/LATEST rules.
+  - "No gates" is a review rule, backed by `src/platform/no-new-gates.test.ts`. That test fails on any of these in non-test code under `src/`, `scripts/` or `bench/`:
+    - a `SIM_VERSION_V<n>` reference outside the registry's declarations in `src/sim/types.ts` and the `MIN_ACCEPTED_SIM_VERSION` line (and its import) in `save.ts`;
+    - a relational comparison (`<`, `<=`, `>`, `>=`) of a `simVersion` value outside the window check in `snapshot-window.ts`.
+  - The no-new-gates test is deleted at 1.0 (below).
 
 **Post-1.0 plan: sticky gates and a rolling acceptance window.** This is how the gates were written between #228 and 2026-10-01 (#408 has since reaped them). It is meant to return at 1.0, once players have saves worth keeping; the next section is the turn-on guide.
 
@@ -325,6 +330,7 @@ Saves below `MIN_ACCEPTED_SIM_VERSION` are rejected outright. There is no migrat
 *Status.* #408 reaped the last pre-1.0 gates (V51–V70), keeping LATEST byte-identical. #247, #342 and #354 had already reaped those up to V49.
 - The mechanism that gates need stayed, listed below. Do not rebuild it.
 - The rules of V70 and earlier no longer exist in code, so MIN can never go below V71. `LAST_GATED_SIM_VERSION` in `version-policy.test.ts` enforces that floor.
+- Until the turn-on, `src/platform/no-new-gates.test.ts` keeps new gates out.
 
 *Already in place: do not rebuild.*
 
@@ -351,11 +357,12 @@ Saves below `MIN_ACCEPTED_SIM_VERSION` are rejected outright. There is no migrat
   - the `DELIBERATE_WINDOW_BREAK_AT` ritual: `git show c8889d4^:src/platform/save.ts`.
 
   The turn-on PR itself leaves MIN === LATEST, so under that rule it declares the break at the 1.0 LATEST. The next PR that bumps LATEST sets it back to `null` and opens the window.
-- **(c) Policy text.**
+- **(c) Policy text and the guard.**
   - AGENTS.md "simVersion and saves": the rules, the standing rebuttal list and the PR checklist line;
   - the "Current rule, pre-1.0" block above, which this section's rule replaces;
   - the CONTEXT.md `simVersion` and "Input log / replay" entries;
-  - the `.coderabbit.yaml` `**` instruction: flag a missing gate, and require `BYTE_GATE_SIM_VERSION` evidence for a gated change.
+  - the `.coderabbit.yaml` `**` instruction: flag a missing gate, and require `BYTE_GATE_SIM_VERSION` evidence for a gated change;
+  - delete `src/platform/no-new-gates.test.ts`.
 
   Every other statement of the pre-1.0 rule changes too. Find them with `git grep -nE "[Pp]re-1\.0|PRE-1\.0|[Bb]efore 1\.0|[Uu]ntil 1\.0"`; the grep is the instruction. Today they include:
   - the `types.ts` registry header, which every gated PR reads when it adds its constant;

@@ -13,7 +13,8 @@
 //   - once past the transition from the gated policy, MIN equals LATEST.
 // At 1.0 the post-1.0 rolling window (MIN held back while LATEST advances behind
 // sticky gates) replaces the last of these; ARCHITECTURE.md Principle 7, "Re-enabling
-// simVersion gates (post-1.0)", has the checklist and the template.
+// simVersion gates (post-1.0)", has the checklist and the template. "No gates" itself
+// is checked by no-new-gates.test.ts, which is deleted at 1.0.
 import { describe, it, expect } from 'vitest';
 import { MIN_ACCEPTED_SIM_VERSION } from './save.js';
 import * as simTypes from '../sim/types.js';

@@ -167,7 +167,7 @@ export class FutureSimVersionError extends Error {
  * in-progress saves are wiped, which is accepted. Bare constant retunes and
  * render-only changes bump neither; the AI controller's policy counts as sim
  * behaviour. MIN never moves backward. `version-policy.test.ts` enforces the MIN/LATEST
- * rules; "no gates" is a review rule.
+ * rules; "no gates" is a review rule, backed by `no-new-gates.test.ts`.
  *
  * Transition: V69 (#402) and V70 (#405) were written under the earlier gated
  * policy and left MIN at V50. #400 (V71) is the first sim PR after them and sets
@@ -178,7 +178,9 @@ export class FutureSimVersionError extends Error {
  * LAST_GATED_SIM_VERSION).
  * Post-1.0 the rolling window returns: MIN stays put while LATEST advances behind
  * sticky gates, and raising MIN becomes a deliberate, justified exception
- * (ARCHITECTURE.md Principle 7, "Re-enabling simVersion gates (post-1.0)").
+ * (ARCHITECTURE.md Principle 7, "Re-enabling simVersion gates (post-1.0)"). This
+ * declaration and its registry import are the only places outside types.ts that may
+ * name a SIM_VERSION_V* constant (no-new-gates.test.ts).
  *
  * Each raise also orphans playtrace uploads still arriving from the previous deploy.
  * Their snapshots replay only on the build that recorded them; the envelope's
