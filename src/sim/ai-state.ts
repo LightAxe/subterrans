@@ -9,7 +9,7 @@
 // QC Pass 4 AR-P0-001: S2 V17 ships Normal-only tier reads. S5 V22 gates all
 // NORMAL_TIER_INDEX lookup sites on SIM_VERSION_V22_DIFFICULTY and uses tierIndex(world.difficulty).
 
-import { SIM_VERSION_V56_OPPONENT_FRONTAGE, type WorldState, type AIStateRecord } from './types.js';
+import type { WorldState, AIStateRecord } from './types.js';
 import type { ColonyId } from './colony/colony-store.js';
 import type { ClearRallyPointCommand } from './commands.js';
 import { pushCommand } from './commands.js';
@@ -146,13 +146,6 @@ function aiFoodCap(world: WorldState, aiColonyId: ColonyId): number {
   return colony === undefined ? BASE_FOOD_STORAGE_CAPACITY : colonyFoodCapacity(colony);
 }
 
-/** Player colony worker count. */
-export function playerWorkerCount(world: WorldState): number {
-  const colony = world.colonies[PLAYER_COLONY_ID];
-  if (colony === undefined) return 0;
-  return colony.workerCount;
-}
-
 /**
  * The colony an AI colony probes, invades and sizes itself against: the
  * lowest-id colony in `world.colonies` other than its own (integer keys iterate
@@ -172,14 +165,12 @@ export function opponentColonyId(world: WorldState, aiColonyId: ColonyId): Colon
 }
 
 /**
- * #347 — the worker count the frontage trigger compares an AI colony's own
+ * #347 (V56) — the worker count the frontage trigger compares an AI colony's own
  * workers with (and the one `ai_state_transition` reports as
- * `triggerValues.playerWorkerCount`). From V56 the opponent's; before V56 always
- * the player's, so a player-colony AI compared its workers with itself. Identical
- * for the enemy AI at every version.
+ * `triggerValues.playerWorkerCount`): the opponent's, so a player-colony AI sizes
+ * itself against the enemy, not against itself. For the enemy AI that is the player.
  */
 export function frontageOpponentWorkerCount(world: WorldState, aiColonyId: ColonyId): number {
-  if (world.simVersion < SIM_VERSION_V56_OPPONENT_FRONTAGE) return playerWorkerCount(world);
   const opp = opponentColonyId(world, aiColonyId);
   const colony = opp === null ? undefined : world.colonies[opp];
   return colony === undefined ? 0 : colony.workerCount;
