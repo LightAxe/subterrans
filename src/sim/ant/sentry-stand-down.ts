@@ -35,9 +35,9 @@ const STAND_DOWN_SPIDER_RADIUS = FIGHT_AGGRO_RADIUS * 3;
  * A released ant is Idle for step 10a THIS tick.
  */
 export function standDownSurplusSentries(world: WorldState, colony: ColonyRecord): void {
-  // (Any rally, an AI probe's included: from V64 the fighters outside a probe's
-  // cohort are sentries, but none stands down while the probe runs — kept as it
-  // was, so the probe's cohort-only rule changes nothing here.)
+  // (Any rally, an AI probe's included: the fighters outside a probe's cohort
+  // (#372, V64) are sentries, but none stands down while the probe runs, so the
+  // probe's cohort-only rule changes nothing here.)
   if (colony.rallyPoint != null) return;
   if (colony.alarmActive === true) return;
   if (world.spiderPriorityColonyId === colony.colonyId) return;

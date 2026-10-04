@@ -1,8 +1,8 @@
 // src/sim/spider-rotation.test.ts — #337 (V54): a timed-out rampage moves on.
 //
-// Up to V53 a hungry spider whose rampage timed out could camp the same entrance
+// Before #337 a hungry spider whose rampage timed out could camp the same entrance
 // again the next tick, so a colony sheltering underground could be camped until its
-// queen starved. From V54 a timeout sets a rotation cursor (the entrance it timed out
+// queen starved. Now a timeout sets a rotation cursor (the entrance it timed out
 // on) and the next rampage camps the next open entrance by ascending entranceId,
 // across every colony, until the spider kills something. A lone open entrance can be
 // camped again only SPIDER_RAMPAGE_REVISIT_COOLDOWN_TICKS after the timeout.

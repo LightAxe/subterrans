@@ -27,10 +27,10 @@
 // DangerTrail grid sees danger = 0 everywhere (no flee, plain milling).
 //
 // Determinism: flee/mill decisions are pure functions of the serialized
-// pheromone grids, ant positions, and `fleeShelterUntilTick` (from V68 also the
-// spider's saved state, world.tick and world.difficulty, and the surface goal
-// fields, a cache derived from the saved terrain). The mill wander is a hash of
-// (tick-bucket ^ antId) — no world.rngState draw.
+// pheromone grids, ant positions, and `fleeShelterUntilTick` (and, for the rampage
+// shelter, #377, V68, the spider's saved state, world.tick and world.difficulty,
+// and the surface goal fields, a cache derived from the saved terrain). The mill
+// wander is a hash of (tick-bucket ^ antId) — no world.rngState draw.
 
 import type { WorldState } from '../types.js';
 import { spiderOnRampage } from '../spider.js';
@@ -479,9 +479,9 @@ export function holdAlarmedCivilianAtShaft(
 }
 
 /**
- * #377 (V68) — the rampage shelter's global gate: the spider is on a rampage
- * (spider.ts spiderOnRampage — out hunting hungry, until it eats or dies).
- * rampageThreatens (below) decides per colony; it is what step
+ * #377 (V68) — the rampage shelter's global gate: the spider is on a rampage (out
+ * hunting hungry, until it eats or dies). An alias of spider.ts spiderOnRampage: both
+ * names share one predicate. rampageThreatens (below) decides per colony; it is what step
  * 10a (sheltering idle workers stay recruitable), step 15b (idle surface workers go
  * in, idle shelterers stay in) and step 16 (the routed dash, the hold at the shaft, a
  * holder's occupancy shift) read. The spider does not move or change state between
@@ -489,9 +489,7 @@ export function holdAlarmedCivilianAtShaft(
  * tick; 10a can lag them by that tick when step 12 opens an entrance near the spider
  * (one tick of the V34 recruit skip for a shelterer 15b keeps in anyway).
  */
-export function rampageShelterActive(world: WorldState): boolean {
-  return spiderOnRampage(world);
-}
+export const rampageShelterActive = spiderOnRampage;
 
 /**
  * #377 (V68) — the spider THREATENS `colony`: it is on a rampage
@@ -515,10 +513,10 @@ export function rampageThreatens(world: WorldState, colony: ColonyRecord): boole
  *    whatever it is doing: chasing a straggler between camps (the camper's divert
  *    clears its target), hunting, patrolling hungry, or camping the other colony's
  *    door nearby.
- * No rampage gate: rampageThreatens adds the shelter's gate (rampageShelterActive: on
- * a rampage), and the render-side rampage warning (recurring-captions.ts) adds
- * spiderOnRampage. The one place this geometry lives. Pure and side-effect-free;
- * false when there is no spider.
+ * No rampage gate: rampageThreatens adds it (rampageShelterActive, the same predicate
+ * as spiderOnRampage), and so does the render-side rampage warning
+ * (recurring-captions.ts). The one place this geometry lives. Pure and
+ * side-effect-free; false when there is no spider.
  */
 export function rampageThreatRule(world: WorldState, colony: ColonyRecord): boolean {
   const spider = world.spider;

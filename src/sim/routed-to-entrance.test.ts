@@ -1,10 +1,10 @@
 // routed-to-entrance.test.ts — #357 + #358 (V57): surface walkers bound for one
 // particular entrance route round what is in the way.
 //
-// Up to V56 a tunnel-defence fighter walking to the entrance its colony defends,
-// and a surface digger walking to its entrance target (closed or open), stepped
-// in a straight line at that entrance, so an obstacle between them pinned them.
-// From V57 each steps down the surface goal field seeded at its own entrance
+// Before #357/#358 a tunnel-defence fighter walking to the entrance its colony
+// defends, and a surface digger walking to its entrance target (closed or open),
+// stepped in a straight line at that entrance, so an obstacle between them pinned
+// them. Now each steps down the surface goal field seeded at its own entrance
 // (stepTowardReachable). Neither can use the entrance flow field: it leads to the
 // NEAREST OPEN entrance, which a defender may not go down and which a closed
 // dig target is never on.

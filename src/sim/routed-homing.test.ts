@@ -1,10 +1,10 @@
 // routed-homing.test.ts — #343 + #346 (V55): ants walking home route round what
 // is in the way.
 //
-// Up to V54 a surface nurse or idle worker walking home stepped in a straight
-// line at the entrance, and a plain recalled invader walked out of an enemy nest
-// in a straight line at its shaft, so an obstacle (or a U-bend) pinned them; since
-// V51 workers eat, and a worker pinned away from home starves. From V55 the
+// Before #343/#346 a surface nurse or idle worker walking home stepped in a
+// straight line at the entrance, and a plain recalled invader walked out of an
+// enemy nest in a straight line at its shaft, so an obstacle (or a U-bend) pinned
+// them; workers eat (V51), and a worker pinned away from home starves. Now the
 // surface walkers step by the colony's surface entrance flow field and the
 // recalled invader by the wall-aware BFS exit step.
 //

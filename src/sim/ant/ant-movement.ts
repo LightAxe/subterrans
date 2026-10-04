@@ -947,10 +947,9 @@ export function tickAntMovement(
               }
             }
             const exitGrid = world.undergroundGrids[gridColonyId];
-            // Every invader on the recall route takes the reachable-exit step: one
-            // sent home to eat (V51), a hauler off its nest's entrance flow field
-            // (V52, #290 PR 5), a recalled invader off that field (#346, V55), a
-            // blockader leaving (#352, V60).
+            // Any invader on the recall route (isRecalling, above) takes the
+            // reachable-exit step whenever this nest has entrances (the guard
+            // above) and a grid.
             if (exitGrid !== undefined) {
               // V51 (#290 PR 4, D11): a hungry invader walks out by the
               // wall-aware BFS step (hungryExitStep), toward the first OPEN
@@ -1934,8 +1933,8 @@ export function tickAntMovement(
 // ---------------------------------------------------------------------------
 /**
  * V51 (#290 PR 4, D11) — the step a hungry invader at (tileX, tileY) in a foreign
- * nest takes toward an exit (from V52 also a hauler off its field, from V55 #346
- * also a recalled invader off it): the nest's OPEN entrances in the recall order
+ * nest takes toward an exit (also a hauler off its field (V52) and a recalled
+ * invader off it (#346, V55)): the nest's OPEN entrances in the recall order
  * (nearest by |dx| + y, ties to the lower index), the first one whose shaft top
  * (column, y 0) the wall-aware BFS (pickInvaderUndergroundStep) can reach. An
  * "open" entrance only needs its top two shaft tiles dug, so a nearer stub need

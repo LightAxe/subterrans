@@ -1251,8 +1251,8 @@ describe('flee — full lifecycle: dash → shelter → poke head out (#209 PR A
     world.spider = null;
     const colony = world.colonies[PLAYER_COLONY_ID]!;
     for (const e of colony.entrances) e.isOpen = false; // no open entrance
-    // On the shaft-top row, where every shelterer shelters (from V65, #373, one
-    // below it has retreated from invaders and is released once they are gone).
+    // On the shaft-top row, where every shelterer shelters (#373, V65: one below
+    // it has retreated from invaders and is released once they are gone).
     const id = spawnWorker(world, PLAYER_COLONY_ID, 40, 0, AntTask.Idle);
     world.ants.zone[id] = Zone.Underground;
     world.ants.fleeShelterUntilTick[id] = 100; // sheltering until tick 100

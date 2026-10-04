@@ -40,8 +40,8 @@ import { colonyFoodTotal } from '../sim/food/food-api.js';
 
 const SEED = 42;
 // Issue #33 — extended from 3000 to 6000 ticks. The deeper Queen target
-// (row 18 under #33, was 10; from #374 / V63 row 22, a third of the
-// way down — `aiQueenMinAnchorRow`) lengthens bootstrap dig time before
+// (row 18 under #33, was 10; now row 22, a third of the way down —
+// `aiQueenMinAnchorRow`, #374, V63) lengthens bootstrap dig time before
 // the Queen chamber can land at its acceptable depth band; the OLD shallow
 // target placed the Queen at Y≈1 by tick 100. The new depth gate is the
 // whole point of issue #33 (chambers spread vertically, max chamber Y > 15
@@ -294,8 +294,8 @@ describe('AI-only scenario 6000 ticks', () => {
 // (18000 ticks at 20Hz) with the default scenario, the enemy colony
 // footprint should span at least 30% of the underground grid width OR have
 // at least one chamber at depth y > 15. The current fix achieves the depth
-// criterion via a deeper Queen target (row 18 under #33; from V63
-// `aiQueenMinAnchorRow`, row 22) plus a
+// criterion via a deeper Queen target (row 18 under #33; now
+// `aiQueenMinAnchorRow`, row 22, #374, V63) plus a
 // depth gate on findOpenChamberSpot.
 // -----------------------------------------------------------------------------
 

@@ -62,9 +62,9 @@ export function fighterOutsideProbeCohort(world: WorldState, id: number): boolea
 }
 
 /**
- * #372 — fighter `id` answers its colony's rally point: the colony has one and, from
- * V64, it is not a probe's rally `id` is outside the cohort of. False for a missing
- * colony.
+ * #372 — fighter `id` answers its colony's rally point: the colony has one, unless
+ * that rally belongs to a probe whose cohort does not include `id`. False for a
+ * missing colony.
  */
 export function fighterAnswersRally(world: WorldState, id: number): boolean {
   const colony = world.colonies[world.ants.colonyId[id]!];

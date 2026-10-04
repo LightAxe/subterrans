@@ -112,8 +112,8 @@ export const AI_PLACEMENT_DEPTH_TOLERANCE = 4 as const;
 /**
  * #374 (V63) — the shallowest row the AI anchors its Queen chamber on: the first
  * row at least a third of the way down a grid `gridHeight` tall (`3 × row >=
- * gridHeight`; row 22 of 64), so the larder (the first FoodStorage, which from V61
- * lands at the shallow shaft floor, preferred row 5) lies between the entrance and
+ * gridHeight`; row 22 of 64), so the larder (the first FoodStorage, which lands at
+ * the shallow shaft floor, preferred row 5 — #370, V61) lies between the entrance and
  * the queen and a raid meets the food first.
  *
  * Fallback: on a grid too shallow for a `chamberHeight`-row footprint below that
@@ -2045,8 +2045,8 @@ function findOpenChamberSpot(
   // Codex P2 follow-up: restrict the gate to Queen. FoodStorage and
   // Nursery use shallower preferredDepth (5 / 7) and don't suffer from
   // the early-shallow-anchor problem (a shallow FS/Nursery cannot end the
-  // bootstrap dig, which runs until a Queen chamber is COMPLETED — and from
-  // V61 the first FS is placed at the shaft floor on purpose, #370). Applying
+  // bootstrap dig, which runs until a Queen chamber is COMPLETED — and the
+  // first FS is placed at the shaft floor on purpose, #370, V61). Applying
   // the gate to FS/Nursery introduces a hard-fail mode: if valid anchors
   // exist only outside ±tolerance (e.g. the dig has gone deeper than
   // preferredDepth before the gate fires), the chamber would be silently

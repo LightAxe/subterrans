@@ -214,8 +214,8 @@ function spiderDistance(world: WorldState, tileX: number, tileY: number): number
 }
 
 /** V43 (#323) — `id` is a Fighter whose colony has no rally point: it has no orders.
- *  From V64 (#372) also a fighter outside its AI colony's probe cohort while the
- *  rally is the probe's (fighter-orders.ts): that rally is not its order. */
+ *  Also (#372, V64) a fighter outside its AI colony's probe cohort while the rally
+ *  is the probe's (fighter-orders.ts): that rally is not its order. */
 function hasNoOrders(world: WorldState, id: number): boolean {
   if (world.ants.task[id] !== AntTask.Fighting) return false;
   const colony = world.colonies[world.ants.colonyId[id]!];
@@ -412,7 +412,7 @@ export function colonyRecalledItsFighters(world: WorldState, colonyId: number): 
 
 /**
  * #372 — fighter `id` is recalled: its colony recalled its fighters
- * (colonyRecalledItsFighters) or, from V64, its colony's rally is an AI probe's and
+ * (colonyRecalledItsFighters) or (V64) its colony's rally is an AI probe's and
  * `id` is outside the probe's cohort (fighter-orders.ts), so no rally holds it in a
  * foreign nest. The predicate behind
  * tickAntMovement's underground recall navigation and ascent, and
@@ -561,8 +561,8 @@ function autoDefendedEntrance(world: WorldState, colonyId: number): FighterEntra
 
 /**
  * The entrance `colony`'s tunnel defenders defend this tick: the one its rally is
- * on (V44), else, from V64 (#372), its breached entrance, which only its fighters
- * with no orders defend (fighterDefendedEntrance). Null if neither.
+ * on (V44), else its breached entrance (#372, V64), which only its fighters with no
+ * orders defend (fighterDefendedEntrance). Null if neither.
  */
 function defendedEntrance(world: WorldState, colony: ColonyRecord): FighterEntrance | null {
   return rallyDefendedEntrance(world, colony) ?? autoDefendedEntrance(world, colony.colonyId);
@@ -571,7 +571,7 @@ function defendedEntrance(world: WorldState, colony: ColonyRecord): FighterEntra
 /**
  * The entrance fighter `id` defends as a tunnel defender this tick, or null: the
  * own entrance its colony's rally is on, if it answers the rally (V44); if it has
- * no orders, from V64 (#372), its colony's breached entrance (automatic defence).
+ * no orders, its colony's breached entrance (automatic defence, #372, V64).
  */
 function fighterDefendedEntrance(world: WorldState, id: number): FighterEntrance | null {
   const colony = world.colonies[world.ants.colonyId[id]!];
@@ -820,7 +820,7 @@ export function sentryWalksHome(world: WorldState, id: number): boolean {
 /**
  * #371 (V62) — tunnel defender `id` is after an invader this tick: step 10c gave
  * it a target (routeTunnelDefender) and it is not walking to its tunnel post
- * (`moving` 1). Read by step 16, which from V62 moves such a defender by the
+ * (`moving` 1). Read by step 16, which moves such a defender by the
  * saturation-aware hunt (invader-retarget.ts) instead of straight at the nearest
  * invader, so a pack of defenders spreads over the invaders rather than stacking
  * on one (combat fights one pair per tile per tick). Same-tick scratch, rebuilt by
