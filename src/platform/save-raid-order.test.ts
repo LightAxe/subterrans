@@ -5,7 +5,7 @@
 // obligations: it round-trips; it is written only when it is not Loot, so every
 // Loot colony serializes exactly as before V60; absent loads as Loot; and a tampered
 // value — out of range or a written Loot — is rejected. (#400 retired the pre-V60
-// save arms: MIN_ACCEPTED is V71, so no pre-V60 save loads.)
+// save arms: MIN_ACCEPTED is V71 or later, so no pre-V60 save loads.)
 
 import { describe, it, expect } from 'vitest';
 import { serializeWorldState, deserializeWorldState } from './save.js';

@@ -12,8 +12,14 @@
 //   6. Version-gated: bumping SAVE_FORMAT_VERSION invalidates old saves (intentional for beta)
 
 import type { WorldState, EntityId, AIStateRecord, SpiderState } from '../sim/types.js';
-import { LATEST_SIM_VERSION, SIM_VERSION_V71_HEALTH_MODEL } from '../sim/types.js';
-import { AI_MAX_OPERATION_FIGHTERS, SPIDER_HUNT_INTERVAL_TICKS } from '../sim/constants.js';
+import { LATEST_SIM_VERSION, SIM_VERSION_V72_AI_ESCALATION } from '../sim/types.js';
+import {
+  AI_INVASION_FLOOR_MAX,
+  AI_MAX_OPERATION_FIGHTERS,
+  AI_RECOVERY_DURATION_TICKS,
+  SPIDER_HUNT_INTERVAL_TICKS,
+} from '../sim/constants.js';
+import { tierIndex } from '../sim/ai-state.js';
 import type { AntComponents } from '../sim/ant/ant-store.js';
 import {
   createAntComponents,
@@ -174,10 +180,12 @@ export class FutureSimVersionError extends Error {
  * `gameVersion` carries that build's git SHA, and scripts/analyze-snapshot.ts says
  * so instead of replaying.
  *
- * Why it is V71 today:
+ * Why it is V72 today:
+ *   - V72: #398, the AI escalates after a repelled invasion (new
+ *     `AIStateRecord.invasionFloor`). Every pre-V72 save is rejected.
  *   - V71: #400, the health model (max HP by territory, healing while fed and
  *     safe; `ants.homeGroundBonusHp` removed, `lastHitTick` added). The first sim
- *     PR under the pre-1.0 policy: every pre-V71 save is rejected.
+ *     PR under the pre-1.0 policy: every pre-V71 save was rejected.
  *   - Previous floor V50: #290 PR 2. The located food store replaces the
  *     `foodPiles` array and the `foodStored` scalars, and the count-up hunger clock
  *     `ants.lastMealTick` replaces `starvationTimer` / `queenStarvationTimer`.
@@ -186,7 +194,7 @@ export class FutureSimVersionError extends Error {
  *     on #290, 2026-09-25).
  *   - Before that: V30 (PR 6-sim's underground-embedding guards).
  */
-export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V71_HEALTH_MODEL;
+export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V72_AI_ESCALATION;
 
 export class OldSimVersionError extends Error {
   // #229 — explicit field (see SaveVersionMismatchError): strip-only Node compat.
@@ -668,8 +676,8 @@ interface SerializedAnts {
   carriedBy: number[];
   hp: number[];
   // #400 (V71) — the tick of the ant's last combat blow (-1 = never hit). Replaces
-  // the V16–V70 `homeGroundBonusHp` column; MIN_ACCEPTED is V71, so no save without
-  // it loads.
+  // the V16–V70 `homeGroundBonusHp` column; MIN_ACCEPTED is V71 or later, so no save
+  // without it loads.
   lastHitTick: number[];
   attackCooldown: number[];
   combatOpponentId: number[];
@@ -783,6 +791,9 @@ interface SerializedAIStateRecord {
   // #371 (V62) — written only when set (a V61-or-older world never sets it, so its
   // snapshot is unchanged); absent → -1 (no raid).
   raidSinceTick?: number;
+  // #398 (V72) — the invasion floor, written only when non-zero (a colony whose
+  // invasions were never repelled serializes as before); absent → 0 (none).
+  invasionFloor?: number;
 }
 
 /**
@@ -1280,6 +1291,7 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
       operationAttackerDeaths: rec.operationAttackerDeaths,
       operationDefenderDeaths: rec.operationDefenderDeaths,
       ...(rec.raidSinceTick !== -1 ? { raidSinceTick: rec.raidSinceTick } : {}),
+      ...(rec.invasionFloor !== 0 ? { invasionFloor: rec.invasionFloor } : {}),
     })),
   };
 }
@@ -1598,9 +1610,20 @@ function deserializePheromoneGrid(s: SerializedGrid): PheromoneGrid {
   return g;
 }
 
-function deserializeAIStateArray(s: SerializedWorldState): AIStateRecord[] {
+function deserializeAIStateArray(
+  s: SerializedWorldState,
+  difficulty: WorldState['difficulty'],
+): AIStateRecord[] {
   const raw = s.aiState;
   if (!Array.isArray(raw)) return [];
+  // #398 (V72): the escalation never raises invasionFloor above the tier's cap, so an
+  // edited save may not either (Easy's cap is below the cohort buffer).
+  const invasionFloorCap = AI_INVASION_FLOOR_MAX[tierIndex(difficulty)];
+  // #398 (V72): the launch gate reads recoveryEndTick (the floor's patience clock), so
+  // an edited far-future value is clamped to the latest a Recovery begun by now could
+  // end, which bounds how long it can hold the floor (or Recovery itself).
+  const latestRecoveryEnd =
+    (typeof s.tick === 'number' ? s.tick : 0) + Math.max(...AI_RECOVERY_DURATION_TICKS);
   const result: AIStateRecord[] = [];
   for (let i = 0; i < raw.length; i++) {
     const r = raw[i]!;
@@ -1621,7 +1644,12 @@ function deserializeAIStateArray(s: SerializedWorldState): AIStateRecord[] {
       invasionStartTick: typeof r.invasionStartTick === 'number' ? r.invasionStartTick : 0,
       invasionRallyTileX: typeof r.invasionRallyTileX === 'number' ? r.invasionRallyTileX : -1,
       invasionRallyTileY: typeof r.invasionRallyTileY === 'number' ? r.invasionRallyTileY : -1,
-      recoveryEndTick: typeof r.recoveryEndTick === 'number' ? r.recoveryEndTick : 0,
+      recoveryEndTick:
+        typeof r.recoveryEndTick === 'number' &&
+        Number.isInteger(r.recoveryEndTick) &&
+        r.recoveryEndTick >= 0
+          ? Math.min(r.recoveryEndTick, latestRecoveryEnd)
+          : 0,
       operationKind: isValidOperationKind(r.operationKind) ? r.operationKind : 'None',
       operationStartTick: typeof r.operationStartTick === 'number' ? r.operationStartTick : 0,
       operationTargetTileX:
@@ -1633,8 +1661,13 @@ function deserializeAIStateArray(s: SerializedWorldState): AIStateRecord[] {
         typeof r.operationFighterCount === 'number'
           ? Math.min(Math.max(0, r.operationFighterCount), AI_MAX_OPERATION_FIGHTERS)
           : 0,
+      // #398 (V72): the repelled-invasion escalation reads it into the persisted
+      // invasionFloor, so only an integer cohort size (0..the buffer) is kept.
       operationStartFighterCount:
-        typeof r.operationStartFighterCount === 'number' ? r.operationStartFighterCount : 0,
+        typeof r.operationStartFighterCount === 'number' &&
+        Number.isInteger(r.operationStartFighterCount)
+          ? Math.min(Math.max(0, r.operationStartFighterCount), AI_MAX_OPERATION_FIGHTERS)
+          : 0,
       operationAttackerDeaths:
         typeof r.operationAttackerDeaths === 'number' ? r.operationAttackerDeaths : 0,
       operationDefenderDeaths:
@@ -1645,6 +1678,14 @@ function deserializeAIStateArray(s: SerializedWorldState): AIStateRecord[] {
         r.raidSinceTick >= 0
           ? r.raidSinceTick
           : -1,
+      // #398 (V72): a non-negative integer, else 0 (no floor); at most the cap of the
+      // save's difficulty tier (AI_INVASION_FLOOR_MAX).
+      invasionFloor:
+        typeof r.invasionFloor === 'number' &&
+        Number.isInteger(r.invasionFloor) &&
+        r.invasionFloor >= 0
+          ? Math.min(r.invasionFloor, invasionFloorCap)
+          : 0,
     });
   }
   return result;
@@ -1711,7 +1752,7 @@ function deserializeSpider(s: SerializedWorldState): SpiderState | null {
   // lands during a tick (combat.ts damageSpider), so between ticks it is -1 (never
   // hit) or an integer in [0, tick − 1]. Anything else is rejected. That is stricter
   // than the other spider clocks' fallbacks on purpose: it is a V71 field and
-  // MIN_ACCEPTED_SIM_VERSION === LATEST (V71), so every loadable save carries it, and
+  // MIN_ACCEPTED_SIM_VERSION is V71 or later, so every loadable save carries it, and
   // reading a missing or impossible value as "never hit" would let the spider heal
   // before HEAL_SAFE_TICKS. (deserializeWorldState has validated s.tick by now.)
   const lastHitTick = r.lastHitTick;
@@ -2084,6 +2125,10 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     );
   }
 
+  // Resolved before the world literal: the AI-state loader clamps to its tier.
+  const difficulty: WorldState['difficulty'] =
+    s.difficulty === 'Easy' || s.difficulty === 'Hard' ? s.difficulty : 'Normal';
+
   const world: WorldState = {
     tick: rawTick,
     rngState: rawRng,
@@ -2114,7 +2159,7 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
     events: [],
     droppedCommandOverflowCount: 0, // #230 — transient, reset on load
     pendingQueenDeathContexts: [],
-    aiState: deserializeAIStateArray(s),
+    aiState: deserializeAIStateArray(s, difficulty),
     spider: _deserializedSpider,
     spiderPriorityColonyId:
       _deserializedSpider !== null &&
@@ -2144,7 +2189,7 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
       s.droppedStructuralCount >= 0
         ? s.droppedStructuralCount
         : 0,
-    difficulty: s.difficulty === 'Easy' || s.difficulty === 'Hard' ? s.difficulty : 'Normal',
+    difficulty,
   };
 
   // #290 PR 5 (V52) — the raid sub-states Looting (4) and Hauling (5) exist only on

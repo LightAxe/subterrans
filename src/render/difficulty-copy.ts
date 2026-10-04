@@ -13,6 +13,9 @@
 //   - the AI queen's egg interval          QUEEN_EGG_INTERVAL_DIFFICULTY_NUMERATOR
 //   - the fighter count for WarFooting     AI_WARFOOTING_FIGHTER_THRESHOLD
 //   - the fighter count for Invading       AI_INVADING_FIGHTER_THRESHOLD
+//   - how far the AI escalates after a     AI_INVASION_FLOOR_MAX (#398 V72: Easy's
+//     repelled invasion                    cap is near its base, so it barely
+//                                          escalates; not in the line today)
 //   - how soon after a meal the spider     SPIDER_HUNGER_THRESHOLD_TICKS
 //     becomes Hungry and hunts again (the clock runs only outside Feeding,
 //     i.e. from the END of the meal — spider.ts hunger accrual)

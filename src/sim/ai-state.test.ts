@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { createWorldState } from './types.js';
-import type { WorldState } from './types.js';
+import type { WorldState, AIStateRecord } from './types.js';
 import {
   LATEST_SIM_VERSION,
   SIM_VERSION_V19_AI_STATE,
@@ -25,6 +25,7 @@ import {
   tierIndex,
   opponentColonyId,
   frontageOpponentWorkerCount,
+  invasionFighterNeed,
 } from './ai-state.js';
 import { killAnt } from './ant-death.js';
 import { colonyFoodCapacity } from './food/food-api.js';
@@ -43,6 +44,13 @@ import {
   AI_FRONTAGE_PLAYER_WORKERS_RATIO_X100,
   AI_WARFOOTING_MIN_TICK,
   AI_MAX_OPERATION_FIGHTERS,
+  AI_INVADING_FIGHTER_THRESHOLD,
+  AI_INVADING_MIN_TICK,
+  AI_INVADING_TIMEOUT_TICKS,
+  AI_RECOVERY_DURATION_TICKS,
+  AI_INVASION_FLOOR_STEP,
+  AI_INVASION_FLOOR_MAX,
+  AI_INVASION_FLOOR_PATIENCE_TICKS,
 } from './constants.js';
 
 // ---------------------------------------------------------------------------
@@ -721,5 +729,400 @@ describe('#371 — SetAIRaidClock (V62)', () => {
     expect(rec.raidSinceTick).toBe(-1);
     applyCommands(world, [{ ...clock(true), colonyId: 99 } as SimCommand]);
     expect(rec.raidSinceTick).toBe(-1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #398 (V72) — the invasion floor: a repelled invasion raises it; the launch gate
+// needs it until its patience runs out.
+// ---------------------------------------------------------------------------
+
+describe('#398 — the invasion floor (V72)', () => {
+  const E = ENEMY_COLONY_ID as ColonyId;
+  const NORMAL_BASE = AI_INVADING_FIGHTER_THRESHOLD[NORMAL_TIER_INDEX]; // 15
+
+  function floorWorld(difficulty: WorldState['difficulty'] = 'Normal'): WorldState {
+    const world = makeMinimalWorld();
+    world.simVersion = LATEST_SIM_VERSION;
+    world.difficulty = difficulty;
+    return world;
+  }
+
+  /** An Invading record with a committed cohort of `n` (ids 100..), alive or dead. */
+  function commitCohort(world: WorldState, n: number, alive: boolean): AIStateRecord {
+    const rec = getAIStateForColony(world, E)!;
+    const ids = alive ? spawnFighters(world, ENEMY_COLONY_ID, n, 100) : [];
+    if (!alive) for (let i = 0; i < n; i++) ids.push(100 + i); // never initialised: dead
+    rec.state = 'Invading';
+    rec.enteredTick = world.tick;
+    rec.invasionStartTick = world.tick;
+    setAIRallyOperation(world, E, 30, 5, ids, 'Invasion');
+    expect(rec.operationStartFighterCount).toBe(Math.min(n, AI_MAX_OPERATION_FIGHTERS));
+    return rec;
+  }
+
+  /** A record in WarFooting after a Recovery that ended at `recoveryEndTick`. */
+  function warFooting(
+    world: WorldState,
+    opts: { floor: number; recoveryEndTick: number; tick: number; fighters: number },
+  ): AIStateRecord {
+    const rec = getAIStateForColony(world, E)!;
+    rec.state = 'WarFooting';
+    rec.invasionFloor = opts.floor;
+    rec.recoveryEndTick = opts.recoveryEndTick;
+    // WarFooting is entered after Recovery ends: an enteredTick distinct from
+    // recoveryEndTick, so patience measured from the wrong clock shows.
+    rec.enteredTick = opts.recoveryEndTick + 500;
+    rec.lastProbeEndTick = opts.tick; // no probe signal noise
+    world.tick = opts.tick;
+    spawnFighters(world, ENEMY_COLONY_ID, opts.fighters, 200);
+    const colony = world.colonies[E]!;
+    setPoolFoodForTest(world, colony, colonyFoodCapacity(colony)); // food gate met
+    return rec;
+  }
+
+  const launches = (world: WorldState): boolean => advanceAIState(world, E).state === 'Invading';
+
+  /** The floor a repelled wave of `n` leaves from `floor`, by the rule (the constants
+   *  are pinned once, in (6), so a retune of step or cap moves only that test). */
+  const raised = (floor: number, n: number, d: WorldState['difficulty'] = 'Normal'): number =>
+    Math.min(AI_INVASION_FLOOR_MAX[tierIndex(d)], Math.max(floor, n) + AI_INVASION_FLOOR_STEP);
+
+  // --- escalation on a repelled invasion -------------------------------------------
+
+  it('(1) a rout of an 18-fighter wave raises the floor from 0 to 18 + step (24, Normal)', () => {
+    const world = floorWorld();
+    world.tick = 9000;
+    const rec = commitCohort(world, 18, false);
+    advanceAIState(world, E);
+    expect(world.events.find((e) => e.type === 'invasion_end')?.payload).toMatchObject({
+      outcome: 'fighter_rout',
+    });
+    expect(rec.state).toBe('Recovery');
+    expect(rec.invasionFloor).toBe(raised(0, 18));
+    expect(rec.operationStartFighterCount).toBe(0); // the cohort is wiped after the read
+  });
+
+  it('(2) a timeout with a committed cohort escalates too', () => {
+    const world = floorWorld();
+    world.tick = 9000;
+    const rec = commitCohort(world, 16, true);
+    world.tick = rec.invasionStartTick + AI_INVADING_TIMEOUT_TICKS;
+    advanceAIState(world, E);
+    expect(world.events.find((e) => e.type === 'invasion_end')?.payload).toMatchObject({
+      outcome: 'timeout',
+    });
+    expect(rec.invasionFloor).toBe(raised(0, 16));
+  });
+
+  it('(3) a timeout before any cohort was committed leaves the floor alone', () => {
+    for (const floor of [0, 20]) {
+      const world = floorWorld();
+      const rec = getAIStateForColony(world, E)!;
+      rec.invasionFloor = floor;
+      rec.state = 'Invading';
+      rec.invasionStartTick = 9000;
+      // A stale committed size must not count: there is no cohort (count 0).
+      rec.operationStartFighterCount = 18;
+      world.tick = 9000 + AI_INVADING_TIMEOUT_TICKS;
+      spawnFighters(world, ENEMY_COLONY_ID, 20, 100);
+      advanceAIState(world, E);
+      expect(rec.state).toBe('Recovery');
+      expect(rec.invasionFloor).toBe(floor);
+    }
+  });
+
+  it('an Invasion with no committed fighters (start 0) ending leaves the floor alone', () => {
+    const world = floorWorld();
+    world.tick = 9000;
+    const rec = getAIStateForColony(world, E)!;
+    rec.invasionFloor = 20;
+    rec.state = 'Invading';
+    rec.invasionStartTick = world.tick;
+    setAIRallyOperation(world, E, 30, 5, [], 'Invasion');
+    expect(rec.operationKind).toBe('Invasion');
+    expect(rec.operationStartFighterCount).toBe(0);
+    endAIRallyOperation(world, E, 'timeout');
+    expect(rec.state).toBe('Recovery');
+    expect(rec.invasionFloor).toBe(20);
+  });
+
+  it('(4) a queen kill leaves the floor alone', () => {
+    const world = floorWorld();
+    world.tick = 9000;
+    const rec = commitCohort(world, 18, true);
+    rec.invasionFloor = 20;
+    endAIRallyOperation(world, E, 'queen_kill');
+    expect(rec.state).toBe('Recovery');
+    expect(rec.invasionFloor).toBe(20);
+  });
+
+  it('a rout or timeout forced through endAIRallyOperation escalates like a natural one', () => {
+    for (const outcome of ['fighter_rout', 'timeout'] as const) {
+      const world = floorWorld();
+      world.tick = 9000;
+      const rec = commitCohort(world, 18, true);
+      endAIRallyOperation(world, E, outcome);
+      expect(rec.invasionFloor, outcome).toBe(raised(0, 18));
+    }
+  });
+
+  it('a probe ending (any way) leaves the floor alone', () => {
+    const world = floorWorld();
+    world.tick = 9000;
+    const rec = getAIStateForColony(world, E)!;
+    rec.invasionFloor = 20;
+    rec.state = 'WarFooting';
+    setAIRallyOperation(world, E, 30, 5, [100, 101, 102], 'Probe'); // dead ids: all done
+    advanceAIState(world, E);
+    expect(rec.state).toBe('WarFooting');
+    setAIRallyOperation(world, E, 30, 5, [100, 101, 102], 'Probe');
+    endAIRallyOperation(world, E, 'fighter_rout');
+    expect(rec.invasionFloor).toBe(20);
+  });
+
+  it('(5) the floor never falls: from 20 a 12-fighter rout gives 20 + step, from 30 the cap', () => {
+    for (const [floor, want] of [
+      [20, raised(20, 12)],
+      [30, AI_INVASION_FLOOR_MAX[NORMAL_TIER_INDEX]],
+    ] as const) {
+      const world = floorWorld();
+      world.tick = 9000;
+      const rec = commitCohort(world, 12, false);
+      rec.invasionFloor = floor;
+      advanceAIState(world, E);
+      expect(rec.invasionFloor, `from ${floor}`).toBe(want);
+    }
+  });
+
+  it('(6) the constants, and the cap per tier: Easy 24, Normal 32, Hard 32 (a step or cap retune edits this test)', () => {
+    expect(AI_INVASION_FLOOR_MAX).toEqual([24, 32, 32]);
+    expect(AI_INVASION_FLOOR_STEP).toBe(6);
+    // Above the cohort buffer the rout accounting would see only the first 32.
+    expect(AI_INVASION_FLOOR_MAX.every((c) => c <= AI_MAX_OPERATION_FIGHTERS)).toBe(true);
+    for (const [difficulty, n, want] of [
+      ['Easy', 20, 24], // capped
+      ['Easy', 14, 20],
+      ['Normal', 30, 32], // capped
+      ['Normal', 20, 26],
+      ['Hard', 30, 32], // capped
+      ['Hard', 12, 18],
+    ] as const) {
+      const world = floorWorld(difficulty);
+      world.tick = 9000;
+      const rec = commitCohort(world, n, false);
+      advanceAIState(world, E);
+      expect(rec.invasionFloor, `${difficulty} n${n}`).toBe(want);
+    }
+  });
+
+  it('a cohort of 32 committed from 40 fighters raises the floor to the cap, not past it', () => {
+    const world = floorWorld('Hard');
+    world.tick = 9000;
+    const rec = commitCohort(world, 40, false);
+    expect(rec.operationStartFighterCount).toBe(AI_MAX_OPERATION_FIGHTERS);
+    advanceAIState(world, E);
+    expect(rec.invasionFloor).toBe(AI_INVASION_FLOOR_MAX[tierIndex('Hard')]);
+  });
+
+  // --- the launch gate --------------------------------------------------------------
+
+  it('(7) with floor 0 the gate is exactly the base: 14 no, 15 yes (Normal)', () => {
+    expect(NORMAL_BASE).toBe(15);
+    for (const [fighters, want] of [
+      [14, false],
+      [15, true],
+    ] as const) {
+      const world = floorWorld();
+      const rec = warFooting(world, { floor: 0, recoveryEndTick: 0, tick: 7000, fighters });
+      expect(invasionFighterNeed(world, rec)).toBe(15);
+      expect(launches(world), `${fighters}`).toBe(want);
+    }
+  });
+
+  it('(8) with floor 24 the gate needs 24: 23 no, 24 yes', () => {
+    for (const [fighters, want] of [
+      [23, false],
+      [24, true],
+    ] as const) {
+      const world = floorWorld();
+      const rec = warFooting(world, {
+        floor: 24,
+        recoveryEndTick: 10_000,
+        tick: 10_100,
+        fighters,
+      });
+      expect(invasionFighterNeed(world, rec)).toBe(24);
+      expect(launches(world), `${fighters}`).toBe(want);
+      if (want) expect(rec.invasionFloor).toBe(24); // launching does not clear it
+    }
+  });
+
+  it('(9) patience: the floor holds at recoveryEndTick + 3599, the base applies at + 3600', () => {
+    expect(AI_INVASION_FLOOR_PATIENCE_TICKS).toBe(3600);
+    for (const [elapsed, want] of [
+      [AI_INVASION_FLOOR_PATIENCE_TICKS - 1, false],
+      [AI_INVASION_FLOOR_PATIENCE_TICKS, true],
+    ] as const) {
+      const world = floorWorld();
+      const rec = warFooting(world, {
+        floor: 24,
+        recoveryEndTick: 10_000,
+        tick: 10_000 + elapsed,
+        fighters: NORMAL_BASE, // ≥ base, < floor
+      });
+      expect(invasionFighterNeed(world, rec)).toBe(want ? NORMAL_BASE : 24);
+      expect(launches(world), `+${elapsed}`).toBe(want);
+      expect(rec.invasionFloor).toBe(24); // the floor itself stays
+    }
+  });
+
+  it('(10) the base still applies (not the floor) long after patience', () => {
+    const world = floorWorld();
+    const rec = warFooting(world, {
+      floor: 32,
+      recoveryEndTick: 10_000,
+      tick: 10_000 + 100 * AI_INVASION_FLOOR_PATIENCE_TICKS,
+      fighters: NORMAL_BASE,
+    });
+    expect(invasionFighterNeed(world, rec)).toBe(NORMAL_BASE);
+    expect(launches(world)).toBe(true);
+  });
+
+  it('a floor at or below the base changes nothing (Easy floor 18 = base; Normal floor 9 < base)', () => {
+    const easy = floorWorld('Easy');
+    const easyRec = warFooting(easy, {
+      floor: 18,
+      recoveryEndTick: 10_000,
+      tick: 10_100,
+      fighters: 18,
+    });
+    expect(invasionFighterNeed(easy, easyRec)).toBe(18);
+    expect(launches(easy)).toBe(true);
+    // A small timed-out cohort (3 + 6 = 9) never lowers the need below the base.
+    const normal = floorWorld();
+    const normalRec = warFooting(normal, {
+      floor: 9,
+      recoveryEndTick: 10_000,
+      tick: 10_100,
+      fighters: NORMAL_BASE - 1,
+    });
+    expect(invasionFighterNeed(normal, normalRec)).toBe(NORMAL_BASE);
+    expect(launches(normal)).toBe(false);
+  });
+
+  it('(11) the food gate and the minimum tick still apply with a floor', () => {
+    // Food below 70 %: no launch even with fighters over the floor.
+    const hungry = floorWorld();
+    warFooting(hungry, { floor: 24, recoveryEndTick: 10_000, tick: 10_100, fighters: 30 });
+    setPoolFoodForTest(hungry, hungry.colonies[E]!, 0);
+    expect(launches(hungry)).toBe(false);
+    // Before AI_INVADING_MIN_TICK: no launch.
+    const early = floorWorld();
+    warFooting(early, {
+      floor: 24,
+      recoveryEndTick: 6_000,
+      tick: AI_INVADING_MIN_TICK - 1,
+      fighters: 30,
+    });
+    expect(launches(early)).toBe(false);
+    const onTime = floorWorld();
+    warFooting(onTime, {
+      floor: 24,
+      recoveryEndTick: 6_000,
+      tick: AI_INVADING_MIN_TICK,
+      fighters: 30,
+    });
+    expect(launches(onTime)).toBe(true);
+  });
+
+  it('Hard: base 12, a floor of 18 needs 18 within patience', () => {
+    for (const [fighters, want] of [
+      [17, false],
+      [18, true],
+    ] as const) {
+      const world = floorWorld('Hard');
+      const rec = warFooting(world, {
+        floor: 18,
+        recoveryEndTick: 10_000,
+        tick: 10_100,
+        fighters,
+      });
+      expect(invasionFighterNeed(world, rec)).toBe(18);
+      expect(launches(world), `${fighters}`).toBe(want);
+    }
+  });
+
+  it('a pre-cohort timeout re-arms an expired floor (any Recovery restarts patience) without raising it', () => {
+    const world = floorWorld();
+    const rec = warFooting(world, {
+      floor: 24,
+      recoveryEndTick: 10_000,
+      tick: 10_000 + AI_INVASION_FLOOR_PATIENCE_TICKS,
+      fighters: NORMAL_BASE,
+    });
+    expect(launches(world)).toBe(true); // patience ran out: launched at the base
+    // No cohort is ever committed: the invasion times out before one.
+    world.tick = rec.invasionStartTick + AI_INVADING_TIMEOUT_TICKS;
+    advanceAIState(world, E);
+    expect(rec.state).toBe('Recovery');
+    expect(rec.invasionFloor).toBe(24);
+    world.tick = rec.recoveryEndTick;
+    advanceAIState(world, E);
+    expect(rec.state).toBe('Peacetime');
+    // Back in WarFooting: the floor holds again for a fresh patience.
+    rec.state = 'WarFooting';
+    rec.lastProbeEndTick = world.tick;
+    expect(invasionFighterNeed(world, rec)).toBe(24);
+    expect(launches(world)).toBe(false);
+  });
+
+  it('CLNY-08: a player-colony AI record (--both-ai) escalates and gates on its own floor', () => {
+    const world = floorWorld();
+    const P = PLAYER_COLONY_ID as ColonyId;
+    const enemy = getAIStateForColony(world, E)!;
+    const player = createDefaultAIStateRecord(P);
+    world.aiState.push(player);
+    world.tick = 9000;
+    player.state = 'Invading';
+    player.invasionStartTick = world.tick;
+    setAIRallyOperation(
+      world,
+      P,
+      30,
+      5,
+      [300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317],
+      'Invasion',
+    );
+    advanceAIState(world, P); // dead cohort: rout
+    expect(player.invasionFloor).toBe(raised(0, 18));
+    expect(enemy.invasionFloor).toBe(0);
+    // Its gate reads its own floor: 20 player fighters are not enough within patience.
+    player.state = 'WarFooting';
+    player.lastProbeEndTick = world.tick = player.recoveryEndTick + 100;
+    spawnFighters(world, PLAYER_COLONY_ID, 20, 400);
+    setPoolFoodForTest(world, world.colonies[P]!, colonyFoodCapacity(world.colonies[P]!));
+    expect(invasionFighterNeed(world, player)).toBe(24);
+    expect(advanceAIState(world, P).state).toBe('WarFooting');
+    spawnFighters(world, PLAYER_COLONY_ID, 4, 420);
+    expect(advanceAIState(world, P).state).toBe('Invading');
+  });
+
+  it('(12) recoveryEndTick survives Recovery → Peacetime (the patience clock)', () => {
+    const world = floorWorld();
+    world.tick = 9000;
+    const rec = commitCohort(world, 18, false);
+    advanceAIState(world, E); // rout → Recovery
+    const end = rec.recoveryEndTick;
+    expect(end).toBe(9000 + AI_RECOVERY_DURATION_TICKS[NORMAL_TIER_INDEX]);
+    world.tick = end;
+    advanceAIState(world, E);
+    expect(rec.state).toBe('Peacetime');
+    expect(rec.recoveryEndTick).toBe(end);
+    expect(rec.invasionFloor).toBe(raised(0, 18));
+  });
+
+  it('the default record has no floor', () => {
+    expect(createDefaultAIStateRecord(E).invasionFloor).toBe(0);
   });
 });

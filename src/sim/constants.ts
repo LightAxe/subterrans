@@ -1254,10 +1254,43 @@ export const AI_RECOVERY_DURATION_TICKS = [1200, 1200, 1200] as const;
 export const AI_WARFOOTING_FIGHTER_THRESHOLD = [10, 8, 6] as const;
 
 /**
- * S2 — Fighter count threshold for Invading entry, indexed [Easy, Normal, Hard].
- * S2 reads only NORMAL_TIER_INDEX=1.
+ * S2 — Fighter count threshold for Invading entry, indexed [Easy, Normal, Hard] (read
+ * via tierIndex). From V72 (#398) this is the base need: after a repelled invasion the
+ * launch gate needs the colony's invasion floor instead while the floor is higher,
+ * until the floor's patience runs out (invasionFighterNeed, ai-state.ts;
+ * AI_INVASION_FLOOR_STEP / _MAX / _PATIENCE_TICKS below).
  */
 export const AI_INVADING_FIGHTER_THRESHOLD = [18, 15, 12] as const;
+
+/**
+ * #398 (V72) — how much bigger the AI's next invasion must be after one is repelled
+ * (a fighter rout, or the timeout once a cohort was committed): the invasion floor
+ * becomes min(AI_INVASION_FLOOR_MAX[tier], max(floor, the repelled wave's committed
+ * size) + this). About 40 % of Normal's base need: after a routed 18-fighter wave the
+ * next launch needs 24 fighters (until patience runs out), after a routed 24 one 30.
+ * Bare balance value.
+ */
+export const AI_INVASION_FLOOR_STEP = 6 as const;
+
+/**
+ * #398 (V72) — the highest the invasion floor goes, indexed [Easy, Normal, Hard].
+ * 32 is the cohort buffer (AI_MAX_OPERATION_FIGHTERS): above it the rout accounting
+ * would see only the first 32 fighters. Easy's 24 is about its first wave's size
+ * today, so Easy barely escalates and a novice is not met by ever-bigger waves.
+ * Bare balance value (keep it at most AI_MAX_OPERATION_FIGHTERS).
+ */
+export const AI_INVASION_FLOOR_MAX = [24, 32, 32] as const;
+
+/**
+ * #398 (V72) — ticks after Recovery ends (AIStateRecord.recoveryEndTick) for which
+ * the invasion floor holds the launch gate. After that the base need
+ * (AI_INVADING_FIGHTER_THRESHOLD) applies again, so an AI that cannot grow to its
+ * floor still attacks, until the colony's next Recovery ends: a repelled invasion
+ * (which also raises the floor) or a timeout before any cohort was committed (which
+ * re-arms the floor without raising it). 3600 ticks = 3 min at 20 Hz. Bare balance
+ * value.
+ */
+export const AI_INVASION_FLOOR_PATIENCE_TICKS = 3600 as const;
 
 /**
  * S2 / CF-P1-010 — Food storage minimum for WarFooting entry (integer percent, ×100 safe).

@@ -65,7 +65,7 @@ import {
   setPoolFoodForTest,
 } from '../sim/food/food-test-utils.js';
 import { QUEEN_HUNGER } from '../sim/hunger.js';
-import { SIM_VERSION_V71_HEALTH_MODEL } from '../sim/types.js';
+import { SIM_VERSION_V72_AI_ESCALATION } from '../sim/types.js';
 import { stageQueenInNest } from '../sim/health-test-utils.js';
 import { pheromoneKeyIsSurface } from '../sim/pheromone/pheromone-store.js';
 
@@ -1291,11 +1291,12 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         OldSimVersionError,
       );
     });
-    it('#400 — the V71 save wipe: every simVersion below MIN (V30 up) is rejected as old; MIN loads', () => {
+    it('the pre-1.0 save wipe (#400 V71, #398 V72): every simVersion below MIN (V30 up) is rejected as old; MIN loads', () => {
       // Pre-1.0 policy (no simVersion gates): MIN moves with LATEST. #400 (V71) was
-      // the first such raise, from the V50 floor (#290 PR 2) — so V30..V70 report
-      // OldSimVersionError (bootFromSave overwrites such a save instead of loading it).
-      expect(MIN_ACCEPTED_SIM_VERSION).toBe(SIM_VERSION_V71_HEALTH_MODEL);
+      // the first such raise, from the V50 floor (#290 PR 2); #398 (V72) the next — so
+      // V30..V71 report OldSimVersionError (bootFromSave overwrites such a save instead
+      // of loading it).
+      expect(MIN_ACCEPTED_SIM_VERSION).toBe(SIM_VERSION_V72_AI_ESCALATION);
       for (let v = 30; v < MIN_ACCEPTED_SIM_VERSION; v++) {
         const snapshot = makeSavedSnapshot((s) => {
           s.simVersion = v;
@@ -1638,7 +1639,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       for (const v of bad) {
         expect(() => deserializeWorldState(snapshotWith(v))).toThrow(/Invalid spider\.lastHitTick/);
       }
-      // Missing: every loadable save (MIN === LATEST, V71) carries the field.
+      // Missing: every loadable save (MIN ≥ V71, where the field arrived) carries it.
       expect(() => deserializeWorldState(snapshotWith(undefined, true))).toThrow(
         /Invalid spider\.lastHitTick: undefined/,
       );

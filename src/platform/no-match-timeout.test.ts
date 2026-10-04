@@ -13,7 +13,7 @@
 //   - a V66 world still ends on the tick it always did, won by worker count, with
 //     the timeout copy;
 //   - save/load exactly at the old cap: a V67 world plays on byte-identically to
-//     the unsaved one (the V66-save arm was retired by #400: MIN_ACCEPTED is V71);
+//     the unsaved one (the V66-save arm was retired by #400: MIN_ACCEPTED is V71 or later);
 //   - control: a queen death long before the old cap still ends a V67 match.
 //
 // #388 — such a long match can fill the 2000-event telemetry buffer with structural
@@ -209,7 +209,7 @@ describe('#376 V67 — a match has no time limit (whole tick)', () => {
   }, 60_000);
 
   // (#400 retired 'a V66 save loaded at the old cap still times out': MIN_ACCEPTED is
-  // V71, so no V66 save loads.)
+  // V71 or later, so no V66 save loads.)
 
   it('control: a queen death well before the old cap ends a V67 match, with no timeout copy', () => {
     const world = worldNearOldCap(7);
