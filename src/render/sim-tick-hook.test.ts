@@ -21,6 +21,7 @@ import {
   SPIDER_HUNGER_THRESHOLD_TICKS,
 } from '../sim/constants.js';
 import { beforeSimTick } from './sim-tick-hook.js';
+import { createQueenDangerState } from './queen-danger.js';
 import {
   createRampageCaptionState,
   noteRampageThreat,
@@ -141,7 +142,7 @@ describe('beforeSimTick — the rampage threat is checked every tick (#397)', ()
     const s = createRampageCaptionState();
     const ui = new Sink();
     const loop = createGameLoop(scriptedTick, world, {
-      onBeforeTick: (w) => beforeSimTick(w, [], s, P, prev),
+      onBeforeTick: (w) => beforeSimTick(w, [], s, P, prev, createQueenDangerState()),
     });
     frame(loop, world, s, ui, MS_PER_TICK * MAX_CATCHUP_TICKS, prev);
     expect(world.tick).toBe(T1 + MAX_CATCHUP_TICKS); // one frame, five ticks
@@ -159,7 +160,7 @@ describe('beforeSimTick — the rampage threat is checked every tick (#397)', ()
     const prev = createScenario(7, 'Normal');
     const s = createRampageCaptionState();
     const loop = createGameLoop(scriptedTick, world, {
-      onBeforeTick: (w) => beforeSimTick(w, [], s, P, prev),
+      onBeforeTick: (w) => beforeSimTick(w, [], s, P, prev, createQueenDangerState()),
     });
     loop.update(MS_PER_TICK * 3);
     expect([s.owedSinceTick, s.owedHungerTicks]).toEqual([T1 + 1, HUNGRY + 1]);
@@ -182,7 +183,7 @@ describe('beforeSimTick — the rampage threat is checked every tick (#397)', ()
     const s = createRampageCaptionState();
     const ui = new Sink();
     const loop = createGameLoop(scriptedTick, world, {
-      onBeforeTick: (w) => beforeSimTick(w, [], s, P, prev),
+      onBeforeTick: (w) => beforeSimTick(w, [], s, P, prev, createQueenDangerState()),
     });
     for (let f = 0; f < 4; f++) frame(loop, world, s, ui, MS_PER_TICK, prev);
     expect(ui.shown).toEqual([RAMPAGE_TEXT]);
@@ -193,7 +194,7 @@ describe('beforeSimTick — the rampage threat is checked every tick (#397)', ()
     const prev = createScenario(7, 'Normal');
     setTick(world, 3);
     expect(world.commandQueue).toEqual([]);
-    beforeSimTick(world, [E], createRampageCaptionState(), P, prev);
+    beforeSimTick(world, [E], createRampageCaptionState(), P, prev, createQueenDangerState());
     // The enemy AI's opening commands are queued for this tick's drain...
     expect(world.commandQueue.length).toBeGreaterThan(0);
     expect(world.commandQueue.every((c) => 'colonyId' in c && c.colonyId === E)).toBe(true);
@@ -214,7 +215,7 @@ describe('beforeSimTick — the rampage threat is checked every tick (#397)', ()
       const s = createRampageCaptionState();
       const ui = new Sink();
       const loop = createGameLoop(shaftTick, world, {
-        onBeforeTick: (w) => beforeSimTick(w, [], s, P, prev),
+        onBeforeTick: (w) => beforeSimTick(w, [], s, P, prev, createQueenDangerState()),
       });
       frame(loop, world, s, ui, MS_PER_TICK * ticksPerFrame, prev);
       // One tick: seen by the per-frame check. Five: by the next tick's
@@ -258,14 +259,14 @@ describe('beforeSimTick — the rampage threat is checked every tick (#397)', ()
     expect(rampageThreatenedViewerLastTick(prev, world, P)).toBe(false);
   });
 
-  it('GameScene runs it as the game loop’s onBeforeTick, with its own caption state', () => {
+  it('GameScene runs it as the game loop’s onBeforeTick, with its own caption and queen-danger state', () => {
     // Source-text check (as ai-controller.test.ts does for CLNY-08): no unit test
     // boots the Phaser scene, and no e2e can force a one-tick threat inside a
     // multi-tick frame.
     const here = dirname(fileURLToPath(import.meta.url));
     const src = readFileSync(join(here, 'game-scene.ts'), 'utf8');
     expect(src).toMatch(
-      /onBeforeTick:\s*\(w\)\s*=>\s*beforeSimTick\(\s*w,\s*this\.aiColonyIds,\s*this\.rampageCaption,\s*PLAYER_COLONY_ID,\s*this\.prevState,?\s*\)/,
+      /onBeforeTick:\s*\(w\)\s*=>\s*beforeSimTick\(\s*w,\s*this\.aiColonyIds,\s*this\.rampageCaption,\s*PLAYER_COLONY_ID,\s*this\.prevState,\s*this\.queenDanger,?\s*\)/,
     );
     // ...and the per-frame check passes the same snapshot, for the frame's last tick.
     expect(src).toMatch(

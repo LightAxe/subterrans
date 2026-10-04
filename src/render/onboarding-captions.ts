@@ -1,8 +1,9 @@
 // onboarding-captions.ts — S6: first-occurrence caption registry (light onboarding).
 //
 // Tracks which of the first-occurrence captions have fired this session.
-// 'queenDamage' is re-armed by GameScene once the queen recovers (#375,
-// queen-danger.ts), so it shows once per danger spell rather than once per session.
+// 'queenDamage' is re-armed by GameScene once the queen's danger has passed (#375,
+// #416, queen-danger.ts), so it shows once per danger spell rather than once per
+// session.
 // 'foodStorageNeeded' (#395) is re-armed the same way once storage covers the egg
 // reserve again (storage-hint.ts).
 // All state is render-side; nothing persists to WorldState or saves.
@@ -59,8 +60,8 @@ export function resetCaptions(): void {
  * — losing a first-occurrence onboarding caption forever. UIScene calls this when
  * a dropped caption carries a key so the trigger re-fires on the next occurrence,
  * and (#395) for a retryable caption evicted from the pending slot.
- * GameScene also calls it for 'queenDamage' once the queen recovers (#375,
- * queen-danger.ts), so that caption shows once per danger spell, and for
+ * GameScene also calls it for 'queenDamage' once the queen's danger has passed
+ * (#375, #416, queen-danger.ts), so that caption shows once per danger spell, and for
  * 'foodStorageNeeded' once storage covers the egg reserve again (#395,
  * storage-hint.ts).
  *
