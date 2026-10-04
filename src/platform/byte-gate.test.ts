@@ -18,10 +18,11 @@
 //       npx vitest run src/platform/byte-gate.test.ts
 //   A version-gated change: add BYTE_GATE_SIM_VERSION=<base LATEST> to the verify
 //   run (and optionally the capture) to pin every scenario to the pre-gate version.
-//   Pre-1.0 there are no version-gated changes (AGENTS.md "simVersion and saves"),
-//   so this pin is not used for new work. Once MIN === LATEST it accepts only LATEST.
-//   It stays for the post-1.0 window. Behaviour-preserving refactors, gate reaping
-//   included, still use plain capture/verify.
+//   Pre-1.0 there are no version-gated changes (AGENTS.md "simVersion and saves";
+//   #408 reaped the old gates), so this pin is not used for new work. Once MIN ===
+//   LATEST it accepts only LATEST. It stays for the post-1.0 window (ARCHITECTURE.md
+//   Principle 7, "Re-enabling simVersion gates"). Behaviour-preserving refactors,
+//   gate reaping included, use plain capture/verify, with BYTE_GATE_SWEEP=1 (below).
 //
 // Proof obligation: same scenarios ⇒ byte-identical serialized WorldState (incl.
 // rngState — the RNG-pull-reorder detector) at every checkpoint and at the end.
@@ -109,7 +110,8 @@ const PROJECTION = process.env.BYTE_GATE_PROJECTION === '1';
 // that adds a version gate can prove the pre-gate path byte-identical: capture on
 // the base commit (where N is LATEST), verify on the branch with the same N. Since
 // #395 the world is created at N (createScenario's simVersion), not created at
-// LATEST and re-stamped, because map generation is version-gated too.
+// LATEST and re-stamped, so a world-generation gate is pinned too. None exists today
+// (#408 reaped V69's); post-1.0 ones make it matter again.
 const PIN_SIM_VERSION = parsePinnedSimVersion(process.env.BYTE_GATE_SIM_VERSION);
 
 /** A malformed pin must fail loudly: NaN would turn every `simVersion >=` gate off on
@@ -789,8 +791,9 @@ interface ScenarioResult {
 }
 
 function runScenario(scn: Scenario): ScenarioResult {
-  // #395 — the pin goes INTO createScenario: map generation is itself version-gated
-  // (V69 food fairness), so a pinned world must be generated at the pinned version.
+  // #395 — the pin goes INTO createScenario, so a world-generation gate is pinned too:
+  // a pinned world is generated at the pinned version. None exists today (#408 reaped
+  // V69's food fairness); post-1.0 ones make it matter again.
   const world =
     PIN_SIM_VERSION !== null
       ? createScenario(scn.seed, scn.difficulty, PIN_SIM_VERSION)

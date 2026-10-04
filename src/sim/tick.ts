@@ -1633,7 +1633,7 @@ export function tick(world: WorldState, commands: readonly SimCommand[]): GameOu
     // (spider.ts seedDangerPheromone) and the cross-colony kill alarm deposits a
     // one-shot pulse (ant-death.ts despawnAnt). Since V34 (#209 PR A) non-combat surface
     // workers READ it for routing at step 15b (tickIdleReserveAndFlee) to flee —
-    // a simVersion-gated behavior, no RNG draw.
+    // no RNG draw.
     // V14+ floor is raised to 128 to match the decayFp=2 arithmetic stall
     // point (decayFp=2 gives 0 decay for values < 128); prevents zombie trails.
     let decayRate: number;

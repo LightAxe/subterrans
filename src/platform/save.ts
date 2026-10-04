@@ -172,8 +172,13 @@ export class FutureSimVersionError extends Error {
  * Transition: V69 (#402) and V70 (#405) were written under the earlier gated
  * policy and left MIN at V50. #400 (V71) is the first sim PR after them and sets
  * MIN === LATEST.
+ * Reap floor: #408 removed the remaining gates of V70 and earlier (after #247, #342
+ * and #354), so this build has no code path for a version below V71, and MIN can
+ * never go below V71, post-1.0 included (version-policy.test.ts,
+ * LAST_GATED_SIM_VERSION).
  * Post-1.0 the rolling window returns: MIN stays put while LATEST advances behind
- * sticky gates, and raising MIN becomes a deliberate, justified exception.
+ * sticky gates, and raising MIN becomes a deliberate, justified exception
+ * (ARCHITECTURE.md Principle 7, "Re-enabling simVersion gates (post-1.0)").
  *
  * Each raise also orphans playtrace uploads still arriving from the previous deploy.
  * Their snapshots replay only on the build that recorded them; the envelope's

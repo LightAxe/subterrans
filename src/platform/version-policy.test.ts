@@ -8,10 +8,12 @@
 // This file checks four things:
 //   - LATEST is the newest registered version;
 //   - MIN never exceeds LATEST;
-//   - MIN never drops below its floor (V50, and above V70 once past the transition);
+//   - MIN never drops below its floor (V50, and above V70 once past the transition:
+//     since #408 that is also the reap floor);
 //   - once past the transition from the gated policy, MIN equals LATEST.
 // At 1.0 the post-1.0 rolling window (MIN held back while LATEST advances behind
-// sticky gates) replaces the last of these.
+// sticky gates) replaces the last of these; ARCHITECTURE.md Principle 7, "Re-enabling
+// simVersion gates (post-1.0)", has the checklist and the template.
 import { describe, it, expect } from 'vitest';
 import { MIN_ACCEPTED_SIM_VERSION } from './save.js';
 import * as simTypes from '../sim/types.js';
@@ -20,14 +22,14 @@ const { LATEST_SIM_VERSION, SIM_VERSION_V50_LOCATED_FOOD } = simTypes;
 
 /**
  * The last simVersion written under the earlier gated, rolling-window policy.
- * #402 (V69) and #405 (V70) were opened before the policy changed and may still
- * land with their gates while MIN stays put. Every version above this one is
- * ungated, so once LATEST passes it, MIN must equal LATEST.
+ * #402 (V69) and #405 (V70) were opened before the policy changed and landed with
+ * their gates while MIN stayed put. Every version above this one is ungated, so once
+ * LATEST passes it, MIN must equal LATEST.
  *
- * Frozen. Raising it would be a policy change, not housekeeping. If #402 or #405 is
- * dropped instead of landing, lower it to the last gated version that did land.
- * Once LATEST is past it, the first post-transition sim PR may delete it along with
- * the transition branches below, leaving MIN === LATEST unconditional.
+ * It is also the reap floor: #408 removed the remaining gates of this version and
+ * earlier, so the code no longer has those rules, and MIN must stay above it for
+ * good, post-1.0 included. Frozen; do not delete it. The transition branches below may go, leaving
+ * MIN === LATEST unconditional until 1.0.
  */
 const LAST_GATED_SIM_VERSION = 70;
 

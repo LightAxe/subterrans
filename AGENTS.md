@@ -116,7 +116,7 @@ Use strong language deliberately — these are non-negotiable invariants of the 
 
   Older in-progress saves are then rejected with `OldSimVersionError`. That save wipe is accepted and needs no justification beyond the bump. `version-policy.test.ts` checks the MIN/LATEST rules:
   - MIN never exceeds LATEST;
-  - MIN never drops below its V50 floor;
+  - MIN never drops below its floor: V71 since #408 reaped the gated era, because the rules before V71 no longer exist in code;
   - LATEST is the newest registered version;
   - once past the transition below, MIN equals LATEST.
 
@@ -127,9 +127,12 @@ Use strong language deliberately — these are non-negotiable invariants of the 
   - **The sim code rules:** no `/`, no floats, no module-level state.
   - **For behaviour changes:** the AI-economy seed sweep, mutation testing and adversarial review.
 - **Bare balance-constant retunes still don't bump `simVersion`**, and render-only changes never do. Render-only means drawing, HUD, camera and input code, not the AI controller's policy.
-- **Existing gates are being reaped (#408).** About 60 `world.simVersion >= V_X` gates predate this rule: about 45 in `src/sim/`, the rest in `src/render/` (the AI controller and a few HUD readers) and `src/platform/save.ts`. MIN equals LATEST, so every one of them is production-dead: no loadable save or fresh world is below MIN. Issue #408 is the decision to reap them. It does so in three PRs, as the mechanical refactor in the ARCHITECTURE.md Principle 7 playbook: LATEST behaviour stays byte-identical, no `simVersion` bump, and the gating machinery stays for post-1.0 (the `simVersion` field, the version registry, save-load validation, the byte gate's version pin). Do not ask a PR to add a gate. Do not ask a PR to reap gates unless that is its stated purpose.
-- **Legacy version-pinned tests.** Some existing tests pin an old version: the `*-vNN-parity.test.ts` goldens run at an old `simVersion`, and some save tests load a save below LATEST. An ungated change, or the MIN raise, may break one. When that happens, delete the test or re-pin it to LATEST. **Never keep it green by adding a gate.** A save test that loads a version below MIN is production-dead once MIN moves.
-- **Transition.** Sim PRs opened under the old policy (#402 V69, #405 V70) landed with their gates and left MIN at V50. The first sim PR after them, #400 (V71), set MIN equal to LATEST, and MIN stays equal to LATEST from then on.
+- **The pre-1.0 gates are reaped (#408).** Every `world.simVersion >= V_X` gate written before this rule (V51–V70) was production-dead once MIN equalled LATEST.
+  - #408 removed them in three PRs as the mechanical refactor in the ARCHITECTURE.md Principle 7 playbook, keeping LATEST behaviour byte-identical, with no `simVersion` bump.
+  - It kept the gating machinery for post-1.0: the `simVersion` field, the version registry, save-load validation, `createScenario`'s version argument and the byte gate's version pin. ARCHITECTURE.md Principle 7, "Re-enabling simVersion gates (post-1.0)", lists the pieces and the 1.0 turn-on checklist.
+  - Do not ask a PR to add a gate.
+- **Legacy version-pinned tests.** #408 deleted the `*-vNN-parity.test.ts` goldens and the old-version halves of the tests on the reaped gates. A few tests still set an old `simVersion` as a fixture detail, on rules that have no gate. An ungated change, or a MIN raise, may break one. When that happens, delete the test or re-pin it to LATEST. **Never keep it green by adding a gate.**
+- **Transition.** Sim PRs opened under the old policy (#402 V69, #405 V70) landed with their gates and left MIN at V50. The first sim PR after them, #400 (V71), set MIN equal to LATEST, and MIN stays equal to LATEST from then on. #408 then reaped their gates with the rest.
 - **Out-of-window snapshots are only guaranteed to replay on the build that recorded them.** A save, F9 export or playtrace snapshot outside this build's `[MIN, LATEST]` can't be loaded or replayed here. `scripts/analyze-snapshot.ts` says so and points at a build:
   - **Playtrace:** the recording build itself. Its `gameVersion` carries that build's git SHA.
   - **F9 export:** it has no build id, so the CLI points at the last commit at that `simVersion`. That is not necessarily the recording build: a bare constant retune at the same `simVersion` (retunes never bump it) can still make the replay diverge. If origin/main never reached that version, the CLI lists the branch commits that touched it instead.

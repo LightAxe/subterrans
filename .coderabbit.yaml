@@ -120,16 +120,18 @@ reviews:
         below MIN) is allowed. DO flag a NEW gate, a behaviour change with no
         bump, a bump that leaves MIN behind LATEST, and a bump for a bare
         constant retune or a render-only (draw / HUD / camera / input) change.
-        Sim PRs opened under the old gated policy (#402 V69, #405 V70) are
-        exempt. The existing gates are legacy and production-dead (MIN ===
-        LATEST); issue #408 is the decision to reap them. A #408 reap PR deletes
-        a gate's legacy branch, its orphans and its old-version-pinned tests
-        with NO simVersion bump, and keeps the machinery (the simVersion field,
-        the SIM_VERSION_V* registry in types.ts, save-load validation,
-        BYTE_GATE_SIM_VERSION). Do not flag the reaping itself or ask to keep a
-        legacy branch; DO flag a reap edit that could change LATEST behaviour
-        (the wrong branch kept, a dropped statement, an operator-precedence
-        slip) or a test weakened beyond deleting its legacy half.
+        The pre-1.0 gates were reaped in #408, so none remain: in non-test
+        code, a SIM_VERSION_V* reference outside the registry's declarations
+        (src/sim/types.ts) and the MIN_ACCEPTED_SIM_VERSION line (and its
+        import) in src/platform/save.ts is a new gate. Keep the machinery: the
+        simVersion field, the SIM_VERSION_V* registry, save-load validation,
+        createScenario's simVersion argument, BYTE_GATE_SIM_VERSION. Do not ask
+        to remove it. It is the post-1.0 plan (ARCHITECTURE.md Principle 7,
+        "Re-enabling simVersion gates"). A gate-reap PR (that principle's
+        playbook) keeps LATEST byte-identical. In one, DO flag an edit that
+        could change LATEST behaviour (the wrong branch kept, a dropped
+        statement, an operator-precedence slip) and a test weakened beyond
+        deleting its legacy half.
 
 chat:
   auto_reply: true
