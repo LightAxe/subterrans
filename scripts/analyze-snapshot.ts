@@ -6,7 +6,7 @@
 // What it does, in order:
 //   1. Loads the JSON debug snapshot envelope.
 //   2. Replays from seed: createScenario(seed, difficulty, simVersion) at the
-//      snapshot's own simVersion (map generation is version-gated, #395) →
+//      snapshot's own simVersion (#395; see the replay below) →
 //      tick() through the captured inputLog up to snapshot.tick, then
 //      byte-compares serialized state.
 //      A divergence here is a SCEN-06 regression. The log is regrouped into the
@@ -179,9 +179,11 @@ const snapshotDifficulty = (debug.snapshot as { difficulty?: unknown }).difficul
 const replayDifficulty: 'Easy' | 'Normal' | 'Hard' =
   snapshotDifficulty === 'Easy' || snapshotDifficulty === 'Hard' ? snapshotDifficulty : 'Normal';
 // Replay at the snapshot's own simVersion (checked to be within [MIN, LATEST] above),
-// so the version-gated paths match the original session. #395: the version goes INTO
-// createScenario, because map generation is version-gated too (V69 food fairness), so
-// a V68 snapshot must replay from the V68 map.
+// so any version-gated path matches the original session. #395: the version goes INTO
+// createScenario rather than re-stamping a LATEST world, so that a world-generation
+// gate would rebuild the recorded map. Today nothing is gated (#408 reaped the last
+// gate, V69's food fairness, and MIN === LATEST), so this is just the LATEST map;
+// post-1.0 world-generation gates make it matter again (ARCHITECTURE.md Principle 7).
 const replay = createScenario(debug.seed, replayDifficulty, snapshotSimVersion);
 
 // #296 — regroup by the tick each command was DRAINED on, not the tick it was

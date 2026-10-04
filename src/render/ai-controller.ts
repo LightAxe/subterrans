@@ -5,7 +5,6 @@
 // (GameScene's onBeforeTick calls runAIController only for non-player colonyIds).
 
 import type { AIStateRecord, WorldState } from '../sim/types.js';
-import { SIM_VERSION_V69_FOOD_FAIRNESS } from '../sim/types.js';
 import type { NestEntrance } from '../sim/colony/entrance.js';
 import type { ColonyId, ColonyRecord } from '../sim/colony/colony-store.js';
 import type {
@@ -1903,21 +1902,17 @@ function findOpenChamberSpot(
   // depth band the AI actually wants to build at. Documented per plan 09.1-01
   // Task 2 pre-audit (commit dee93e5).
   //
-  // #395 (V69) — "pre-descent" is her zone, not her row. Up to V68 the test was
-  // `rawQueenTileY >= grid.height`, true only while she stands on a surface row
+  // #395 (V69) — "pre-descent" is her zone, not her row. The old test,
+  // `rawQueenTileY >= grid.height`, was true only while she stood on a surface row
   // at or below 64. A surface queen pushed north of that (the spider's hunt-reticle
   // scatter moves the non-Fighting surface ants, the queen among them while she
   // waits for her chamber) seeded the search at her SURFACE row read as an underground row: from
   // row 63 the 32-row box never reaches the Queen depth, the depth gate refuses
   // every candidate, and the AI's opening deadlocked with the queen on the surface
   // (V69's nearer food made the slow-bootstrap window this needs reachable: 2 of 300
-  // check-ai-economy runs). From V69 a queen on the surface always seeds at
-  // preferredDepth.
+  // check-ai-economy runs). A queen on the surface always seeds at preferredDepth.
   const queenTileX = Math.min(Math.max(rawQueenTileX, 0), grid.width - 1);
-  const preDescent =
-    world.simVersion >= SIM_VERSION_V69_FOOD_FAIRNESS
-      ? world.ants.zone[colony.queenEntityId] === Zone.Surface
-      : rawQueenTileY >= grid.height;
+  const preDescent = world.ants.zone[colony.queenEntityId] === Zone.Surface;
   const queenTileY = preDescent
     ? Math.min(Math.max(preferredDepth, 0), grid.height - 1)
     : Math.min(Math.max(rawQueenTileY, 0), grid.height - 1);

@@ -36,6 +36,7 @@ import {
   FOOD_PILE_COUNT,
   FOOD_PILE_HARD_CAP,
   FOOD_PILE_INITIAL_PICKUPS_MAX,
+  FOOD_PILE_INITIAL_PICKUPS_MIN,
   FOOD_PILE_MIN_COLONY_DISTANCE,
   FOOD_PILE_MIN_SEPARATION,
   MAX_ENTITIES,
@@ -44,7 +45,6 @@ import {
 
 const R = FOOD_FAIRNESS_RADIUS_TILES;
 const MIN = FOOD_FAIRNESS_MIN_PICKUPS;
-const V68 = 68;
 const FAR = Number.POSITIVE_INFINITY;
 
 // ---------------------------------------------------------------------------
@@ -105,22 +105,6 @@ function servedBy(world: WorldState, x: number, y: number): number | null {
   return best;
 }
 
-/** The colony strictly nearest (x, y) by path, or null on a tie. */
-function nearestColony(world: WorldState, x: number, y: number): number | null {
-  let best: number | null = null;
-  let bestD = FAR;
-  let tied = false;
-  for (const cid of colonyIds(world)) {
-    const d = colonyDist(world, cid, x, y);
-    if (d < bestD) {
-      best = cid;
-      bestD = d;
-      tied = false;
-    } else if (d === bestD) tied = true;
-  }
-  return tied ? null : best;
-}
-
 function ownPiles(world: WorldState, cid: number): TestPile[] {
   return pilesForTest(world).filter(
     (p) => p.isCorpse !== true && servedBy(world, p.tileX, p.tileY) === cid,
@@ -155,21 +139,6 @@ function expectSpacing(world: WorldState, p: TestPile): void {
       FOOD_PILE_MIN_SEPARATION,
     );
   }
-}
-
-/** The donor rule, from the pre-move world: nearest free natural pile of at least MIN, own side first, earliest. */
-function expectedDonorId(world: WorldState, cid: number): number | null {
-  let best: { id: number; own: boolean; d: number } | null = null;
-  for (const p of pilesForTest(world)) {
-    if (p.isCorpse === true || p.pickupsRemaining < MIN) continue;
-    if (servedBy(world, p.tileX, p.tileY) !== null) continue;
-    const own = nearestColony(world, p.tileX, p.tileY) === cid;
-    const d = colonyDist(world, cid, p.tileX, p.tileY);
-    if (best === null || (own && !best.own) || (own === best.own && d < best.d)) {
-      best = { id: p.foodPileId, own, d };
-    }
-  }
-  return best === null ? null : best.id;
 }
 
 // ---------------------------------------------------------------------------
@@ -227,61 +196,36 @@ function tileOf(world: WorldState, id: number): [number, number] {
 // ---------------------------------------------------------------------------
 
 describe('#395 ensureFoodNearEachColony on scenario maps (V69)', () => {
-  it('gives every colony its own food within the radius on 300 seeds, moving one free pile per colony that lacked it', () => {
-    let moves = 0;
-    let untouchedSeeds = 0;
+  it('gives every colony its own food within the radius on 300 seeds, keeping the pile count and sizes', () => {
     for (let seed = 0; seed < 300; seed++) {
-      const v68 = createScenario(seed, 'Normal', V68);
-      const v69 = createScenario(seed);
-      expect(v69.simVersion).toBe(LATEST_SIM_VERSION);
+      const world = createScenario(seed);
+      expect(world.simVersion).toBe(LATEST_SIM_VERSION);
 
-      const before = pilesForTest(v68);
-      const after = pilesForTest(v69);
-      // Same piles in the same creation order with the same sizes: count and food total kept.
-      expect(after.map((p) => [p.foodPileId, p.pickupsRemaining, p.pickupsInitial])).toEqual(
-        before.map((p) => [p.foodPileId, p.pickupsRemaining, p.pickupsInitial]),
-      );
-      expect(after.length).toBe(FOOD_PILE_COUNT);
-
-      for (const cid of colonyIds(v69)) expect(ownPickups(v69, cid)).toBeGreaterThanOrEqual(MIN);
-
-      const lacked = unservedColonies(v68);
-      const moved = after.filter(
-        (p, i) => p.tileX !== before[i]!.tileX || p.tileY !== before[i]!.tileY,
-      );
-      expect(moved.length).toBe(lacked.length);
-      // Each colony that lacked a pile got the donor rule's pile, now serving it.
-      for (const cid of lacked) {
-        const donorId = expectedDonorId(v68, cid);
-        const p = moved.find((q) => q.foodPileId === donorId);
-        expect(p, `seed ${seed} colony ${cid}`).toBeDefined();
-        expect(p!.pickupsRemaining).toBeGreaterThanOrEqual(MIN);
-        expect(servedBy(v69, p!.tileX, p!.tileY)).toBe(cid);
-        expectSpacing(v69, p!);
+      // The scatter's piles in creation order, each still its natural size: on these
+      // maps the pass only moves piles, it neither adds one nor resizes one.
+      const piles = pilesForTest(world);
+      expect(piles.map((p) => p.foodPileId)).toEqual(piles.map((_, i) => i));
+      expect(piles.length).toBe(FOOD_PILE_COUNT);
+      for (const p of piles) {
+        expect(p.isCorpse).toBeUndefined();
+        expect(p.pickupsRemaining).toBe(p.pickupsInitial);
+        expect(p.pickupsInitial).toBeGreaterThanOrEqual(FOOD_PILE_INITIAL_PICKUPS_MIN);
+        expect(p.pickupsInitial).toBeLessThanOrEqual(FOOD_PILE_INITIAL_PICKUPS_MAX);
+        expectSpacing(world, p);
       }
-      moves += moved.length;
 
-      if (lacked.length === 0) {
-        untouchedSeeds++;
-        // Nothing to do: no draw, no new id — the V68 world but for its simVersion.
-        expect(v69.rngState).toBe(v68.rngState);
-        expect(v69.nextEntityId).toBe(v68.nextEntityId);
-      } else {
-        expect(v69.rngState).not.toBe(v68.rngState);
-        expect(v69.nextEntityId).toBe(v68.nextEntityId);
+      for (const cid of colonyIds(world)) {
+        expect(ownPickups(world, cid), `seed ${seed} colony ${cid}`).toBeGreaterThanOrEqual(MIN);
       }
-      assertFoodStoreInvariants(v69);
+      assertFoodStoreInvariants(world);
     }
-    // Non-vacuity: about 30% of colonies lack a pile within 25 tiles on the V68 scatter,
-    // and about 5% more have only a small one.
-    expect(moves).toBeGreaterThan(150);
-    expect(untouchedSeeds).toBeGreaterThan(75);
   }, 120_000); // generous for v8-instrumented coverage runs (#227)
 
-  it('pins the V69 maps of the #395 playtest seeds: which pile moves where, and the rng after', () => {
-    // [seed, [[pile id, x, y] moved], rngState after generation] — Normal, V69. A
-    // later change to the rule bumps simVersion (pre-1.0: no gate) and re-pins these
-    // to LATEST.
+  it('pins the maps of the #395 playtest seeds: where the moved piles stand, and the rng after', () => {
+    // [seed, [[pile id, x, y] moved], rngState after generation] — Normal, LATEST. On
+    // the scatter each colony listed here lacked food of its own; these piles are the
+    // ones the donor rule moved to it. A later change to the rule bumps simVersion
+    // (pre-1.0: no gate) and re-pins these.
     const GOLDEN: ReadonlyArray<readonly [number, ReadonlyArray<readonly number[]>, number]> = [
       [
         1,
@@ -305,12 +249,11 @@ describe('#395 ensureFoodNearEachColony on scenario maps (V69)', () => {
       [20, [[10, 19, 69]], 3413044371],
     ];
     for (const [seed, moves, rngState] of GOLDEN) {
-      const before = pilesForTest(createScenario(seed, 'Normal', V68));
-      const world = createScenario(seed, 'Normal', 69);
-      const moved = pilesForTest(world)
-        .filter((p, i) => p.tileX !== before[i]!.tileX || p.tileY !== before[i]!.tileY)
-        .map((p) => [p.foodPileId, p.tileX, p.tileY]);
-      expect(moved, `seed ${seed}`).toEqual(moves);
+      const world = createScenario(seed, 'Normal');
+      for (const [id, x, y] of moves) {
+        expect(tileOf(world, id!), `seed ${seed} pile ${id}`).toEqual([x, y]);
+        expect(servedBy(world, x!, y!), `seed ${seed} pile ${id}`).not.toBeNull();
+      }
       expect(world.rngState, `seed ${seed}`).toBe(rngState);
     }
   });
@@ -332,20 +275,6 @@ describe('#395 ensureFoodNearEachColony on scenario maps (V69)', () => {
       const n = pilesForTest(createScenario(seed, 'Normal'));
       expect(pilesForTest(createScenario(seed, 'Easy'))).toEqual(n);
       expect(pilesForTest(createScenario(seed, 'Hard'))).toEqual(n);
-    }
-  });
-
-  it('is off below V69: the V68 scatter is generated unchanged', () => {
-    // The opening-famine seeds of the #395 playtest: the player had no pile within 30.
-    for (const seed of [1, 12, 24, 27]) {
-      const v68 = createScenario(seed, 'Normal', V68);
-      expect(v68.simVersion).toBe(V68);
-      expect(unservedColonies(v68).length).toBeGreaterThan(0);
-      // An older version generates the same map as V68 (the gate is >= V69).
-      const v67 = createScenario(seed, 'Normal', 67);
-      expect(pilesForTest(v67)).toEqual(pilesForTest(v68));
-      expect(v67.rngState).toBe(v68.rngState);
-      expect(unservedColonies(createScenario(seed)).length).toBe(0);
     }
   });
 });
