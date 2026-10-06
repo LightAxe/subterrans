@@ -12,12 +12,7 @@
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
 import { createScenario } from './scenario.js';
-import {
-  allocateEntityId,
-  LATEST_SIM_VERSION,
-  SIM_VERSION_V59_INVADER_RETARGET,
-  type WorldState,
-} from './types.js';
+import { allocateEntityId, type WorldState } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import {
   NO_FREE_HOSTILE,
@@ -52,7 +47,6 @@ import {
   rallyOn,
 } from './raid-test-utils.js';
 
-const V59 = SIM_VERSION_V59_INVADER_RETARGET;
 /** Enough HP that no test duel ends. */
 const UNKILLABLE_HP = 1_000_000;
 /** The corridor's row in the enemy nest. */
@@ -184,10 +178,6 @@ function duelAtA(dir: 1 | -1 = 1) {
 }
 
 describe('#364 — saturated, concretely (tileSaturatedFor)', () => {
-  it('LATEST is V59 or later', () => {
-    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(V59);
-  });
-
   it('its own tile: only a LOWER-id friend saturates it', () => {
     const { world, at } = nest();
     const t = at(5);

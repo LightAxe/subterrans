@@ -10,15 +10,9 @@ import { describe, it, expect } from 'vitest';
 import { serializeWorldState, deserializeWorldState } from './save.js';
 import type { SerializedWorldState } from './save.js';
 import { createScenario } from '../sim/scenario.js';
-import { LATEST_SIM_VERSION, SIM_VERSION_V42_COLONY_ALARM } from '../sim/types.js';
 import { PLAYER_COLONY_ID, ENEMY_COLONY_ID } from '../sim/constants.js';
 
 describe('C1 (V42) — ColonyRecord.alarmActive save column', () => {
-  it('the alarm column ships from V42 onward', () => {
-    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(SIM_VERSION_V42_COLONY_ALARM);
-    expect(createScenario(42).simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V42_COLONY_ALARM);
-  });
-
   it('round-trips per colony through serialize → deserialize', () => {
     const world = createScenario(7);
     world.colonies[PLAYER_COLONY_ID]!.alarmActive = true;

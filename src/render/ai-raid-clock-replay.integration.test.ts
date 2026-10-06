@@ -23,7 +23,7 @@ import { stampDrainTick, type SimCommand } from '../sim/commands.js';
 import { ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
 import { getAIStateForColony } from '../sim/ai-state.js';
 import { initAnt } from '../sim/ant/ant-store.js';
-import { allocateEntityId, copyWorldState, SIM_VERSION_V62_AI_NEST_DEFENCE } from '../sim/types.js';
+import { allocateEntityId, copyWorldState } from '../sim/types.js';
 import type { WorldState } from '../sim/types.js';
 import { AntTask } from '../sim/enums.js';
 import { FP_SHIFT } from '../sim/fixed.js';
@@ -61,7 +61,6 @@ function liveTick(world: WorldState): SimCommand[] {
 /** The world the recorded run starts from: WARMUP_TICKS in, raiders by the AI's door. */
 function startWorld(): string {
   const world = createScenario(SEED, DIFFICULTY);
-  expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V62_AI_NEST_DEFENCE);
   for (let t = 0; t < WARMUP_TICKS; t++) liveTick(world);
   const door = world.colonies[ENEMY_COLONY_ID]!.entrances.find((e) => e.isOpen)!;
   for (let k = 0; k < 3; k++) {

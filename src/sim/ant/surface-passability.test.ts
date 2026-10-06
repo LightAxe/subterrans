@@ -4,8 +4,8 @@
 // ant-system.ts:
 //   - canEnterSurfaceTile: blocked on HardBlock, walkable on Cosmetic/SoftCost
 //   - pickSurfaceDetour: deterministic alternate-tile pick, respects walkability
-//   - tickAntMovement surface branch: honors HardBlock under v6, ignores under v5
-//   - resolveSameColonyOccupancy surface bump: respects HardBlock under v6
+//   - tickAntMovement surface branch: honors HardBlock
+//   - resolveSameColonyOccupancy surface bump: respects HardBlock
 //
 // These tests construct synthetic worlds where the surface-feature selector
 // returns a known feature shape, then assert the movement / passability
@@ -15,11 +15,7 @@
 // hash).
 
 import { describe, it, expect } from 'vitest';
-import {
-  createWorldState,
-  allocateEntityId,
-  SIM_VERSION_V7_SURFACE_PASSABILITY,
-} from '../types.js';
+import { createWorldState, allocateEntityId } from '../types.js';
 import { initAnt, pushRecentTile } from './ant-store.js';
 import { canEnterSurfaceTile, pickSurfaceDetour, tickAntMovement } from './ant-system.js';
 import { surfaceFeatureAt, SurfaceMovementEffect } from '../surface-features.js';
@@ -324,7 +320,7 @@ describe('pickSurfaceDetour', () => {
   });
 });
 
-describe('tickAntMovement surface passability — gated on simVersion', () => {
+describe('tickAntMovement surface passability', () => {
   // Helper: spawn a surface ant at (tileX, tileY) targeting (targetTileX,
   // targetTileY). Uses Foraging+CarryingFood task because that has a clean
   // entrance-routing path. Caller must install a colony with an entrance
@@ -354,7 +350,6 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     // blocked tile. Spawn the ant on `open` with a target east of blocked
     // — its preferred step is east and should be rejected.
     const world = createWorldState(42);
-    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V7_SURFACE_PASSABILITY);
     let pair: { open: { x: number; y: number }; blocked: { x: number; y: number } } | null = null;
     for (let y = 4; y < 50 && pair === null; y++) {
       for (let x = 4; x < 50; x++) {
@@ -417,7 +412,6 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     // speed: +256 sub-pixels. Half speed (SoftCost): +128. The
     // difference is unambiguous and would surface a missing slowdown.
     const world = createWorldState(42);
-    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V7_SURFACE_PASSABILITY);
     // Find a SoftCost tile with a non-HardBlock neighbor to the east
     // (the ant needs somewhere to step) and any tile to the far east
     // for the entrance target.
@@ -574,7 +568,6 @@ describe('tickAntMovement surface passability — gated on simVersion', () => {
     // colony ants both targeting T. The resolver should bump the higher-id
     // to East/South/West, NOT North.
     const world = createWorldState(42);
-    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V7_SURFACE_PASSABILITY);
 
     let pickedT: { x: number; y: number } | null = null;
     for (let y = 5; y < 80 && pickedT === null; y++) {

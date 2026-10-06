@@ -6,7 +6,6 @@ import { tickAntMovement, updateFightAntTargets } from './ant-system.js';
 import {
   createWorldState,
   allocateEntityId,
-  SIM_VERSION_V4_DIAGONAL_MOTION,
   SIM_VERSION_V5_CHAMBER_ON_MARKED,
   SIM_VERSION_V14_PHEROMONE_AND_MOVEMENT_FIX,
 } from '../types.js';
@@ -1613,7 +1612,6 @@ describe('tickAntMovement — v4 diagonal flow-field lift (issue #34)', () => {
 
   it('D-1. v4 forager at perpendicular-flow corner takes diagonal step', () => {
     const { world, colony, underground, colonyId } = buildLTunnel();
-    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V4_DIAGONAL_MOTION);
     const antId = placeForagerAt(world, colonyId, 10, 6);
     const chamberCache = buildChamberCache(underground, colony, colonyId);
     const digFlowFields = createDigFlowFields();

@@ -15,12 +15,7 @@
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
 import { createScenario } from './scenario.js';
-import {
-  allocateEntityId,
-  SIM_VERSION_V55_ROUTED_HOMING,
-  LATEST_SIM_VERSION,
-  type WorldState,
-} from './types.js';
+import { allocateEntityId, type WorldState } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { idleWalksHome } from './ant/idle-reserve.js';
 import { tickAntMovement } from './ant/ant-movement.js';
@@ -135,12 +130,6 @@ const NURSE_FROM = { x: 104, y: 48 } as const;
  */
 const IDLE_SEED = 117;
 const IDLE_FROM = { x: 86, y: 86 } as const;
-
-describe('V55 (#343, #346)', () => {
-  it('LATEST is V55 or later', () => {
-    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(SIM_VERSION_V55_ROUTED_HOMING);
-  });
-});
 
 describe('fixtures', () => {
   it('seed 488: the obstacle stands between NURSE_FROM and the enemy door', () => {

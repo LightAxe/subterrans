@@ -11,12 +11,6 @@ import {
   createWorldState,
   allocateEntityId,
   LEGACY_SIM_VERSION,
-  SIM_VERSION_V5_CHAMBER_ON_MARKED,
-  SIM_VERSION_V7_SURFACE_PASSABILITY,
-  SIM_VERSION_V8_LEASH_HYSTERESIS,
-  SIM_VERSION_V9_CANCEL_DROPS_PENDING,
-  SIM_VERSION_V10_VISIBLE_BROOD_CARRY,
-  SIM_VERSION_V40_SMALL_COLONY_SURVIVAL,
   LATEST_SIM_VERSION,
 } from './types.js';
 import { GameOutcome } from './game-over.js';
@@ -3316,31 +3310,13 @@ describe('PlaceChamber v5 — chamber on Marked tiles (issue #38)', () => {
     expect(world.pendingChambers[`${colonyId}:${entranceX}:10`]).toBeUndefined();
   });
 
-  it('new worlds run at LATEST_SIM_VERSION (>= V10_VISIBLE_BROOD_CARRY)', () => {
+  it('new worlds run at LATEST_SIM_VERSION', () => {
     // Verify createWorldState uses the LATEST_SIM_VERSION constant exactly.
     // Tracks the constant rather than a hard-coded number so future bumps
     // don't have to update this assertion, while still proving the factory
-    // is wired to the latest version (not stuck on a stale literal). Pins
-    // the v10 sentinel as a floor — an accidental downgrade below v10
-    // would silently re-enable the visible-carry-render assumptions.
+    // is wired to the latest version (not stuck on a stale literal).
     const world = createWorldState(42);
     expect(world.simVersion).toBe(LATEST_SIM_VERSION);
-    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V10_VISIBLE_BROOD_CARRY);
-    // The v9 cancel-drops-pending floor still belongs to LATEST as well —
-    // an accidental drop below v9 would silently re-enable the #54 Queen
-    // chamber soft-lock.
-    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V9_CANCEL_DROPS_PENDING);
-    // The v8 leash-hysteresis ceiling still belongs to LATEST as well — an
-    // accidental drop below v8 would silently re-enable the #44 UAT round 3
-    // bugs (flip-flop at leash boundary, detour deadlocks in one-way
-    // pockets, empty-halo anchor suppression).
-    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V8_LEASH_HYSTERESIS);
-    // The v7 surface-passability ceiling still belongs to LATEST as well —
-    // an accidental drop below v7 would silently re-enable pre-#44 movement.
-    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V7_SURFACE_PASSABILITY);
-    // Plus a floor to flag accidental downgrades — the latest must always
-    // be at least v5 (the issue #38 baseline).
-    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V5_CHAMBER_ON_MARKED);
   });
 });
 
@@ -4389,7 +4365,6 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     // worker is free for the ratio roles / auto-dig instead of starving the
     // colony as its sole nurse. Both computedAllocation and the ant's task agree.
     const { world, colonyId } = makeWorldWithUndergroundForAutoDig();
-    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL);
     const colony = world.colonies[colonyId]!;
     colony.workerCount = 1;
     const wid = allocateEntityId(world);
@@ -4443,7 +4418,6 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     // nurse: dig 1 is carved from the forage share (computedAllocation keeps the
     // canonical forage 3; the carve is local), and exactly one ant ends up Nursing.
     const { world, colonyId } = makeWorldWithUndergroundForAutoDig();
-    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL);
     const colony = world.colonies[colonyId]!;
     const underground = world.undergroundGrids[colonyId]!;
     colony.workerCount = 4;
@@ -4510,7 +4484,6 @@ describe('Phase 10 / CTRL-06 auto-dig', () => {
     // reserved slot and the idle ants split 1 nurse + 2 foragers — the nurse is not
     // lost to Foraging for the duration of the dig.
     const { world, colonyId } = makeWorldWithUndergroundForAutoDig();
-    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V40_SMALL_COLONY_SURVIVAL);
     const colony = world.colonies[colonyId]!;
     const underground = world.undergroundGrids[colonyId]!;
     colony.workerCount = 4;

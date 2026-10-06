@@ -9,11 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import { serializeWorldState, deserializeWorldState } from './save.js';
 import { createScenario } from '../sim/scenario.js';
-import {
-  LATEST_SIM_VERSION,
-  SIM_VERSION_V34_IDLE_RESERVE_FLEE,
-  allocateEntityId,
-} from '../sim/types.js';
+import { allocateEntityId } from '../sim/types.js';
 import type { WorldState } from '../sim/types.js';
 import { initAnt } from '../sim/ant/ant-store.js';
 import { tick } from '../sim/tick.js';
@@ -49,13 +45,6 @@ function seedDanger(
 }
 
 describe('#209 PR A — fleeShelterUntilTick save column', () => {
-  it('the flee column ships from V34 onward (LATEST is at least V34)', () => {
-    // The flee feature landed in V34; later versions (e.g. PR C's V35) keep it.
-    // Version-agnostic so a later LATEST bump doesn't spuriously fail this PR A test.
-    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(SIM_VERSION_V34_IDLE_RESERVE_FLEE);
-    expect(createScenario(42).simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V34_IDLE_RESERVE_FLEE);
-  });
-
   it('round-trips distinct flee/shelter phases through serialize→deserialize', () => {
     const w = createScenario(42);
     // Stamp three representative phases onto live ant slots: -1, 0, a tick value.

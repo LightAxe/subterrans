@@ -1432,25 +1432,15 @@ describe('Nursery brood deposit — capacity-aware spread, real pipeline (#173, 
     const gs = underground.width * underground.height;
     function step(): void {
       const bufs = ensureChamberFlowFields(cff, COLONY_ID, gs);
-      if (world.simVersion >= SIM_VERSION_V24_NURSERY_CAPACITY) {
-        computeNurseryDepositField(
-          underground,
-          colony.chambers,
-          world.ants,
-          colony.eggs,
-          colony.larvae,
-          bufs.nurseDeposit,
-          bufs.queue,
-        );
-      } else {
-        computeChamberFlowField(
-          underground,
-          colony.chambers,
-          NURSERY_CHAMBER_TYPES,
-          bufs.nurseDeposit,
-          bufs.queue,
-        );
-      }
+      computeNurseryDepositField(
+        underground,
+        colony.chambers,
+        world.ants,
+        colony.eggs,
+        colony.larvae,
+        bufs.nurseDeposit,
+        bufs.queue,
+      );
       tickAntMovement(world, rng, dig, ent, cff);
       tickNurseActions(world, cff);
     }

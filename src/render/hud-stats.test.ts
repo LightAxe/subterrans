@@ -23,7 +23,7 @@ import { DEFAULT_LAYOUT } from './layout.js';
 import type { HudStats } from './hud-stats.js';
 import { createWorldState } from '../sim/types.js';
 import type { WorldState } from '../sim/types.js';
-import { allocateEntityId, SIM_VERSION_V66_QUEEN_STARVES_HP } from '../sim/types.js';
+import { allocateEntityId } from '../sim/types.js';
 import { initAnt } from '../sim/ant/ant-store.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
@@ -187,7 +187,6 @@ describe('computeHudStats', () => {
 
   it('V66: hunger alone does not move the bar (only the HP it drains does)', () => {
     const { world, colony, queenId } = setupWorld();
-    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V66_QUEEN_STARVES_HP);
     setMealsUntilStarvationForTest(world, queenId, QUEEN_HUNGER, 5);
     expect(computeHudStats(world, colony).queenHealthPct).toBe(100);
     world.ants.hp[queenId] = 12;

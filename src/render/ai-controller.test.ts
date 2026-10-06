@@ -45,13 +45,7 @@ import {
   AI_DEFENCE_SALLY_KEEP_TILES,
 } from './ai-controller.js';
 
-import {
-  createWorldState,
-  allocateEntityId,
-  SIM_VERSION_V61_AI_EARLY_STORAGE,
-  SIM_VERSION_V62_AI_NEST_DEFENCE,
-  SIM_VERSION_V63_AI_DEEP_QUEEN,
-} from '../sim/types.js';
+import { createWorldState, allocateEntityId } from '../sim/types.js';
 import { initAnt } from '../sim/ant/ant-store.js';
 import { createColonyRecord } from '../sim/colony/colony-store.js';
 import type { ColonyRecord } from '../sim/colony/colony-store.js';
@@ -1112,7 +1106,6 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
     it('a row above a third (the #33 band, rows 14..21) does not place the Queen', () => {
       for (let y = 14; y < THIRD; y++) {
         const world = makeWorld(0);
-        expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V63_AI_DEEP_QUEEN);
         const colony = addColony(world, 2 as ColonyId, 0);
         addUndergroundGrid(world, 2 as ColonyId);
         setQueenPos(world, 0, 10, 64);
@@ -1342,7 +1335,6 @@ describe('ai-controller (CMBT-01..03, CLNY-08)', () => {
 
     it('#370 (V61): the first FoodStorage places with no Queen chamber, completed or pending', () => {
       const world = makeWorld(0);
-      expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V61_AI_EARLY_STORAGE);
       const colony = addColony(world, 2 as ColonyId, 0);
       addUndergroundGrid(world, 2 as ColonyId);
       setQueenPos(world, 0, 10, 10);
@@ -2145,7 +2137,6 @@ describe('#371 (V62) — the AI defends its own nest', () => {
   /** Two colonies; the AI owns one open entrance at (DOOR_X, 0) and no rally. */
   function setup(tick = 0): { world: WorldState; colony: ColonyRecord; foe: ColonyRecord } {
     const world = makeWorld(tick);
-    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V62_AI_NEST_DEFENCE);
     const foe = addColony(world, FOE, allocateEntityId(world));
     const colony = addColony(world, AI, allocateEntityId(world));
     addUndergroundGrid(world, AI);

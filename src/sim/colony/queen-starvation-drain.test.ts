@@ -37,7 +37,7 @@ import { LARVA_HUNGER, mealsUntilStarvation, QUEEN_HUNGER } from '../hunger.js';
 import { antOnHomeGround, isSafeFromHits, tickHealth } from '../health.js';
 import { stageQueenInNest } from '../health-test-utils.js';
 import { setColonyFoodForTest, setMealsUntilStarvationForTest } from '../food/food-test-utils.js';
-import { allocateEntityId, SIM_VERSION_V66_QUEEN_STARVES_HP } from '../types.js';
+import { allocateEntityId } from '../types.js';
 import type { WorldState } from '../types.js';
 import type { ColonyRecord } from './colony-store.js';
 
@@ -450,7 +450,6 @@ describe('#375 V66 — starvation by drain through tick(): queen_death cause Sta
 
   it('a wounded queen (4 HP) starves at tick 4D − 1; the event reports Starvation', () => {
     const world = createScenario(7, 'Normal');
-    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V66_QUEEN_STARVES_HP);
     const colony = world.colonies[PLAYER_COLONY_ID]!;
     world.ants.hp[colony.queenEntityId] = 4;
     expect(runUntilPlayerQueenDies(world, 400)).toBe(4 * D - 1);

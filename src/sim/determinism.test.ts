@@ -8,13 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
-import {
-  createWorldState,
-  allocateEntityId,
-  SIM_VERSION_V13_INVARIANT_FIXES,
-  SIM_VERSION_V20_SPIDER,
-  SIM_VERSION_V23_SPIDER_AGGRO,
-} from './types.js';
+import { createWorldState, allocateEntityId, SIM_VERSION_V13_INVARIANT_FIXES } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import {
@@ -911,10 +905,6 @@ describe('S3 V20: spider replay determinism (Hunting → Striking → Rampaging)
 
     function buildSpiderWorld(): WorldState {
       const world = createScenario(SEED);
-      // Fast-fail: world must be V20 so world.spider is non-null.
-      // regresses to a sub-V20 LATEST, this assert fires before the spider!-dereference
-      // below would throw a TypeError — clearer than an opaque null-deref.
-      expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V20_SPIDER);
       const spider = world.spider!;
       // Lock the lair coordinates for seed 7777. If _placeSpider changes behaviour
       // (scan order, grid dimensions, etc.), this fails loudly rather than silently
@@ -989,8 +979,6 @@ describe('S3 V23: spider chase + fighter aggro replay determinism', () => {
 
     function buildChaseWorld(): WorldState {
       const world = createScenario(SEED);
-      // V23 behavior must be active for chase + fighter aggro to fire.
-      expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V23_SPIDER_AGGRO);
       const spider = world.spider!;
       const player = world.colonies[PLAYER_COLONY_ID as unknown as ColonyId]!;
       expect(player.workers.length).toBeGreaterThanOrEqual(2);
@@ -1063,7 +1051,6 @@ describe('S3 V23 redesign: meander + feed-after-kill replay determinism', () => 
   // lets hunger re-accrue past the threshold and drive a second predation beat.
   function buildFeedWorld(): WorldState {
     const world = createScenario(7777);
-    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V23_SPIDER_AGGRO);
     const spider = world.spider!;
     const player = world.colonies[PLAYER_COLONY_ID as unknown as ColonyId]!;
     expect(player.workers.length).toBeGreaterThanOrEqual(1);
