@@ -12,7 +12,7 @@
 //   6. Version-gated: bumping SAVE_FORMAT_VERSION invalidates old saves (intentional for beta)
 
 import type { WorldState, EntityId, AIStateRecord, SpiderState } from '../sim/types.js';
-import { LATEST_SIM_VERSION, SIM_VERSION_V72_AI_ESCALATION } from '../sim/types.js';
+import { LATEST_SIM_VERSION, SIM_VERSION_V73_FULL_ARMY_LAUNCH } from '../sim/types.js';
 import {
   AI_INVASION_FLOOR_MAX,
   AI_MAX_OPERATION_FIGHTERS,
@@ -187,9 +187,11 @@ export class FutureSimVersionError extends Error {
  * `gameVersion` carries that build's git SHA, and scripts/analyze-snapshot.ts says
  * so instead of replaying.
  *
- * Why it is V72 today:
+ * Why it is V73 today:
+ *   - V73: #421, a full army (32 or more fighters) launches its invasion without
+ *     the food check. Every pre-V73 save is rejected.
  *   - V72: #398, the AI escalates after a repelled invasion (new
- *     `AIStateRecord.invasionFloor`). Every pre-V72 save is rejected.
+ *     `AIStateRecord.invasionFloor`). Every pre-V72 save was rejected.
  *   - V71: #400, the health model (max HP by territory, healing while fed and
  *     safe; `ants.homeGroundBonusHp` removed, `lastHitTick` added). The first sim
  *     PR under the pre-1.0 policy: every pre-V71 save was rejected.
@@ -201,7 +203,7 @@ export class FutureSimVersionError extends Error {
  *     on #290, 2026-09-25).
  *   - Before that: V30 (PR 6-sim's underground-embedding guards).
  */
-export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V72_AI_ESCALATION;
+export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V73_FULL_ARMY_LAUNCH;
 
 export class OldSimVersionError extends Error {
   // #229 — explicit field (see SaveVersionMismatchError): strip-only Node compat.

@@ -547,6 +547,21 @@ that times out before any cohort is committed (no entrance found, or the AI held
 to defend its own nest) is not repelled, nor is one that ends in a queen kill.
 _Avoid_: "failed invasion" (ambiguous with the pre-cohort timeout).
 
+**Launch gate** (WarFooting → Invading):
+The test an AI colony in WarFooting must pass to launch an invasion: it has the
+fighters it needs (`AI_INVADING_FIGHTER_THRESHOLD`, or its **invasion floor**), its
+stores hold `AI_INVADING_FOOD_FRAC_PCT` (70 %) of their capacity, and the match is at
+least `AI_INVADING_MIN_TICK` old. From **#421 (simVersion V73)** a colony with
+`AI_INVADING_FOOD_GATE_BYPASS_FIGHTERS` (32, the cohort cap) or more of its own
+fighters skips the food check: a big army eats faster than its foragers fill the
+stores, so up to V72 it could sit at home, growing, and never launch. It now
+launches as soon as the gate sees 32 or more, with every fighter it has then (all
+answer an invasion's rally); in playtest 4 a held army only grew, so the wave leaves
+sooner and smaller. Below 32 the gate is unchanged, and so is Peacetime → WarFooting
+(50 % food). The AI's raid hold defers an invasion's cohort, not the launch.
+_Avoid_: "food gate" for the whole launch gate (the food check is one of its three
+tests).
+
 **Invasion floor** (#398, simVersion V72; `AIStateRecord.invasionFloor`):
 The fighters an AI colony's launch gate asks for in place of
 `AI_INVADING_FIGHTER_THRESHOLD` while the floor is higher; 0 = none. Each repelled
