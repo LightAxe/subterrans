@@ -12,12 +12,7 @@
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
 import { createScenario } from './scenario.js';
-import {
-  allocateEntityId,
-  LATEST_SIM_VERSION,
-  SIM_VERSION_V58_STARVING_FIGHTER_EATS,
-  type WorldState,
-} from './types.js';
+import { allocateEntityId, type WorldState } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { fighterWalksHomeToEat, updateFightAntTargets } from './ant/ant-system.js';
 import { antIsAtHome, fighterIsHungry, fighterIsStarving } from './hunger.js';
@@ -39,7 +34,6 @@ import {
   WORKER_LIFESPAN_TICKS,
 } from './constants.js';
 
-const V58 = SIM_VERSION_V58_STARVING_FIGHTER_EATS;
 /** Hungry but not yet starving. */
 const HUNGRY = FIGHTER_WALK_HOME_HUNGER_TICKS + 10;
 /** Starving. */
@@ -137,10 +131,6 @@ function targetTile(world: WorldState, id: number): { x: number; y: number } {
 }
 
 describe('#363 — the starving threshold (V58)', () => {
-  it('LATEST is V58 or later', () => {
-    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(V58);
-  });
-
   it('is one meal interval short of the starve-after, and past the walk-home threshold', () => {
     expect(FIGHTER_STARVING_TICKS).toBe(FIGHTER_STARVE_AFTER_TICKS - FIGHTER_MEAL_INTERVAL_TICKS);
     expect(FIGHTER_STARVING_TICKS).toBeGreaterThan(FIGHTER_WALK_HOME_HUNGER_TICKS);

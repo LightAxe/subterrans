@@ -458,12 +458,9 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(w2.ants.currentGridColonyId[enemyQueen]).toBe(ENEMY_COLONY_ID);
       expect(w2.ants.currentGridColonyId[playerInvader]).toBe(ENEMY_COLONY_ID);
     });
-    it('round-trips simVersion (LATEST: v10 visible brood carry)', async () => {
+    it('round-trips simVersion (new worlds stamp LATEST; save/load preserves it)', async () => {
       const { LATEST_SIM_VERSION } = await import('../sim/types.js');
-      // New worlds default to LATEST_SIM_VERSION. Save/load must preserve
-      // it so any LATEST replay continues to apply the gated behaviour
-      // (currently surface passability, soft cost, leash hysteresis,
-      // cancel-drops-pending, and visible brood carry) on resume.
+      // New worlds default to LATEST_SIM_VERSION; save/load must preserve it.
       const w = createScenario(42);
       expect(w.simVersion).toBe(LATEST_SIM_VERSION);
       const s = serializeWorldState(w);

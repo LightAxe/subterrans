@@ -4,8 +4,8 @@
 // ant-system.ts:
 //   - canEnterSurfaceTile: blocked on HardBlock, walkable on Cosmetic/SoftCost
 //   - pickSurfaceDetour: deterministic alternate-tile pick, respects walkability
-//   - tickAntMovement surface branch: honors HardBlock under v6, ignores under v5
-//   - resolveSameColonyOccupancy surface bump: respects HardBlock under v6
+//   - tickAntMovement surface branch: honors HardBlock
+//   - resolveSameColonyOccupancy surface bump: respects HardBlock
 //
 // These tests construct synthetic worlds where the surface-feature selector
 // returns a known feature shape, then assert the movement / passability
@@ -320,7 +320,7 @@ describe('pickSurfaceDetour', () => {
   });
 });
 
-describe('tickAntMovement surface passability — gated on simVersion', () => {
+describe('tickAntMovement surface passability', () => {
   // Helper: spawn a surface ant at (tileX, tileY) targeting (targetTileX,
   // targetTileY). Uses Foraging+CarryingFood task because that has a clean
   // entrance-routing path. Caller must install a colony with an entrance
