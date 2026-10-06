@@ -5,11 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { createWorldState } from './types.js';
 import type { WorldState, AIStateRecord } from './types.js';
-import {
-  LATEST_SIM_VERSION,
-  SIM_VERSION_V19_AI_STATE,
-  SIM_VERSION_V56_OPPONENT_FRONTAGE,
-} from './types.js';
+import { LATEST_SIM_VERSION, SIM_VERSION_V19_AI_STATE } from './types.js';
 import { applyCommands } from './tick.js';
 import type { SimCommand } from './commands.js';
 import {
@@ -581,10 +577,6 @@ describe('StartAIOperation validation (#226, V32 gate)', () => {
 // ---------------------------------------------------------------------------
 
 describe('#347 — a player-colony AI reads its opponent (V56)', () => {
-  it('LATEST is V56 or later', () => {
-    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(SIM_VERSION_V56_OPPONENT_FRONTAGE);
-  });
-
   it('opponentColonyId: player <-> enemy; null when there is no other colony', () => {
     const world = makeMinimalWorld();
     expect(opponentColonyId(world, PLAYER_COLONY_ID as ColonyId)).toBe(ENEMY_COLONY_ID);

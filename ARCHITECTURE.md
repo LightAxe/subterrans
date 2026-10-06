@@ -316,8 +316,8 @@ Saves below `MIN_ACCEPTED_SIM_VERSION` are rejected outright. There is no migrat
 - **Transition and guards.** Sim PRs opened under the earlier policy (#402 V69, #405 V70) landed gated with MIN left at V50. The first sim PR after them, #400 (V71), set `MIN === LATEST`.
   - `version-policy.test.ts` enforces the MIN/LATEST rules.
   - "No gates" is a review rule, backed by `src/platform/no-new-gates.test.ts`. That test fails on any of these in non-test code under `src/`, `scripts/` or `bench/`:
-    - a `SIM_VERSION_V<n>` reference outside the registry's declarations in `src/sim/types.ts` and the `MIN_ACCEPTED_SIM_VERSION` line (and its import) in `save.ts`;
-    - a relational comparison (`<`, `<=`, `>`, `>=`) of a `simVersion` value outside the window check in `snapshot-window.ts`.
+    - a `SIM_VERSION_V<n>` reference outside the registry itself: the name an entry declares and the `LATEST_SIM_VERSION` line in `src/sim/types.ts`, and the `MIN_ACCEPTED_SIM_VERSION` line (and its import) in `save.ts`. Another top-level const, such as a build-wide flag `USE_FOO = LATEST_SIM_VERSION >= SIM_VERSION_V73_FOO`, counts;
+    - a relational comparison (`<`, `<=`, `>`, `>=`) of a `simVersion` value or of a version constant (`LATEST_SIM_VERSION`, `MIN_ACCEPTED_SIM_VERSION`, any `*_SIM_VERSION` or `SIM_VERSION_V<n>`), outside the two window checks: `snapshotWindowMessage` in `snapshot-window.ts` and `validateSimVersion` in `save.ts`, or a rename that would hide one (`import { LATEST_SIM_VERSION as L }`).
   - The no-new-gates test is deleted at 1.0 (below).
 
 **Post-1.0 plan: sticky gates and a rolling acceptance window.** This is how the gates were written between #228 and 2026-10-01 (#408 has since reaped them). It is meant to return at 1.0, once players have saves worth keeping; the next section is the turn-on guide.

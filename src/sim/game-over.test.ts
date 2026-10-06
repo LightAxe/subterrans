@@ -1,11 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { GameOutcome, checkQueenDeath, checkTiebreaks } from './game-over.js';
-import {
-  createWorldState,
-  allocateEntityId,
-  LATEST_SIM_VERSION,
-  SIM_VERSION_V67_NO_MATCH_TIMEOUT,
-} from './types.js';
+import { createWorldState, allocateEntityId, LATEST_SIM_VERSION } from './types.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import { initAnt } from './ant/ant-store.js';
 import { AntTask } from './enums.js';
@@ -260,9 +255,8 @@ describe('#376 V67 — checkTiebreaks has no Timeout', () => {
   /** The match cap before #376 (V67): both queens alive here ended the match. */
   const OLD_MATCH_CAP_TICKS = 24_000;
 
-  it('new worlds are created at V67 or later', () => {
+  it('new worlds are created at LATEST', () => {
     expect(createWorldState(1).simVersion).toBe(LATEST_SIM_VERSION);
-    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(SIM_VERSION_V67_NO_MATCH_TIMEOUT);
   });
 
   it.each([

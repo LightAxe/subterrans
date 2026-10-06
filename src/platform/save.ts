@@ -1319,6 +1319,9 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
  *
  * Throws happen at deserialize-time (`deserializeWorldState`) and are
  * caught by `bootFromSave`'s try/catch in render/game-scene.ts.
+ *
+ * One of the two window checks that no-new-gates.test.ts lets compare against
+ * LATEST_SIM_VERSION and MIN_ACCEPTED_SIM_VERSION; it finds this one by name.
  */
 function validateSimVersion(raw: unknown): number {
   if (typeof raw !== 'number' || !Number.isInteger(raw)) {

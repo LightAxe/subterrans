@@ -121,12 +121,18 @@ reviews:
         bump, a bump that leaves MIN behind LATEST, and a bump for a bare
         constant retune or a render-only (draw / HUD / camera / input) change.
         The pre-1.0 gates were reaped in #408, so none remain: in non-test
-        code, a SIM_VERSION_V* reference outside the registry's declarations
-        (src/sim/types.ts) and the MIN_ACCEPTED_SIM_VERSION line (and its
-        import) in src/platform/save.ts is a new gate, and so is a relational
-        comparison of a simVersion value outside the window check in
-        src/platform/snapshot-window.ts (src/platform/no-new-gates.test.ts
-        fails on both). Keep the machinery: the simVersion field, the
+        code, a SIM_VERSION_V* reference outside the registry itself (the
+        name an entry declares and the LATEST_SIM_VERSION line in
+        src/sim/types.ts, the MIN_ACCEPTED_SIM_VERSION line and its import in
+        src/platform/save.ts) is a new gate, a build-wide flag such as
+        `USE_FOO = LATEST_SIM_VERSION >= SIM_VERSION_V73_FOO` included. So is a
+        relational comparison of a simVersion value or of a version constant
+        (LATEST_SIM_VERSION, MIN_ACCEPTED_SIM_VERSION, SIM_VERSION_V*) outside
+        the window checks (snapshotWindowMessage in
+        src/platform/snapshot-window.ts, validateSimVersion in
+        src/platform/save.ts), and so is a rename that would hide one
+        (`import { LATEST_SIM_VERSION as L }`); src/platform/no-new-gates.test.ts
+        fails on all three. Keep the machinery: the simVersion field, the
         SIM_VERSION_V* registry, save-load validation, createScenario's
         simVersion argument, BYTE_GATE_SIM_VERSION. Do not ask to remove it.
         It is the post-1.0 plan (ARCHITECTURE.md Principle 7, "Re-enabling

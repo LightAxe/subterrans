@@ -28,12 +28,7 @@
 import { describe, it, expect } from 'vitest';
 import { tick } from '../sim/tick.js';
 import { createScenario } from '../sim/scenario.js';
-import {
-  allocateEntityId,
-  LATEST_SIM_VERSION,
-  SIM_VERSION_V67_NO_MATCH_TIMEOUT,
-  type WorldState,
-} from '../sim/types.js';
+import { allocateEntityId, LATEST_SIM_VERSION, type WorldState } from '../sim/types.js';
 import {
   ENEMY_COLONY_ID,
   PLAYER_COLONY_ID,
@@ -126,7 +121,6 @@ describe('#376 V67 — a match has no time limit (whole tick)', () => {
   it('a new world plays through the old cap with no outcome, then ends when a queen starves', () => {
     const world = worldNearOldCap(7);
     expect(world.simVersion).toBe(LATEST_SIM_VERSION);
-    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V67_NO_MATCH_TIMEOUT);
     // Through the old cap and well past it: nothing ends the match.
     while (world.tick < OLD_MATCH_CAP_TICKS + 200) {
       expect(step(world), `tick ${world.tick}`).toBe(GameOutcome.None);

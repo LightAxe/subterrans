@@ -8,27 +8,43 @@
 // MIN_ACCEPTED_SIM_VERSION to the same value. #408 reaped every old gate, and this
 // guard keeps new ones out mechanically. It parses every non-test .ts file under
 // src/, scripts/ and bench/ with the TypeScript compiler API (syntax only, no type
-// checker) and fails on two kinds of reference.
+// checker) and fails on three kinds of reference.
 //
 //   1. 'registry name': a version-registry constant, `SIM_VERSION_V<n>` with or
 //      without a `_<SUFFIX>` (the shape version-policy.test.ts enumerates). An
 //      identifier counts, wherever it sits: an import, a use, a re-export,
 //      `types.SIM_VERSION_V99_FOO`. So does a string literal that is exactly such a
-//      name. Allowed only in three spots:
-//        - src/sim/types.ts, in its top-level `const` declarations: the registry
-//          entries and the LATEST line. A use inside a function there is a gate;
-//        - src/platform/save.ts, in its import from '../sim/types.js' (not renamed);
-//        - the MIN_ACCEPTED_SIM_VERSION declaration in save.ts, which a bump moves.
+//      name. Allowed only in four exact spots, each in a top-level `const`:
+//        - src/sim/types.ts, a registry entry's own declared name
+//          (`export const SIM_VERSION_V72_FOO = 72 as const`);
+//        - src/sim/types.ts, the LATEST line's whole right-hand side
+//          (`export const LATEST_SIM_VERSION = SIM_VERSION_V72_FOO`);
+//        - src/platform/save.ts, the MIN line's whole right-hand side
+//          (`export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V72_FOO`);
+//        - src/platform/save.ts, its import from '../sim/types.js' (not renamed).
+//      Anywhere else it is a gate: inside a function, deeper in an initializer
+//      (`export const USE_FOO = LATEST_SIM_VERSION >= SIM_VERSION_V73_FOO`), in
+//      another top-level const (`const FOO_SINCE = SIM_VERSION_V73_FOO`), a type
+//      or an export list.
 //   2. 'simVersion comparison': a relational comparison (<, <=, >, >=) where
 //      either operand contains, anywhere inside it, a name that holds a
 //      simVersion. That name is `simVersion` or a camelCase `…SimVersion`
-//      (`validatedSimVersion`), as an identifier, a property (`world.simVersion`,
-//      `w?.simVersion`) or a literal element key (`w['simVersion']`). So
+//      (`validatedSimVersion`), or a SCREAMING_CASE constant with a `SIM_VERSION`
+//      segment (LATEST_SIM_VERSION, MIN_ACCEPTED_SIM_VERSION, any registry name,
+//      PIN_SIM_VERSION), as an identifier, a property (`world.simVersion`,
+//      `w?.simVersion`, `t.LATEST_SIM_VERSION`) or a literal element key
+//      (`w['simVersion']`), private ones (`this.#simVersion`) included. So
 //      `world.simVersion >= 72`, `(w.simVersion ?? 0) >= 72`,
-//      `Number(w.simVersion) >= 72` and `w.simVersion! >= 72` all count. Allowed
-//      only in the window check, snapshotWindowMessage in
-//      src/platform/snapshot-window.ts. save.ts validateSimVersion compares a value
-//      named `raw`, which does not match.
+//      `Number(w.simVersion) >= 72`, `w.simVersion! >= 72` and the build-wide flag
+//      `LATEST_SIM_VERSION >= 73` all count. Allowed only in the two window checks:
+//        - snapshotWindowMessage in src/platform/snapshot-window.ts;
+//        - validateSimVersion in src/platform/save.ts (`raw > LATEST_SIM_VERSION`,
+//          `raw < MIN_ACCEPTED_SIM_VERSION`).
+//   3. 'version rename': an import, export or destructuring that renames such a
+//      name (`import { LATEST_SIM_VERSION as L }`, `export { LATEST_SIM_VERSION as
+//      CURRENT }`, `const { simVersion: v } = world`), which would hide every later
+//      comparison from rule 2. Never allowed. (A renamed registry name is already
+//      a 'registry name' reference, so it is not reported twice.)
 //
 // A version bump touches only the registry and the MIN line, so it never trips this
 // guard. Comments are not code (the AST skips them), and a template such as
@@ -37,11 +53,14 @@
 // food-test-utils.ts) are scanned like any other file.
 //
 // Known limits (syntactic analysis cannot close them; review covers them):
-//   - a version compared under another name (`const v = world.simVersion; v >= 72`);
-//   - a `switch` on simVersion, or an equality test (`=== 72`);
+//   - a version copied to another name and compared under it
+//     (`const v = world.simVersion; v >= 72`, `const l = LATEST_SIM_VERSION`);
+//   - a test that is not a relational comparison: a `switch` on simVersion, an
+//     equality test (`=== 72`), a lookup (`[72, 73].includes(v)`, `table[v]`), or
+//     truthiness of arithmetic (`if (w.simVersion - 72)`);
 //   - a version read only inside a nested function in the operand
 //     (`(() => w.simVersion)() >= 72`);
-//   - a registry name built at run time ('SIM_VERSION_V' + n).
+//   - a name built at run time ('SIM_VERSION_V' + n, w['sim' + 'Version']).
 
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -54,8 +73,13 @@ const SCAN_DIRS = ['src', 'scripts', 'bench'];
 
 /** A version-registry constant's name: SIM_VERSION_V<n>, optionally _<SUFFIX>. */
 const REGISTRY_NAME = /^SIM_VERSION_V\d+(?:_\w*)?$/;
-/** A name that holds a simVersion: `simVersion`, or camelCase ending in `SimVersion`. */
-const SIM_VERSION_NAME = /^(?:simVersion|[a-z][A-Za-z0-9]*SimVersion)$/;
+/**
+ * A name that holds a simVersion: `simVersion`, camelCase ending in `SimVersion`, or
+ * a SCREAMING_CASE constant with a `SIM_VERSION` segment (LATEST_SIM_VERSION,
+ * MIN_ACCEPTED_SIM_VERSION, SIM_VERSION_V72_FOO).
+ */
+const SIM_VERSION_NAME =
+  /^(?:simVersion|[a-z][A-Za-z0-9]*SimVersion|(?:[A-Z0-9]+_)*SIM_VERSION(?:_\w*)?)$/;
 const RELATIONAL: ReadonlySet<ts.SyntaxKind> = new Set([
   ts.SyntaxKind.LessThanToken,
   ts.SyntaxKind.LessThanEqualsToken,
@@ -63,14 +87,15 @@ const RELATIONAL: ReadonlySet<ts.SyntaxKind> = new Set([
   ts.SyntaxKind.GreaterThanEqualsToken,
 ]);
 
-type Kind = 'registry name' | 'simVersion comparison';
+type Kind = 'registry name' | 'simVersion comparison' | 'version rename';
 
 /** The allowances, by name; the tightness test checks each one is still used. */
 const ALLOW = {
-  registry: 'src/sim/types.ts top-level const declarations (the registry)',
+  registry: "src/sim/types.ts registry entries' names and the LATEST line",
   minImport: "src/platform/save.ts import from '../sim/types.js'",
-  minDecl: 'src/platform/save.ts MIN_ACCEPTED_SIM_VERSION declaration',
+  minDecl: 'src/platform/save.ts MIN_ACCEPTED_SIM_VERSION line',
   windowCheck: 'src/platform/snapshot-window.ts snapshotWindowMessage',
+  loadCheck: 'src/platform/save.ts validateSimVersion',
 } as const;
 type Allowance = (typeof ALLOW)[keyof typeof ALLOW];
 
@@ -92,6 +117,7 @@ interface Ref {
  */
 function mentionsSimVersion(e: ts.Node): boolean {
   if (ts.isIdentifier(e)) return SIM_VERSION_NAME.test(e.text);
+  if (ts.isPrivateIdentifier(e)) return SIM_VERSION_NAME.test(e.text.slice(1)); // #simVersion
   if (
     ts.isElementAccessExpression(e) &&
     (ts.isStringLiteral(e.argumentExpression) ||
@@ -107,60 +133,97 @@ function mentionsSimVersion(e: ts.Node): boolean {
   );
 }
 
-/** True when `node` sits in a top-level `const`/`let` statement, outside any function. */
-function inTopLevelDeclaration(node: ts.Node): boolean {
-  for (let p: ts.Node | undefined = node.parent; p !== undefined; p = p.parent) {
-    if (ts.isFunctionLike(p) || ts.isClassLike(p)) return false;
-    if (ts.isVariableStatement(p)) return ts.isSourceFile(p.parent);
+/**
+ * True when `node` renames a name that holds a simVersion: an import or export
+ * specifier (`LATEST_SIM_VERSION as L`) or a destructuring element
+ * (`{ simVersion: v }`). A registry name is left to rule 1, which flags it wherever
+ * it sits.
+ */
+function renamesVersionName(node: ts.Node): boolean {
+  if (!ts.isImportSpecifier(node) && !ts.isExportSpecifier(node) && !ts.isBindingElement(node)) {
+    return false;
   }
-  return false;
+  const from = node.propertyName;
+  if (
+    from === undefined ||
+    !(ts.isIdentifier(from) || ts.isStringLiteral(from) || ts.isNoSubstitutionTemplateLiteral(from))
+  ) {
+    return false;
+  }
+  return SIM_VERSION_NAME.test(from.text) && !REGISTRY_NAME.test(from.text);
 }
 
-/** The name of the innermost named function or method around `node`, or '<module>'. */
-function enclosingFunctionName(node: ts.Node): string {
-  for (let p: ts.Node | undefined = node.parent; p !== undefined; p = p.parent) {
-    if ((ts.isFunctionDeclaration(p) || ts.isMethodDeclaration(p)) && p.name !== undefined) {
-      return p.name.getText();
-    }
-    if (
-      (ts.isArrowFunction(p) || ts.isFunctionExpression(p)) &&
-      ts.isVariableDeclaration(p.parent)
-    ) {
-      return p.parent.name.getText();
-    }
+/**
+ * Where `node` sits in a top-level `const` declaration: as its declared name, or as
+ * its whole initializer (`const <name> = <node>;`), with the declared name. Null
+ * anywhere else: deeper inside an initializer, in a function, a `let`, a
+ * destructuring pattern, a type or an export list.
+ */
+function topLevelConstSlot(node: ts.Node): { slot: 'name' | 'initializer'; name: string } | null {
+  const decl = node.parent;
+  if (!ts.isVariableDeclaration(decl) || !ts.isIdentifier(decl.name)) return null;
+  const list = decl.parent;
+  if (
+    !ts.isVariableDeclarationList(list) ||
+    (list.flags & ts.NodeFlags.BlockScoped) !== ts.NodeFlags.Const ||
+    !ts.isVariableStatement(list.parent) ||
+    !ts.isSourceFile(list.parent.parent)
+  ) {
+    return null;
   }
-  return '<module>';
+  if (decl.name === node) return { slot: 'name', name: decl.name.text };
+  if (decl.initializer === node && ts.isIdentifier(node)) {
+    return { slot: 'initializer', name: decl.name.text };
+  }
+  return null;
+}
+
+/** True when `node` is the whole right-hand side of the top-level `const <name> = …`. */
+const isWholeInitializerOf = (node: ts.Node, name: string): boolean => {
+  const at = topLevelConstSlot(node);
+  return at !== null && at.slot === 'initializer' && at.name === name;
+};
+
+/**
+ * The name of the top-level function declaration that holds `node`, or '<module>'.
+ * Top level only: a nested function or a method that merely shares a window check's
+ * name is not that check.
+ */
+function topLevelFunctionName(node: ts.Node): string {
+  let stmt: ts.Node = node;
+  while (stmt.parent !== undefined && !ts.isSourceFile(stmt.parent)) stmt = stmt.parent;
+  return ts.isFunctionDeclaration(stmt) && stmt.name !== undefined ? stmt.name.text : '<module>';
 }
 
 function allowedBy(file: string, kind: Kind, node: ts.Node): Allowance | null {
+  if (kind === 'version rename') return null;
   if (file === 'src/sim/types.ts') {
-    return kind === 'registry name' && inTopLevelDeclaration(node) ? ALLOW.registry : null;
+    // Only a registry entry's own name and the LATEST line's right-hand side. Any
+    // other spot, a top-level const included (`USE_FOO = LATEST >= SIM_VERSION_V73`),
+    // could hold a flag that code branches on.
+    if (kind !== 'registry name') return null;
+    return topLevelConstSlot(node)?.slot === 'name' ||
+      isWholeInitializerOf(node, 'LATEST_SIM_VERSION')
+      ? ALLOW.registry
+      : null;
   }
-  if (file === 'src/platform/save.ts' && kind === 'registry name') {
-    // A renamed import (`SIM_VERSION_V99_FOO as G`) would let G be compared unseen.
-    if (ts.isImportSpecifier(node.parent) && node.parent.propertyName !== undefined) return null;
-    for (let p: ts.Node | undefined = node.parent; p !== undefined; p = p.parent) {
-      if (
-        ts.isImportDeclaration(p) &&
-        ts.isStringLiteral(p.moduleSpecifier) &&
-        p.moduleSpecifier.text === '../sim/types.js'
-      ) {
-        return ALLOW.minImport;
-      }
-      if (
-        ts.isVariableDeclaration(p) &&
-        ts.isIdentifier(p.name) &&
-        p.name.text === 'MIN_ACCEPTED_SIM_VERSION'
-      ) {
-        return ALLOW.minDecl;
-      }
+  if (file === 'src/platform/save.ts') {
+    if (kind === 'simVersion comparison') {
+      return topLevelFunctionName(node) === 'validateSimVersion' ? ALLOW.loadCheck : null;
     }
-    return null;
+    // A named import, not renamed: `SIM_VERSION_V99_FOO as G` would let G be
+    // compared unseen.
+    const spec = node.parent;
+    if (ts.isImportSpecifier(spec) && spec.propertyName === undefined) {
+      const from = spec.parent.parent.parent.moduleSpecifier;
+      return ts.isStringLiteral(from) && from.text === '../sim/types.js' ? ALLOW.minImport : null;
+    }
+    return isWholeInitializerOf(node, 'MIN_ACCEPTED_SIM_VERSION') ? ALLOW.minDecl : null;
   }
   if (
     file === 'src/platform/snapshot-window.ts' &&
     kind === 'simVersion comparison' &&
-    enclosingFunctionName(node) === 'snapshotWindowMessage'
+    topLevelFunctionName(node) === 'snapshotWindowMessage'
   ) {
     return ALLOW.windowCheck;
   }
@@ -194,6 +257,8 @@ function findGateRefs(file: string, source: string): Ref[] {
       (mentionsSimVersion(node.left) || mentionsSimVersion(node.right))
     ) {
       hit(node, 'simVersion comparison');
+    } else if (renamesVersionName(node)) {
+      hit(node, 'version rename');
     }
     ts.forEachChild(node, visit);
   };
@@ -229,7 +294,7 @@ function scanTree(): Ref[] {
 const fmt = (r: Ref): string => `${r.file}:${r.line} ${r.kind}: ${r.text}`;
 
 describe('#408 no new simVersion gates before 1.0 (delete at 1.0)', () => {
-  it('no SIM_VERSION_V* reference or simVersion comparison outside the registry, the MIN line and the window check', () => {
+  it('no SIM_VERSION_V* reference, simVersion comparison or version rename outside the registry, the MIN line and the window checks', () => {
     const violations = scanTree()
       .filter((r) => r.allowedBy === null)
       .map(fmt);
@@ -300,12 +365,63 @@ describe('#408 no-new-gates detector (self-test)', () => {
       'if ((world.simVersion | 0) >= 72) f();',
       'function createScenario(seed, d, simVersion) { if (simVersion >= 72) g(); }',
       'if (validatedSimVersion < 60) f();',
+      'class C { #simVersion = 0; f() { if (this.#simVersion >= 72) g(); } }',
     ];
     for (const src of cases) {
       expect(flagged('scripts/foo.ts', src), src).toEqual([
         expect.stringMatching(/^simVersion comparison: /),
       ]);
     }
+  });
+
+  it('catches a comparison against LATEST, MIN or any SIM_VERSION constant: a build-wide flag', () => {
+    const cases: readonly string[] = [
+      'if (LATEST_SIM_VERSION >= 73) f();',
+      'export const USE_FOO = 73 <= LATEST_SIM_VERSION;',
+      'if (raw < MIN_ACCEPTED_SIM_VERSION) f();',
+      'if (t.LATEST_SIM_VERSION > 72) f();',
+      "if (t['MIN_ACCEPTED_SIM_VERSION'] > 72) f();",
+      'if ((LATEST_SIM_VERSION as number) >= 73) f();',
+      'const r = PIN_SIM_VERSION > 3;',
+      'if (LEGACY_SIM_VERSION < x) f();',
+    ];
+    for (const src of cases) {
+      expect(flagged('src/sim/foo.ts', src), src).toEqual([
+        expect.stringMatching(/^simVersion comparison: /),
+      ]);
+    }
+  });
+
+  it('catches a rename of a version name, which would hide every later comparison', () => {
+    const cases: readonly (readonly [string, string])[] = [
+      [
+        "import { LATEST_SIM_VERSION as L } from './types.js'; if (L >= 73) f();",
+        'LATEST_SIM_VERSION as L',
+      ],
+      [
+        "export { LATEST_SIM_VERSION as CURRENT } from './types.js';",
+        'LATEST_SIM_VERSION as CURRENT',
+      ],
+      ['const { LATEST_SIM_VERSION: l } = t; if (l >= 73) f();', 'LATEST_SIM_VERSION: l'],
+      ['const { simVersion: v } = world; if (v >= 72) f();', 'simVersion: v'],
+      ["const { 'simVersion': v } = world;", "'simVersion': v"],
+      ['function g({ simVersion: v }) { return v >= 72; }', 'simVersion: v'],
+    ];
+    for (const [src, renamed] of cases) {
+      expect(flagged('src/sim/foo.ts', src), src).toEqual([`version rename: ${renamed}`]);
+    }
+    // Not a rename: a plain import or destructuring keeps the name rule 2 knows.
+    expect(
+      flagged(
+        'src/sim/foo.ts',
+        "import { LATEST_SIM_VERSION } from './types.js'; const { simVersion } = world;",
+      ),
+    ).toEqual([]);
+    // In save.ts a renamed import is never allowed either; a renamed registry name
+    // is reported once, as a registry name.
+    expect(
+      flagged('src/platform/save.ts', "import { LATEST_SIM_VERSION as L } from '../sim/types.js';"),
+    ).toEqual(['version rename: LATEST_SIM_VERSION as L']);
   });
 
   it('ignores comments, templates, other names, assignments and equality', () => {
@@ -316,16 +432,18 @@ describe('#408 no-new-gates detector (self-test)', () => {
       "const q = 'LATEST_SIM_VERSION = (SIM_VERSION_V)?';\n" +
       'world.simVersion = LATEST_SIM_VERSION;\n' +
       'if (world.simVersion === LATEST_SIM_VERSION) f();\n' +
-      'if (world.tick >= 72 && raw < MIN_ACCEPTED_SIM_VERSION) f();\n' +
-      'const r = PIN_SIM_VERSION > 3;\n' +
+      'if (world.tick >= 72 && raw < limit) f();\n' +
+      'const r = SAVE_FORMAT_VERSION > 3 && MAX_SIM_VERSIONS > 3;\n' +
       // A version read inside a nested function or named in a type is not the operand.
       'if (list.findIndex((t) => t.simVersion === v) >= 0) f();\n' +
       'if ((s as { simVersion?: unknown; tick: number }).tick > 3) f();';
     expect(flagged('src/sim/foo.ts', src)).toEqual([]);
   });
 
-  it("allows types.ts's top-level declarations, and in save.ts only the types.js import and the MIN declaration", () => {
+  it('allows in types.ts only the registry entries and the LATEST line, and in save.ts only the types.js import and the MIN line', () => {
     const registry =
+      'export const LEGACY_SIM_VERSION = 2 as const;\n' +
+      'export const SIM_VERSION_V3 = 3 as const;\n' +
       'export const SIM_VERSION_V99_FOO = 72 as const;\n' +
       'export const LATEST_SIM_VERSION = SIM_VERSION_V99_FOO;\n';
     expect(flagged('src/sim/types.ts', registry)).toEqual([]);
@@ -369,6 +487,64 @@ describe('#408 no-new-gates detector (self-test)', () => {
           'function v(x) { return x >= G; }',
       ),
     ).toEqual(['registry name: SIM_VERSION_V99_FOO']);
+    // The MIN line is allowed only as written: top level, the entry as the whole value.
+    for (const src of [
+      'export const MIN_ACCEPTED_SIM_VERSION = USE ? SIM_VERSION_V99_FOO : 1;',
+      'function f() { const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V99_FOO; }',
+      'export let MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V99_FOO;',
+      'export const FOO_SINCE = SIM_VERSION_V99_FOO;',
+    ]) {
+      expect(flagged('src/platform/save.ts', src), src).toEqual([
+        'registry name: SIM_VERSION_V99_FOO',
+      ]);
+    }
+  });
+
+  it('catches a version flag or alias in any other types.ts top-level const (Codex on #422)', () => {
+    const registry =
+      'export const SIM_VERSION_V73_FOO = 73 as const;\n' +
+      'export const LATEST_SIM_VERSION = SIM_VERSION_V73_FOO;\n';
+    // A top-level flag that code could then branch on (`if (USE_FOO)`).
+    expect(
+      flagged(
+        'src/sim/types.ts',
+        registry + 'export const USE_FOO = LATEST_SIM_VERSION >= SIM_VERSION_V73_FOO;',
+      ),
+    ).toEqual([
+      'simVersion comparison: LATEST_SIM_VERSION >= SIM_VERSION_V73_FOO',
+      'registry name: SIM_VERSION_V73_FOO',
+    ]);
+    // The same in other non-registry top-level consts, and the spots around the
+    // allowed ones: a `let`, a LATEST line that is more than the bare entry, an
+    // entry whose value is a flag, a re-export, a type.
+    const cases: readonly (readonly [string, readonly string[]])[] = [
+      ['export const FOO_SINCE = SIM_VERSION_V73_FOO;', ['registry name: SIM_VERSION_V73_FOO']],
+      ['const FLAGS = { foo: SIM_VERSION_V73_FOO };', ['registry name: SIM_VERSION_V73_FOO']],
+      [
+        'export const USE_BAR = 73 <= LATEST_SIM_VERSION;',
+        ['simVersion comparison: 73 <= LATEST_SIM_VERSION'],
+      ],
+      [
+        'export const A = 1, USE_BAZ = SIM_VERSION_V73_FOO > 72;',
+        ['simVersion comparison: SIM_VERSION_V73_FOO > 72', 'registry name: SIM_VERSION_V73_FOO'],
+      ],
+      [
+        'export const USE_QUX = LATEST_SIM_VERSION === SIM_VERSION_V73_FOO;',
+        ['registry name: SIM_VERSION_V73_FOO'],
+      ],
+      ['export let SIM_VERSION_V74_BAR = 74;', ['registry name: SIM_VERSION_V74_BAR']],
+      [
+        'export const LATEST_SIM_VERSION = USE ? SIM_VERSION_V73_FOO : 72;',
+        ['registry name: SIM_VERSION_V73_FOO'],
+      ],
+      [
+        'export const SIM_VERSION_V74_BAR = LATEST_SIM_VERSION >= 73 ? 74 : 73;',
+        ['simVersion comparison: LATEST_SIM_VERSION >= 73'],
+      ],
+      ['export { SIM_VERSION_V73_FOO as FOO };', ['registry name: SIM_VERSION_V73_FOO']],
+      ['export type Foo = typeof SIM_VERSION_V73_FOO;', ['registry name: SIM_VERSION_V73_FOO']],
+    ];
+    for (const [src, want] of cases) expect(flagged('src/sim/types.ts', src), src).toEqual(want);
   });
 
   it('allows a simVersion comparison only in snapshot-window.ts snapshotWindowMessage', () => {
@@ -381,5 +557,34 @@ describe('#408 no-new-gates detector (self-test)', () => {
     expect(flagged('src/platform/other.ts', fn('snapshotWindowMessage'))).toEqual([
       'simVersion comparison: simVersion < min',
     ]);
+    // Only the top-level function: a nested function or a method of that name is not it.
+    for (const src of [
+      'function outer() { function snapshotWindowMessage(simVersion, min) { return simVersion < min; } }',
+      'class C { snapshotWindowMessage(simVersion, min) { return simVersion < min; } }',
+      'const snapshotWindowMessage = (simVersion, min) => simVersion < min;',
+    ]) {
+      expect(flagged('src/platform/snapshot-window.ts', src), src).toEqual([
+        'simVersion comparison: simVersion < min',
+      ]);
+    }
+  });
+
+  it('allows a comparison against LATEST or MIN only in save.ts validateSimVersion', () => {
+    const fn = (name: string): string =>
+      `function ${name}(raw) {\n` +
+      '  if (raw > LATEST_SIM_VERSION) throw new FutureSimVersionError(raw, LATEST_SIM_VERSION);\n' +
+      '  if (raw < MIN_ACCEPTED_SIM_VERSION) throw new OldSimVersionError(raw);\n' +
+      '  return raw;\n' +
+      '}';
+    const both = [
+      'simVersion comparison: raw > LATEST_SIM_VERSION',
+      'simVersion comparison: raw < MIN_ACCEPTED_SIM_VERSION',
+    ];
+    expect(flagged('src/platform/save.ts', fn('validateSimVersion'))).toEqual([]);
+    expect(flagged('src/platform/save.ts', fn('other'))).toEqual(both);
+    expect(flagged('src/platform/other.ts', fn('validateSimVersion'))).toEqual(both);
+    expect(
+      flagged('src/platform/save.ts', `export function load(raw) { ${fn('validateSimVersion')} }`),
+    ).toEqual(both);
   });
 });
