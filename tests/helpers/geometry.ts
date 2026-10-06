@@ -18,7 +18,12 @@ import {
   saveLoadDialogItems,
   type SaveLoadDialogContext,
 } from '../../src/render/save-load-dialog-layout.js';
-import { buildHudLayout, captionWrapWidth, CAPTION_PAD_X } from '../../src/render/hud-layout.js';
+import {
+  buildHudLayout,
+  captionWrapWidth,
+  CAPTION_PAD_X,
+  minimapFrameRect,
+} from '../../src/render/hud-layout.js';
 import { TOOL_ORDER, toolButtonRect } from '../../src/render/hud-controls.js';
 import { newGameScreenLayout, type Difficulty } from '../../src/render/boot-overlay-layout.js';
 import { CONTEXT_MENU } from '../../src/render/context-menu-layout.js';
@@ -127,3 +132,22 @@ export const TOP_CAPTION_MIN_LEFT: number =
   DEFAULT_LAYOUT.w / 2 -
   (captionWrapWidth(DEFAULT_LAYOUT.w / 2, 60, buildHudLayout(DEFAULT_LAYOUT)) + 2 * CAPTION_PAD_X) /
     2;
+
+/** #427 — every HUD zone's box at the default layout (the minimap with its frame), so a
+ *  spec can check that something drawn in the world sits clear of the HUD. */
+export const HUD_ZONE_RECTS: readonly { readonly name: string; readonly rect: Rect }[] = (() => {
+  const hud = buildHudLayout(DEFAULT_LAYOUT);
+  return [
+    { name: 'STATS', rect: hud.STATS },
+    { name: 'TRIANGLE', rect: hud.TRIANGLE },
+    { name: 'SPEED', rect: hud.SPEED },
+    { name: 'HINTS', rect: hud.HINTS },
+    { name: 'TOOLS', rect: hud.TOOLS },
+    { name: 'MINIMAP', rect: minimapFrameRect(hud) },
+    { name: 'VIEW_TOGGLE', rect: hud.VIEW_TOGGLE },
+    { name: 'UNDERGROUND_COLONY_TOGGLE', rect: hud.UNDERGROUND_COLONY_TOGGLE },
+    { name: 'ALARM_TOGGLE', rect: hud.ALARM_TOGGLE },
+    { name: 'SPIDER_ORDER', rect: hud.SPIDER_ORDER },
+    { name: 'SAVE_ICON', rect: hud.SAVE_ICON },
+  ];
+})();

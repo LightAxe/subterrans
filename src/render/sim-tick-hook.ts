@@ -18,6 +18,7 @@ import type { ColonyId } from '../sim/colony/colony-store.js';
 import { runAIController } from './ai-controller.js';
 import { noteRampageThreat, type RampageCaptionState } from './recurring-captions.js';
 import { noteQueenDangerTick, type QueenDangerState } from './queen-danger.js';
+import { noteEnemyQueenWoundTick, type EnemyQueenWoundState } from './enemy-queen-wound.js';
 
 /**
  * Before each sim tick, in order:
@@ -32,7 +33,10 @@ import { noteQueenDangerTick, type QueenDangerState } from './queen-danger.js';
  *      (noteQueenDangerTick): it decides that tick's harm and re-arm on the tick's own
  *      end state, so the outcome does not depend on how many ticks the frame runs
  *      (GameScene's frame step only presents what was decided);
- *   4. the prevState snapshot for render interpolation.
+ *   4. #427 — the same per-tick look at the viewer's opponent's queen for "Their
+ *      queen is wounded!" (noteEnemyQueenWoundTick): the caption and its re-arm are
+ *      decided on each tick's own end state;
+ *   5. the prevState snapshot for render interpolation.
  */
 export function beforeSimTick(
   world: WorldState,
@@ -41,9 +45,11 @@ export function beforeSimTick(
   viewerColonyId: ColonyId,
   prevState: WorldState,
   queenDanger: QueenDangerState,
+  enemyQueenWound: EnemyQueenWoundState,
 ): void {
   for (const aiCid of aiColonyIds) runAIController(world, aiCid);
   noteRampageThreat(rampageCaption, world, viewerColonyId, prevState);
   noteQueenDangerTick(queenDanger, world, viewerColonyId);
+  noteEnemyQueenWoundTick(enemyQueenWound, world, viewerColonyId);
   copyWorldState(world, prevState);
 }

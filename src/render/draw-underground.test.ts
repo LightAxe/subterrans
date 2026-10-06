@@ -13,7 +13,17 @@ import {
   drawUndergroundEntities,
   drawUnderground,
   projectFoodStorageFill,
+  QUEEN_HP_BAR_LIFT_PX,
+  type EnemyQueenHpBar,
 } from './draw-underground.js';
+import {
+  HP_BAR_H,
+  HP_BAR_TRACK_COLOR,
+  HP_BAR_W,
+  hpBarFillColor,
+  hpBarFillWidth,
+} from './hp-bar.js';
+import { QUEEN_SPRITE_HEIGHT, QUEEN_SPRITE_WIDTH } from './ant-sprite-layer.js';
 import type { GfxLike } from './draw-surface.js';
 import type {
   AntSpriteDrawOptions,
@@ -44,7 +54,7 @@ import {
   COLOR_QUEEN_OUTLINE,
 } from './sprites.js';
 import { COLOR_ROCK_BASE, COLOR_FLOOR_BASE, COLOR_BARREN_EARTH } from './terrain-atlas.js';
-import { FOOD_CHAMBER_CAPACITY } from '../sim/constants.js';
+import { COMBAT_HP_QUEEN, FOOD_CHAMBER_CAPACITY, QUEEN_HP_HOME } from '../sim/constants.js';
 import { addChamberForTest, setPoolFoodForTest } from '../sim/food/food-test-utils.js';
 import { makeCameraView, type CameraView } from './camera-adapter.js';
 import { AntFacingCache } from './ant-facing-cache.js';
@@ -1368,5 +1378,200 @@ describe('drawUndergroundEntities — carried food (#290 PR 6)', () => {
   it('an empty-handed looter draws no crumb', () => {
     const w = nestWithAnt(ENEMY_COLONY_ID, AntTask.Fighting, FightingSubState.Looting, 0);
     expect(drawn(w).carrying).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #427 — the enemy queen's HP bar in the enemy nest view. The rule: it is drawn with
+// her sprite, only when that sprite is drawn (alive, underground in the viewed grid,
+// in view), only in another colony's nest, on the overlay layer, at her HP over her
+// max HP where she stands (health.ts antMaxHp) — full or wounded.
+// ---------------------------------------------------------------------------
+
+describe('drawUndergroundEntities — the enemy queen’s HP bar (#427)', () => {
+  /** A 10×10 open nest of colony `colonyId` with its queen (id 0) at tile (5, 5) at `hp`. */
+  function nestWithQueen(colonyId: number, hp: number): { w: WorldState; q: number } {
+    const w = createWorldState(1);
+    const grid = createUndergroundGrid(10, 10);
+    for (let x = 0; x < 10; x++) {
+      for (let y = 0; y < 10; y++) ugSet(grid, x, y, UndergroundTileState.Open);
+    }
+    w.undergroundGrids[colonyId] = grid;
+    const q = 0;
+    const colony = createColonyRecord(colonyId, q);
+    colony.entrances = [];
+    colony.rallyPoint = null;
+    colony.digFlowFieldDirty = false;
+    w.colonies[colonyId] = colony;
+    initAnt(w.ants, q, {
+      colonyId,
+      posX: (5 << FP_SHIFT) + 128,
+      posY: (5 << FP_SHIFT) + 128,
+      zone: 1,
+      hp,
+    });
+    return { w, q };
+  }
+
+  interface Drawn {
+    bar: EnemyQueenHpBar | null;
+    base: MockGfx;
+    overlay: MockGfx;
+    sprites: MockAntSprites;
+  }
+
+  function draw(
+    w: WorldState,
+    viewed: number,
+    opts: { cam?: CameraView; dotMode?: boolean; overlay?: boolean } = {},
+  ): Drawn {
+    const base = new MockGfx();
+    const overlay = new MockGfx();
+    const sprites = new MockAntSprites();
+    const got = drawUndergroundEntities(
+      base,
+      sprites,
+      w,
+      w,
+      0,
+      opts.cam ?? makeCamera(5, 5),
+      viewed,
+      undefined,
+      undefined,
+      0,
+      opts.dotMode ?? false,
+      opts.overlay === false ? undefined : overlay,
+    );
+    // The record is reused across calls: copy it before the next draw.
+    return { bar: got === null ? null : { ...got }, base, overlay, sprites };
+  }
+
+  /** The track rect (fillStyle HP_BAR_TRACK_COLOR then fillRect) on `gfx`, or null. */
+  function track(gfx: MockGfx): { x: number; y: number; w: number; h: number } | null {
+    for (let i = 0; i + 1 < gfx.calls.length; i++) {
+      const c = gfx.calls[i]!;
+      const next = gfx.calls[i + 1]!;
+      if (
+        c.method === 'fillStyle' &&
+        c.args[0] === HP_BAR_TRACK_COLOR &&
+        next.method === 'fillRect'
+      ) {
+        const [x, y, rw, rh] = next.args as number[];
+        return { x: x!, y: y!, w: rw!, h: rh! };
+      }
+    }
+    return null;
+  }
+
+  it('draws it over the enemy queen in her nest, on the overlay, at her HP over her max HP there', () => {
+    const { w, q } = nestWithQueen(ENEMY_COLONY_ID, 20);
+    const d = draw(w, ENEMY_COLONY_ID);
+    expect(d.bar).not.toBeNull();
+    // In her own nest her max HP is the home value (50), not COMBAT_HP_QUEEN (46).
+    expect(d.bar!.maxHp).toBe(QUEEN_HP_HOME);
+    expect(d.bar!.hp).toBe(20);
+    expect(d.bar!.queenId).toBe(q);
+    expect(d.bar!.ratio).toBe(20 / QUEEN_HP_HOME);
+    expect(d.bar!.fillW).toBe(hpBarFillWidth(20 / QUEEN_HP_HOME)); // 10 of 24
+    expect(d.bar!.fillW).toBe(10);
+    expect(d.bar!.color).toBe(hpBarFillColor(20 / QUEEN_HP_HOME));
+    // On the overlay (above the sprites), not the base layer.
+    expect(track(d.overlay)).toEqual({ x: d.bar!.x, y: d.bar!.y, w: HP_BAR_W, h: HP_BAR_H });
+    expect(track(d.base)).toBeNull();
+  });
+
+  it('a queen at full HP shows a full bar (it is always shown in her nest)', () => {
+    const d = draw(nestWithQueen(ENEMY_COLONY_ID, QUEEN_HP_HOME).w, ENEMY_COLONY_ID);
+    expect(d.bar!.ratio).toBe(1);
+    expect(d.bar!.fillW).toBe(HP_BAR_W);
+  });
+
+  it('scales with her max HP where she stands: 46 HP at home (max 50) is not full', () => {
+    // A queen still at her away max (COMBAT_HP_QUEEN, 46) once home reads 46/50.
+    expect(COMBAT_HP_QUEEN).toBe(46);
+    const d = draw(nestWithQueen(ENEMY_COLONY_ID, COMBAT_HP_QUEEN).w, ENEMY_COLONY_ID);
+    expect(d.bar!.maxHp).toBe(QUEEN_HP_HOME);
+    expect(d.bar!.ratio).toBe(COMBAT_HP_QUEEN / QUEEN_HP_HOME);
+    expect(d.bar!.fillW).toBe(HP_BAR_W - 2); // round(24 × 0.92) = 22
+    const half = draw(nestWithQueen(ENEMY_COLONY_ID, QUEEN_HP_HOME / 2).w, ENEMY_COLONY_ID);
+    expect(half.bar!.fillW).toBe(HP_BAR_W / 2);
+  });
+
+  it('none over the player’s own queen in the player’s own nest (the HUD shows hers)', () => {
+    const { w } = nestWithQueen(PLAYER_COLONY_ID, 10);
+    const d = draw(w, PLAYER_COLONY_ID);
+    expect(d.sprites.calls.filter((c) => c.kind === 'queen')).toHaveLength(1);
+    expect(d.bar).toBeNull();
+    expect(track(d.overlay)).toBeNull();
+  });
+
+  it('none without an overlay layer', () => {
+    const d = draw(nestWithQueen(ENEMY_COLONY_ID, 10).w, ENEMY_COLONY_ID, { overlay: false });
+    expect(d.bar).toBeNull();
+    expect(track(d.base)).toBeNull();
+  });
+
+  it('only when her sprite is drawn: not out of view, dead, on the surface, or outside the viewed grid', () => {
+    const cases: [string, (w: WorldState, q: number) => void, CameraView | undefined][] = [
+      ['drawn', () => {}, undefined],
+      ['out of view', () => {}, makeCamera(200, 200)],
+      [
+        'dead',
+        (w, q) => {
+          w.ants.alive[q] = 0;
+        },
+        undefined,
+      ],
+      [
+        'on the surface',
+        (w, q) => {
+          w.ants.zone[q] = 0;
+        },
+        undefined,
+      ],
+      [
+        'in another grid',
+        (w, q) => {
+          w.ants.currentGridColonyId[q] = PLAYER_COLONY_ID;
+        },
+        undefined,
+      ],
+    ];
+    for (const [name, setup, cam] of cases) {
+      const { w, q } = nestWithQueen(ENEMY_COLONY_ID, 12);
+      setup(w, q);
+      const d = draw(w, ENEMY_COLONY_ID, cam === undefined ? {} : { cam });
+      const spriteDrawn = d.sprites.calls.some((c) => c.kind === 'queen');
+      expect(spriteDrawn, name).toBe(name === 'drawn');
+      expect(d.bar !== null, name).toBe(spriteDrawn);
+      expect(track(d.overlay) !== null, name).toBe(spriteDrawn);
+    }
+  });
+
+  it('sits centred above her sprite, clear of it however she is turned', () => {
+    const d = draw(nestWithQueen(ENEMY_COLONY_ID, 30).w, ENEMY_COLONY_ID);
+    const sprite = d.sprites.calls.find((c) => c.kind === 'queen')!;
+    expect(Math.abs(d.bar!.x + HP_BAR_W / 2 - sprite.x)).toBeLessThanOrEqual(0.5);
+    // The highest any part of her sprite reaches above its centre, over every rotation
+    // (the rotated box's half-height, (W·|sin θ| + H·|cos θ|) / 2, at its largest).
+    let reach = 0;
+    for (let k = 0; k <= 3600; k++) {
+      const a = (k / 3600) * 2 * Math.PI;
+      const half =
+        (QUEEN_SPRITE_WIDTH * Math.abs(Math.sin(a)) + QUEEN_SPRITE_HEIGHT * Math.abs(Math.cos(a))) /
+        2;
+      reach = Math.max(reach, half);
+    }
+    expect(reach).toBeGreaterThan(Math.max(QUEEN_SPRITE_WIDTH, QUEEN_SPRITE_HEIGHT) / 2);
+    // The bar's bottom edge, outline included, is above that.
+    expect(d.bar!.y + HP_BAR_H + 1).toBeLessThanOrEqual(sprite.y - reach);
+    expect(QUEEN_HP_BAR_LIFT_PX).toBeGreaterThanOrEqual(reach);
+  });
+
+  it('labels her dot in the strategic zoom-out (dot mode) too', () => {
+    const d = draw(nestWithQueen(ENEMY_COLONY_ID, 15).w, ENEMY_COLONY_ID, { dotMode: true });
+    expect(d.sprites.calls).toHaveLength(0);
+    expect(d.bar!.hp).toBe(15);
+    expect(track(d.overlay)).not.toBeNull();
   });
 });

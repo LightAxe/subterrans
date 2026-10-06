@@ -108,6 +108,7 @@ import {
   drawUndergroundTerrain,
   drawUndergroundEntities,
   restampUndergroundTiles,
+  type EnemyQueenHpBar,
 } from './draw-underground.js';
 import { drawPheromoneOverlay, PHEROMONE_OVERLAY_DEPTH } from './draw-pheromone.js';
 import { publishSpeedMultiplier, type DifficultySelectCallbacks } from './ui-scene.js';
@@ -234,6 +235,7 @@ import {
 } from './enemy-march.js';
 import { checkAndTrigger, resetCaptions, type CaptionKey } from './onboarding-captions.js';
 import { advanceQueenDanger, createQueenDangerState } from './queen-danger.js';
+import { advanceEnemyQueenWound, createEnemyQueenWoundState } from './enemy-queen-wound.js';
 import {
   advanceStorageHint,
   createStorageHintState,
@@ -482,6 +484,20 @@ declare global {
       /** #389 — the end screen's outcome title as drawn (GameOver overlay, or the
        *  survey after a game over); null when none is up. Dev-build only. */
       getEndScreenTitle?(): string | null;
+      /** #427 — the enemy queen's HP bar as the enemy-nest view last drew it: her HP
+       *  and max HP where she stands, the fraction and fill width (px) drawn, the fill
+       *  colour, and the track's box in world px (`world`) and on the canvas through the
+       *  underground camera now (`screen`, logical px); null while none is drawn (the
+       *  surface, the player's own nest, or she is out of view). Dev-build only. */
+      getEnemyQueenHpBar?(): {
+        hp: number;
+        maxHp: number;
+        ratio: number;
+        fillW: number;
+        color: number;
+        world: { x: number; y: number; w: number; h: number };
+        screen: { x: number; y: number; w: number; h: number };
+      } | null;
       /** #290 PR 6 — the text of every caption that began displaying this round,
        *  oldest first (UIScene.captionsShown). A caption is up for 1.5 s (a
        *  long-hold one longer), so a spec asserts on the log rather than racing the live Text. Dev-build only. */
@@ -920,6 +936,27 @@ export class GameScene extends Phaser.Scene {
       alarmHotkeyAccepts: (): number => this.alarmHotkeyAccepts,
       getTick: (): number => this.world?.tick ?? -1,
       getCaptionsShown: (): string[] => this.getUIScene()?.captionsShown?.() ?? [],
+      getEnemyQueenHpBar: () => {
+        const bar = this.lastEnemyQueenHpBar;
+        if (bar === null) return null;
+        const cam = this.viewState.undergroundCamera;
+        const a = worldToScreen(bar.x, bar.y, cam);
+        const b = worldToScreen(bar.x + bar.w, bar.y + bar.h, cam);
+        return {
+          hp: bar.hp,
+          maxHp: bar.maxHp,
+          ratio: bar.ratio,
+          fillW: bar.fillW,
+          color: bar.color,
+          world: { x: bar.x, y: bar.y, w: bar.w, h: bar.h },
+          screen: {
+            x: a.screenX,
+            y: a.screenY,
+            w: b.screenX - a.screenX,
+            h: b.screenY - a.screenY,
+          },
+        };
+      },
       getTooltipShown: (): string | null => this.getUIScene()?.tooltipShown?.() ?? null,
       getQueenStoresLine: () => this.getUIScene()?.queenStoresLine?.() ?? null,
       getPlayerStores: () => {
@@ -1151,6 +1188,11 @@ export class GameScene extends Phaser.Scene {
   private lastProcessedEventTick = -1; // tick-based cursor for consumeEventsForRender
   // #375 — queen HP tracking for the damage pulse and the re-arming danger caption.
   private queenDanger = createQueenDangerState();
+  // #427 — "Their queen is wounded!": the caption decided per sim tick, owed to the frame.
+  private enemyQueenWound = createEnemyQueenWoundState();
+  // #427 — the enemy queen's HP bar as last drawn (world px; null: none drawn), for the
+  // dev-only __phase9_test.getEnemyQueenHpBar. A copy, so it outlives the draw's scratch.
+  private lastEnemyQueenHpBar: EnemyQueenHpBar | null = null;
   private queenStarvationTriggered = false; // starvation onset caption/pulse guard
   // #395/#413 — the Food Storage hint: build the first larder, or (stores full) another
   // (storage-hint.ts).
@@ -1883,6 +1925,8 @@ export class GameScene extends Phaser.Scene {
     // S6 — reset per-session render-side scratch.
     this.lastProcessedEventTick = -1;
     this.queenDanger = createQueenDangerState();
+    this.enemyQueenWound = createEnemyQueenWoundState();
+    this.lastEnemyQueenHpBar = null;
     this.queenStarvationTriggered = false;
     this.storageHint = createStorageHintState();
     this.contestedGlowFrames.clear();
@@ -2144,6 +2188,27 @@ export class GameScene extends Phaser.Scene {
     const recurringOwed =
       !raidTaken && recurringCaptionStillOwed(this.rampageCaption, raidCaption, armyWarningOwed);
     if (recurringOwed) uiScene?.yieldLongCaption?.();
+
+    // #427 — "Their queen is wounded!": the enemy queen, in her nest, has dropped below
+    // half her max HP. Once per wound spell: it re-arms once she has healed back to
+    // three quarters (enemy-queen-wound.ts). Decided per sim tick (the look in
+    // beforeSimTick, and this frame's own); this only presents it. Retryable: dropped
+    // or evicted from the pending slot, it is offered again while her wound spell lasts.
+    // Like the storage hint (below) it gives way to a recurring caption still owed,
+    // which can enter only an idle queue: held back (un-marked, so the next look
+    // offers it again) and withdrawn from the pending slot, so that one comes first.
+    const woundCaption = advanceEnemyQueenWound(
+      this.enemyQueenWound,
+      this.world,
+      PLAYER_COLONY_ID,
+      recurringOwed || uiScene === null,
+    );
+    if (woundCaption !== null && uiScene) {
+      uiScene.showCaption(woundCaption, this.layout.w / 2, 60, 'enemyQueenWounded');
+    }
+    if (recurringOwed && uiScene?.pendingCaptionKey?.() === 'enemyQueenWounded') {
+      uiScene.withdrawPendingCaption?.('enemyQueenWounded');
+    }
 
     // #395 (V70) — the queen lays only while stores cover the egg reserve, which the
     // entrance pool alone never can, and (#413) one larder only up to about 3 brood:
@@ -2414,9 +2479,10 @@ export class GameScene extends Phaser.Scene {
 
     this.gameLoop = createGameLoop(tick, this.world, {
       // AI controllers (commands enqueued before the drain), the #397 per-tick
-      // rampage-threat check, the #416 per-tick look at the queen, then the
-      // prevState snapshot for interpolation. (`this.queenDanger` is read per call:
-      // resetSessionState replaces it.)
+      // rampage-threat check, the #416 per-tick look at the queen, the #427 one at
+      // the enemy queen, then the prevState snapshot for interpolation.
+      // (`this.queenDanger` and `this.enemyQueenWound` are read per call:
+      // resetSessionState replaces them.)
       onBeforeTick: (w) =>
         beforeSimTick(
           w,
@@ -2425,6 +2491,7 @@ export class GameScene extends Phaser.Scene {
           PLAYER_COLONY_ID,
           this.prevState,
           this.queenDanger,
+          this.enemyQueenWound,
         ),
       onAfterDrain: (cmds) => {
         // SCEN-06 replay truth: never truncate — appendInputLog handles all commands
@@ -3178,11 +3245,12 @@ export class GameScene extends Phaser.Scene {
       // queued raid-order badge is sized in screen px, so it takes the camera zoom.
       if (showPreview)
         drawGhostDelta(overlayGfx, ghostDelta, 'surface', PLAYER_COLONY_ID, cam.zoom);
+      if (import.meta.env.DEV) this.lastEnemyQueenHpBar = null; // #427: underground only
     } else {
       this.recordDrawLayer('terrain');
       this.updatePheromoneLayer(cam, 'underground', dotMode); // #236 PR1 — cached persistent layer
       this.recordDrawLayer('entities');
-      drawUndergroundEntities(
+      const queenBar = drawUndergroundEntities(
         gfx,
         this.antSprites,
         this.prevState,
@@ -3194,7 +3262,10 @@ export class GameScene extends Phaser.Scene {
         this.undergroundGlowFrames, // S6: underground glow fade map
         this.renderFrame, // S6: current render frame
         dotMode, // §C13: strategic dot-LOD
+        overlayGfx, // #427: the enemy queen's HP bar renders above sprites
       );
+      if (import.meta.env.DEV)
+        this.lastEnemyQueenHpBar = queenBar === null ? null : { ...queenBar };
       // Stage 3a: feedforward tint (chamber-menu highlight, else the hovered dig tile) +
       // the pending-command ghosts — gated to not draw over a modal.
       if (showPreview) {

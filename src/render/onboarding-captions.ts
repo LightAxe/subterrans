@@ -6,6 +6,9 @@
 // session.
 // 'foodStorageNeeded' (#395) is re-armed the same way once storage covers the egg
 // reserve again (storage-hint.ts).
+// 'enemyQueenWounded' (#427) is re-armed once the enemy queen has healed back to
+// three quarters of her max HP (enemy-queen-wound.ts), so it shows once per wound
+// spell.
 // All state is render-side; nothing persists to WorldState or saves.
 // Reset on every new round (including same-seed rematch) so each session
 // starts fresh (Q6 DEFAULT_ACCEPTED).
@@ -22,6 +25,7 @@ export type CaptionKey =
   | 'queenDamage'
   | 'queenStarvation'
   | 'foodStorageNeeded'
+  | 'enemyQueenWounded'
   | 'autosaveFailed';
 
 const CAPTION_TEXTS: Record<CaptionKey, string> = {
@@ -41,6 +45,8 @@ const CAPTION_TEXTS: Record<CaptionKey, string> = {
   // same key, that its stores are full or its Food Storage too small (#413,
   // storage-hint.ts STORAGE_FULL_HINT_TEXT / STORAGE_SMALL_HINT_TEXT).
   foodStorageNeeded: 'Build a Food Storage chamber so your queen can lay eggs.',
+  // #427: the enemy queen has dropped below half her max HP (enemy-queen-wound.ts).
+  enemyQueenWounded: 'Their queen is wounded!',
   autosaveFailed: 'Autosave failed — storage full or blocked.',
 };
 
@@ -59,11 +65,14 @@ export function resetCaptions(): void {
  * that caption on overflow it would never display yet stay marked 'already shown'
  * — losing a first-occurrence onboarding caption forever. UIScene calls this when
  * a dropped caption carries a key so the trigger re-fires on the next occurrence,
- * and (#395) for a retryable caption evicted from the pending slot.
+ * and (#395) for a retryable caption evicted from, or withdrawn while waiting in, the
+ * pending slot. (#427) enemy-queen-wound.ts calls it too when GameScene holds the
+ * 'enemyQueenWounded' caption back behind an owed recurring caption.
  * GameScene also calls it for 'queenDamage' once the queen's danger has passed
- * (#375, #416, queen-danger.ts), so that caption shows once per danger spell, and for
+ * (#375, #416, queen-danger.ts), so that caption shows once per danger spell, for
  * 'foodStorageNeeded' once storage covers the egg reserve again (#395,
- * storage-hint.ts).
+ * storage-hint.ts), and for 'enemyQueenWounded' once the enemy queen has healed back
+ * to three quarters of her max HP (#427, enemy-queen-wound.ts).
  *
  * Recurring captions (e.g. spiderRampage) never populate `triggered`, so calling
  * this for one of them is a harmless no-op.
@@ -73,15 +82,17 @@ export function untrigger(key: CaptionKey): void {
 }
 
 /**
- * #395 — true for a one-shot key whose source offers its caption again every frame
- * until it shows: 'foodStorageNeeded' (storage-hint.ts advanceStorageHint asks
- * checkAndTrigger each frame while storage blocks the queen). UIScene admits such a
- * caption as `retryable` (caption-queue.ts), so any event caption that is not
- * retryable takes the pending slot from it and it simply comes back. Every other
- * key fires once per trigger, so a caption dropped for it could be lost for good.
+ * #395 — true for a one-shot key whose source offers its caption again until it
+ * shows: 'foodStorageNeeded' (storage-hint.ts advanceStorageHint asks
+ * checkAndTrigger each frame while storage blocks the queen) and (#427)
+ * 'enemyQueenWounded' (enemy-queen-wound.ts asks on every tick and frame of the enemy
+ * queen's wound spell, from below half her max HP back to ¾). UIScene admits such a caption as
+ * `retryable` (caption-queue.ts), so any event caption that is not retryable takes
+ * the pending slot from it and it simply comes back. Every other key fires once per
+ * trigger, so a caption dropped for it could be lost for good.
  */
 export function captionKeyRetries(key: CaptionKey): boolean {
-  return key === 'foodStorageNeeded';
+  return key === 'foodStorageNeeded' || key === 'enemyQueenWounded';
 }
 
 /**
@@ -119,7 +130,7 @@ export function checkAndTrigger(key: CaptionKey, textOverride?: string): string 
 //
 // The other captions (dig, chamber, spider, foodMark, rally, rallyRaid,
 // spiderPriority, queenDamage, queenStarvation, foodStorageNeeded,
-// autosaveFailed) are one-shots and go through checkAndTrigger.
+// enemyQueenWounded, autosaveFailed) are one-shots and go through checkAndTrigger.
 
 /**
  * A caption's text, without consulting or marking the one-shot `triggered` map:

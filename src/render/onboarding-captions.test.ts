@@ -33,6 +33,7 @@ describe('checkAndTrigger — first occurrence', () => {
       'queenDamage',
       'queenStarvation',
       'foodStorageNeeded',
+      'enemyQueenWounded',
       'autosaveFailed',
     ] as const;
     for (const key of keys) {
@@ -243,8 +244,9 @@ describe('untrigger', () => {
 });
 
 describe('captionKeyRetries (#395)', () => {
-  it('only the storage hint is offered again every frame (retryable in the queue)', () => {
+  it('only the storage hint and (#427) the enemy-queen wound caption are offered again until shown (retryable in the queue)', () => {
     expect(captionKeyRetries('foodStorageNeeded')).toBe(true);
+    expect(captionKeyRetries('enemyQueenWounded')).toBe(true);
     for (const key of [
       'rally',
       'queenDamage',

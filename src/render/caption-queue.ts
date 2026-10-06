@@ -32,7 +32,8 @@
 //     gets a full lifetime.
 //     Captions without a key are untouched by this rule.
 //   - #395: a `retryable` event caption (the storage hint, which its source offers
-//     again every frame until it shows) ranks below every other event caption,
+//     again every frame until it shows; and #427's "Their queen is wounded!", offered
+//     again while her wound spell lasts) ranks below every other event caption,
 //     as a first-use hint does: waiting in `pending`, it is evicted by an incoming
 //     event that is not retryable (UIScene un-marks its key, and its source
 //     offers it again once there is room). It never makes a long caption give way
