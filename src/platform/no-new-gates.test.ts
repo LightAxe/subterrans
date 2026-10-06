@@ -23,7 +23,8 @@
 //          (`export const LATEST_SIM_VERSION = SIM_VERSION_V72_FOO`);
 //        - src/platform/save.ts, the MIN line's whole right-hand side
 //          (`export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V72_FOO`);
-//        - src/platform/save.ts, its import from '../sim/types.js' (not renamed).
+//        - src/platform/save.ts, its import from '../sim/types.js' of exactly the
+//          entry the MIN line names (not renamed).
 //      Anywhere else it is a gate: inside a function, deeper in an initializer
 //      (`export const USE_FOO = LATEST_SIM_VERSION >= SIM_VERSION_V73_FOO`), in
 //      another top-level const (`const FOO_SINCE = SIM_VERSION_V73_FOO`), a type
@@ -104,7 +105,7 @@ type Kind = 'registry name' | 'simVersion comparison' | 'version rename';
 /** The allowances, by name; the tightness test checks each one is still used. */
 const ALLOW = {
   registry: "src/sim/types.ts registry entries' names and the LATEST line",
-  minImport: "src/platform/save.ts import from '../sim/types.js'",
+  minImport: "src/platform/save.ts import of the MIN line's entry from '../sim/types.js'",
   minDecl: 'src/platform/save.ts MIN_ACCEPTED_SIM_VERSION line',
   windowCheck: 'src/platform/snapshot-window.ts snapshotWindowMessage',
   loadCheck: 'src/platform/save.ts validateSimVersion',
@@ -207,6 +208,28 @@ function topLevelFunctionName(node: ts.Node): string {
   return ts.isFunctionDeclaration(stmt) && stmt.name !== undefined ? stmt.name.text : '<module>';
 }
 
+/**
+ * The registry entry that save.ts's top-level `const MIN_ACCEPTED_SIM_VERSION = <entry>`
+ * names, or null when there is no such line (its import is then allowed for nothing).
+ */
+function minEntryName(sf: ts.SourceFile): string | null {
+  for (const stmt of sf.statements) {
+    if (!ts.isVariableStatement(stmt)) continue;
+    for (const d of stmt.declarationList.declarations) {
+      if (
+        ts.isIdentifier(d.name) &&
+        d.name.text === 'MIN_ACCEPTED_SIM_VERSION' &&
+        d.initializer !== undefined &&
+        ts.isIdentifier(d.initializer) &&
+        isWholeInitializerOf(d.initializer, 'MIN_ACCEPTED_SIM_VERSION')
+      ) {
+        return d.initializer.text;
+      }
+    }
+  }
+  return null;
+}
+
 function allowedBy(file: string, kind: Kind, node: ts.Node): Allowance | null {
   if (kind === 'version rename') return null;
   if (file === 'src/sim/types.ts') {
@@ -223,12 +246,17 @@ function allowedBy(file: string, kind: Kind, node: ts.Node): Allowance | null {
     if (kind === 'simVersion comparison') {
       return topLevelFunctionName(node) === 'validateSimVersion' ? ALLOW.loadCheck : null;
     }
-    // A named import, not renamed: `SIM_VERSION_V99_FOO as G` would let G be
-    // compared unseen.
+    // A named import of exactly the entry the MIN line uses, not renamed:
+    // `SIM_VERSION_V99_FOO as G` would let G be compared unseen, and any other
+    // entry has no allowed use in save.ts.
     const spec = node.parent;
     if (ts.isImportSpecifier(spec) && spec.propertyName === undefined) {
       const from = spec.parent.parent.parent.moduleSpecifier;
-      return ts.isStringLiteral(from) && from.text === '../sim/types.js' ? ALLOW.minImport : null;
+      return ts.isStringLiteral(from) &&
+        from.text === '../sim/types.js' &&
+        spec.name.text === minEntryName(node.getSourceFile())
+        ? ALLOW.minImport
+        : null;
     }
     return isWholeInitializerOf(node, 'MIN_ACCEPTED_SIM_VERSION') ? ALLOW.minDecl : null;
   }
@@ -495,6 +523,25 @@ describe('#408 no-new-gates detector (self-test)', () => {
     expect(
       flagged('src/platform/save.ts', "import { SIM_VERSION_V99_FOO } from './other.js';"),
     ).toEqual(['registry name: SIM_VERSION_V99_FOO']);
+    // Only the entry the MIN line names may be imported (CodeRabbit on #422): another
+    // entry has no allowed use in save.ts, and without a MIN line none is allowed.
+    expect(
+      flagged(
+        'src/platform/save.ts',
+        "import { SIM_VERSION_V98_BAR, SIM_VERSION_V99_FOO } from '../sim/types.js';\n" +
+          'export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V99_FOO;\n',
+      ),
+    ).toEqual(['registry name: SIM_VERSION_V98_BAR']);
+    expect(
+      flagged('src/platform/save.ts', "import { SIM_VERSION_V99_FOO } from '../sim/types.js';"),
+    ).toEqual(['registry name: SIM_VERSION_V99_FOO']);
+    expect(
+      flagged(
+        'src/platform/save.ts',
+        "import { SIM_VERSION_V99_FOO } from '../sim/types.js';\n" +
+          'export let MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V99_FOO;\n',
+      ),
+    ).toEqual(['registry name: SIM_VERSION_V99_FOO', 'registry name: SIM_VERSION_V99_FOO']);
     // A renamed import would hide the comparison behind a name the guard does not know.
     expect(
       flagged(
