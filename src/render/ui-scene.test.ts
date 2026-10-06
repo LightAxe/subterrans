@@ -21,13 +21,8 @@ import {
 import { GameOutcome } from '../sim/game-over.js';
 import type { SimEvent } from '../sim/telemetry.js';
 import { createScenario } from '../sim/scenario.js';
-import {
-  LATEST_SIM_VERSION,
-  SIM_VERSION_V66_QUEEN_STARVES_HP,
-  SIM_VERSION_V67_NO_MATCH_TIMEOUT,
-  type WorldState,
-} from '../sim/types.js';
-import { ENEMY_COLONY_ID, MATCH_TIMEOUT_TICKS, PLAYER_COLONY_ID } from '../sim/constants.js';
+import type { WorldState } from '../sim/types.js';
+import { ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
 
 // ---------------------------------------------------------------------------
 // formatOutcomeTitle
@@ -58,7 +53,7 @@ describe('formatOutcomeTitle', () => {
     expect(result.color).toBe(0xffaa00);
   });
 
-  it('#389 — a pre-V67 timeout draw (both queens alive) reads DRAW', () => {
+  it('#389 — a timeout draw (a TimeoutTiebreak round_end, both queens alive) reads DRAW', () => {
     const result = formatOutcomeTitle(GameOutcome.MutualDestruction, 'TimeoutTiebreak');
     expect(result.text).toBe('DRAW');
     expect(result.color).toBe(0xffaa00);
@@ -170,7 +165,7 @@ describe('formatCauseSubtitle — MutualDestruction', () => {
     );
   });
 
-  it('#389 — a timeout draw (pre-V67 world): says time ran out, not that they died', () => {
+  it('#389 — a timeout draw (a TimeoutTiebreak round_end): says time ran out, not that they died', () => {
     expect(formatCauseSubtitle(GameOutcome.MutualDestruction, null, 'TimeoutTiebreak')).toBe(
       'Time ran out — the colonies were evenly matched',
     );
@@ -181,7 +176,9 @@ describe('formatCauseSubtitle — MutualDestruction', () => {
   });
 });
 
-describe('formatCauseSubtitle — TimeoutTiebreak won on worker count (pre-V67 worlds)', () => {
+// The sim no longer emits a TimeoutTiebreak (#376 removed the match timeout at V67; #408
+// reaped its gate). The copy stays with the wire enum's value, so these pin it.
+describe('formatCauseSubtitle — TimeoutTiebreak won on worker count', () => {
   it('Victory: time ran out with more workers', () => {
     expect(formatCauseSubtitle(GameOutcome.Victory, null, 'TimeoutTiebreak')).toBe(
       'Time ran out — your colony had more workers',
@@ -267,10 +264,9 @@ describe('roundEndReasonAt', () => {
     },
   });
 
-  /** A fresh world (both queens alive, no events) at `simVersion`. */
-  function freshWorld(simVersion: number = LATEST_SIM_VERSION): WorldState {
+  /** A fresh world: both queens alive, no events. */
+  function freshWorld(): WorldState {
     const world = createScenario(7, 'Normal');
-    world.simVersion = simVersion;
     world.events.length = 0;
     return world;
   }
@@ -284,9 +280,10 @@ describe('roundEndReasonAt', () => {
     expect(roundEndReasonAt(world, DEATH_TICK, GameOutcome.MutualDestruction)).toBe(
       'StalemateTiebreak',
     );
-    const old = freshWorld(SIM_VERSION_V66_QUEEN_STARVES_HP);
-    old.events.push(roundEnd(DEATH_TICK, 'TimeoutTiebreak'));
-    expect(roundEndReasonAt(old, DEATH_TICK, GameOutcome.Victory)).toBe('TimeoutTiebreak');
+    // A TimeoutTiebreak round_end (the sim no longer emits one) is read the same way.
+    const timeout = freshWorld();
+    timeout.events.push(roundEnd(DEATH_TICK, 'TimeoutTiebreak'));
+    expect(roundEndReasonAt(timeout, DEATH_TICK, GameOutcome.Victory)).toBe('TimeoutTiebreak');
   });
 
   it('a round_end on the death tick wins over a queen_death on it (as the playtrace)', () => {
@@ -334,29 +331,14 @@ describe('roundEndReasonAt', () => {
     expect(roundEndReasonAt(both, DEATH_TICK, GameOutcome.MutualDestruction)).toBe('QueenDeath');
   });
 
-  it('no terminal event, both queens alive, a pre-V67 world at the match cap: the timeout', () => {
-    const world = freshWorld(SIM_VERSION_V66_QUEEN_STARVES_HP);
-    for (const outcome of [
-      GameOutcome.Victory,
-      GameOutcome.Defeat,
-      GameOutcome.MutualDestruction,
-    ]) {
-      expect(roundEndReasonAt(world, MATCH_TIMEOUT_TICKS, outcome)).toBe('TimeoutTiebreak');
+  it('no match timeout (#376): at and past the old 24 000-tick cap a draw is the stalemate, a win or loss unknown', () => {
+    const OLD_MATCH_CAP_TICKS = 24_000;
+    const world = freshWorld();
+    for (const t of [OLD_MATCH_CAP_TICKS, OLD_MATCH_CAP_TICKS + 10]) {
+      expect(roundEndReasonAt(world, t, GameOutcome.MutualDestruction)).toBe('StalemateTiebreak');
+      expect(roundEndReasonAt(world, t, GameOutcome.Victory)).toBeNull();
+      expect(roundEndReasonAt(world, t, GameOutcome.Defeat)).toBeNull();
     }
-    // Before the cap a pre-V67 draw is still the stalemate.
-    expect(roundEndReasonAt(world, MATCH_TIMEOUT_TICKS - 1, GameOutcome.MutualDestruction)).toBe(
-      'StalemateTiebreak',
-    );
-    // A queen dead on the cap tick: her death ended it (checkQueenDeath runs first).
-    killQueen(world, PLAYER_COLONY_ID);
-    expect(roundEndReasonAt(world, MATCH_TIMEOUT_TICKS, GameOutcome.Defeat)).toBe('QueenDeath');
-  });
-
-  it('from V67 there is no timeout: a draw past the old cap is the stalemate', () => {
-    const world = freshWorld(SIM_VERSION_V67_NO_MATCH_TIMEOUT);
-    expect(roundEndReasonAt(world, MATCH_TIMEOUT_TICKS + 10, GameOutcome.MutualDestruction)).toBe(
-      'StalemateTiebreak',
-    );
   });
 
   it('no terminal event, both queens alive, and a win or loss no tiebreak gives: unknown', () => {
@@ -405,17 +387,5 @@ describe('end-screen cause line when the narrative is missing (#389)', () => {
     world.events.length = 0;
     world.ants.alive[world.colonies[PLAYER_COLONY_ID]!.queenEntityId] = 0;
     expect(causeLine(world, 900, GameOutcome.Defeat)).toBe('');
-  });
-
-  it('a pre-V67 timeout whose round_end was lost: says time ran out', () => {
-    const world = createScenario(7, 'Normal');
-    world.simVersion = SIM_VERSION_V66_QUEEN_STARVES_HP;
-    world.events.length = 0;
-    expect(causeLine(world, MATCH_TIMEOUT_TICKS, GameOutcome.MutualDestruction)).toBe(
-      'Time ran out — the colonies were evenly matched',
-    );
-    expect(causeLine(world, MATCH_TIMEOUT_TICKS, GameOutcome.Defeat)).toBe(
-      'Time ran out — the enemy had more workers',
-    );
   });
 });

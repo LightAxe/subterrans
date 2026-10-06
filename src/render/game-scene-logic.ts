@@ -193,13 +193,16 @@ export function generateFreshSeed(nowMs: number): number {
  * #395 — the world Retry starts after a lost game: the same seed and difficulty, at
  * LATEST, as a new game is (Rob, 2026-10-01: Retry plays the newest rules).
  *
- * From V69 map generation is version-gated, so a game resumed from a pre-V69 save
- * retries on its seed's V69 map. Terrain and colonies are the same; only the food
- * piles V69's food fairness moves or adds (and the world rng) differ.
+ * While pre-V69 saves still loaded (MIN was V50 until #400), a game resumed from one
+ * retried on its seed's V69 map: V69's food fairness was version-gated, so the food
+ * piles it moves or adds (and the world rng) differed from the lost game's map. Today
+ * no world-generation step is gated (#408) and MIN === LATEST, so Retry regenerates
+ * the map the lost game started on. A post-1.0 world-generation gate brings the
+ * difference back.
  *
  * Building the old map and stamping LATEST on it was rejected: that world's map
  * would no longer follow from its seed and simVersion, and a from-seed replay of
- * the retried game (analyze-snapshot) would regenerate the V69 map and report a
+ * the retried game (analyze-snapshot) would regenerate the newer map and report a
  * mismatch.
  */
 export function createRetryWorld(seed: number, difficulty: WorldState['difficulty']): WorldState {

@@ -175,10 +175,11 @@ export type SimEvent =
       };
     }
   | {
-      // S5 (V22) — tiebreak condition reached (timeout or stalemate).
-      // Emitted by checkTiebreaks() in game-over.ts when both queens survive
-      // to MATCH_TIMEOUT_TICKS (worlds before V67 only — #376 removed the
-      // timeout) or all food is exhausted below the stalemate threshold.
+      // S5 (V22) — tiebreak condition reached. Emitted by checkTiebreaks() in
+      // game-over.ts when all food is exhausted below the stalemate threshold.
+      // 'TimeoutTiebreak' is no longer emitted: #376 (V67) removed the 24 000-tick
+      // match timeout, and #408 reaped its gate. It stays in the union because the
+      // playtrace wire enum (RoundEndReason) and the end-screen copy still name it.
       // deriveRoundEndReason() reads this to populate the playtrace
       // roundEndReason field.
       tick: number;

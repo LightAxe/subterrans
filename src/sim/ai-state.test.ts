@@ -5,12 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { createWorldState } from './types.js';
 import type { WorldState, AIStateRecord } from './types.js';
-import {
-  LATEST_SIM_VERSION,
-  SIM_VERSION_V19_AI_STATE,
-  SIM_VERSION_V55_ROUTED_HOMING,
-  SIM_VERSION_V56_OPPONENT_FRONTAGE,
-} from './types.js';
+import { LATEST_SIM_VERSION, SIM_VERSION_V19_AI_STATE } from './types.js';
 import { applyCommands } from './tick.js';
 import type { SimCommand } from './commands.js';
 import {
@@ -582,10 +577,6 @@ describe('StartAIOperation validation (#226, V32 gate)', () => {
 // ---------------------------------------------------------------------------
 
 describe('#347 — a player-colony AI reads its opponent (V56)', () => {
-  it('LATEST is V56 or later', () => {
-    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(SIM_VERSION_V56_OPPONENT_FRONTAGE);
-  });
-
   it('opponentColonyId: player <-> enemy; null when there is no other colony', () => {
     const world = makeMinimalWorld();
     expect(opponentColonyId(world, PLAYER_COLONY_ID as ColonyId)).toBe(ENEMY_COLONY_ID);
@@ -599,9 +590,9 @@ describe('#347 — a player-colony AI reads its opponent (V56)', () => {
    * (>= AI_FRONTAGE_PLAYER_WORKERS_ABS and >= 1.3x). Before the age gate, only the
    * frontage trigger can move it to WarFooting.
    */
-  function playerAIWorld(simVersion: number): WorldState {
+  function playerAIWorld(): WorldState {
     const world = makeMinimalWorld();
-    world.simVersion = simVersion;
+    world.simVersion = LATEST_SIM_VERSION;
     world.aiState = [createDefaultAIStateRecord(PLAYER_COLONY_ID as ColonyId)];
     world.tick = AI_WARFOOTING_MIN_TICK - 1; // NOT age ready
     const player = world.colonies[PLAYER_COLONY_ID as ColonyId]!;
@@ -621,8 +612,8 @@ describe('#347 — a player-colony AI reads its opponent (V56)', () => {
     return world;
   }
 
-  it('V56: the player-colony AI reads the ENEMY worker count and goes to WarFooting early', () => {
-    const world = playerAIWorld(SIM_VERSION_V56_OPPONENT_FRONTAGE);
+  it('the player-colony AI reads the ENEMY worker count and goes to WarFooting early', () => {
+    const world = playerAIWorld();
     expect(frontageOpponentWorkerCount(world, PLAYER_COLONY_ID as ColonyId)).toBe(40);
     const rec = advanceAIState(world, PLAYER_COLONY_ID as ColonyId);
     expect(rec.state).toBe('WarFooting');
@@ -633,25 +624,9 @@ describe('#347 — a player-colony AI reads its opponent (V56)', () => {
     );
   });
 
-  it('V55 (pinned): the player-colony AI compares its own workers with itself — stays Peacetime', () => {
-    const world = playerAIWorld(SIM_VERSION_V55_ROUTED_HOMING);
-    expect(frontageOpponentWorkerCount(world, PLAYER_COLONY_ID as ColonyId)).toBe(10);
-    expect(advanceAIState(world, PLAYER_COLONY_ID as ColonyId).state).toBe('Peacetime');
-  });
-
-  it('the ENEMY AI reads the player count at V55 and V56 alike (real play unchanged)', () => {
-    for (const v of [SIM_VERSION_V55_ROUTED_HOMING, SIM_VERSION_V56_OPPONENT_FRONTAGE]) {
-      const world = makeMinimalWorld();
-      world.simVersion = v;
-      world.colonies[PLAYER_COLONY_ID as ColonyId]!.workerCount = 33;
-      world.colonies[ENEMY_COLONY_ID as ColonyId]!.workerCount = 7;
-      expect(frontageOpponentWorkerCount(world, ENEMY_COLONY_ID as ColonyId)).toBe(33);
-    }
-  });
-
-  it("V56: the ENEMY AI still goes to WarFooting early on the player's frontage", () => {
+  it("the ENEMY AI goes to WarFooting early on the player's frontage", () => {
     const world = makeMinimalWorld();
-    world.simVersion = SIM_VERSION_V56_OPPONENT_FRONTAGE;
+    world.simVersion = LATEST_SIM_VERSION;
     world.tick = AI_WARFOOTING_MIN_TICK - 1; // NOT age ready
     const enemy = world.colonies[ENEMY_COLONY_ID as ColonyId]!;
     spawnFighters(world, ENEMY_COLONY_ID, AI_WARFOOTING_FIGHTER_THRESHOLD[NORMAL_TIER_INDEX], 10);

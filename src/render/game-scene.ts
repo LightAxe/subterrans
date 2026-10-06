@@ -2655,8 +2655,8 @@ export class GameScene extends Phaser.Scene {
   /** Issue #131 — restart the game with the same seed the player just lost on.
    *  Mirrors restartGame() but skips generateFreshSeed, using the captured
    *  seed instead so the player gets the same map to retry. #395: at LATEST, the
-   *  newest rules (createRetryWorld): a game resumed from a pre-V69 save retries
-   *  with V69's food placement on the same terrain. */
+   *  newest rules (createRetryWorld), as a new game is, whatever version the lost
+   *  game was. */
   private retryGame(seed: number): void {
     const wasSuspended = this.autosaveSuspended;
     if (!wasSuspended) {

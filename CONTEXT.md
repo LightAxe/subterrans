@@ -37,10 +37,11 @@ constant retune or a render-only change never does. It is sticky on load: a save
 keeps the version it was written under. Until 1.0 (owner decision, 2026-10-01) new
 behaviour is **not** gated, and each bump also raises `MIN_ACCEPTED_SIM_VERSION` to
 the new `LATEST_SIM_VERSION`. Older saves are then rejected, and a snapshot replays
-only on the build that recorded it. The `simVersion >= V_X`
-**gates** already in the code predate this rule and stay until a separate reaping
-decision; the sticky-gate rolling window is the post-1.0 plan (ARCHITECTURE.md
-Principle 7). Distinct from the save envelope's `version`.
+only on the build that recorded it. The `simVersion >= V_X` **gates** written before
+this rule (V51–V70) were reaped in #408, so MIN can never go below V71; the gating
+machinery stays. The sticky-gate rolling window is the post-1.0 plan, and
+ARCHITECTURE.md Principle 7 ("Re-enabling simVersion gates") is its turn-on guide.
+Distinct from the save envelope's `version`.
 _Avoid_: save version, schema version, format version.
 
 **Sim/render boundary**:
@@ -278,8 +279,8 @@ A scalar field on a grid (`PheromoneType`). **FoodTrail** is the layer ants read
 bias foraging routes; **DangerTrail** is laid by the spider (and the V34 cross-colony
 kill alarm) and decays. Since **A1 (simVersion V36)** DangerTrail is also a *routing*
 input: SearchingFood foragers penalize a candidate step's FoodTrail by that cell's
-DangerTrail (`sampleForagingDirection`) and softly steer wandering routes away from it,
-gated so pre-V36 replays never consult it. (Lethal-proximity danger is handled
+DangerTrail (`sampleForagingDirection`) and softly steer wandering routes away from it.
+(Lethal-proximity danger is handled
 separately by the V34 flee behavior, not routing — and since **#297 (simVersion
 V38)** that flee's homebound hold is bounded by the threat rather than by time: a
 homebound forager is released once its own tile has decayed clear, or once it is within
@@ -648,9 +649,10 @@ _Avoid_: checkpoint.
 
 **Input log / replay**:
 The recorded SimCommand stream — **player and AI** — that reproduces a match
-deterministically from its seed, difficulty and `simVersion` (since #395, V69, the
-world is generated at that version, because V69's map change is version-gated).
-Pre-1.0 nothing new is gated, so it is only guaranteed to replay on the build that
+deterministically from its seed, difficulty and `simVersion`. Since #395 the world is
+generated at that version, so a world-generation gate would rebuild the recorded map;
+none exists today (#408 reaped V69's), and post-1.0 gates make it matter again.
+Pre-1.0 nothing is gated, so it is only guaranteed to replay on the build that
 recorded it.
 _Avoid_: history, journal.
 

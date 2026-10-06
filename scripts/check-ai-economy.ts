@@ -133,12 +133,12 @@ function parseStrArg(name: string, fallback: string): string {
 
 /**
  * The default run length, and the late liveness checkpoint: 24 000 ticks, the
- * pre-V67 match cap (MATCH_TIMEOUT_TICKS), kept so reports stay comparable. From
- * V67 (#376) a match has no time limit, so a seed with both queens alive here is
- * simply still playing. Even before V67 a default run never saw the timeout: the
- * loop makes exactly 24 000 tick() calls and step 18 last runs with world.tick at
- * 23 999, while the timeout needed 24 000 (the 24 001st call). Pass a larger
- * --ticks to see what happens after it.
+ * match cap #376 removed, kept so reports stay comparable. A match
+ * has no time limit, so a seed with both queens alive here is simply still playing.
+ * Even when the cap existed a default run never saw the timeout: the loop makes
+ * exactly 24 000 tick() calls and step 18 last runs with world.tick at 23 999, while
+ * the timeout needed 24 000 (the 24 001st call). Pass a larger --ticks to see what
+ * happens after it.
  */
 const HORIZON_TICKS = 24_000;
 
@@ -210,7 +210,7 @@ interface SeedResult {
   playerAliveAt24k: boolean | null;
   playerDeathTick: number | null;
   /** #327 — first tick tick() reported a GameOutcome other than None (the match
-   *  ended: a queen died or a stalemate — there is no timeout from V67, #376);
+   *  ended: a queen died or a stalemate — #376 removed the timeout);
    *  null if it never ended. */
   matchEndTick: number | null;
   /** Why each queen died — 'Starvation' | 'Killed' | '-' (see queenDeathCause). */
@@ -863,8 +863,8 @@ console.log(
 );
 // #327 — the harness plays on past game over, so an AI queen that starves AFTER
 // the match ended (the passive player's queen already dead, or a stalemate) is
-// counted like one that lost a live match. (Before V67 the timeout also ended a
-// match run past 24 000 ticks with --ticks; from V67, #376, there is none.)
+// counted like one that lost a live match. (Before #376 the timeout also ended a
+// match run past 24 000 ticks with --ticks; now nothing does.)
 // Split them by the tick tick() first reported an outcome: a death on that tick
 // is what ended the match, so it counts as live.
 const enemyDeathsLive = results.filter(

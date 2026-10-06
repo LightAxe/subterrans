@@ -167,13 +167,20 @@ export class FutureSimVersionError extends Error {
  * in-progress saves are wiped, which is accepted. Bare constant retunes and
  * render-only changes bump neither; the AI controller's policy counts as sim
  * behaviour. MIN never moves backward. `version-policy.test.ts` enforces the MIN/LATEST
- * rules; "no gates" is a review rule.
+ * rules; "no gates" is a review rule, backed by `no-new-gates.test.ts`.
  *
  * Transition: V69 (#402) and V70 (#405) were written under the earlier gated
  * policy and left MIN at V50. #400 (V71) is the first sim PR after them and sets
  * MIN === LATEST.
+ * Reap floor: #408 removed the remaining gates of V70 and earlier (after #247, #342
+ * and #354), so this build has no code path for a version below V71, and MIN can
+ * never go below V71, post-1.0 included (version-policy.test.ts,
+ * LAST_GATED_SIM_VERSION).
  * Post-1.0 the rolling window returns: MIN stays put while LATEST advances behind
- * sticky gates, and raising MIN becomes a deliberate, justified exception.
+ * sticky gates, and raising MIN becomes a deliberate, justified exception
+ * (ARCHITECTURE.md Principle 7, "Re-enabling simVersion gates (post-1.0)"). This
+ * declaration and its registry import are the only places outside types.ts that may
+ * name a SIM_VERSION_V* constant (no-new-gates.test.ts).
  *
  * Each raise also orphans playtrace uploads still arriving from the previous deploy.
  * Their snapshots replay only on the build that recorded them; the envelope's
@@ -1312,6 +1319,11 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
  *
  * Throws happen at deserialize-time (`deserializeWorldState`) and are
  * caught by `bootFromSave`'s try/catch in render/game-scene.ts.
+ *
+ * One of the two window checks that no-new-gates.test.ts lets compare against
+ * LATEST_SIM_VERSION and MIN_ACCEPTED_SIM_VERSION. It finds this one by name and by
+ * its two exact comparisons (WINDOW_COMPARISONS there): `raw` must stay this
+ * function's plain parameter, and the bounds the imported LATEST and the MIN line.
  */
 function validateSimVersion(raw: unknown): number {
   if (typeof raw !== 'number' || !Number.isInteger(raw)) {
@@ -2067,10 +2079,10 @@ export function deserializeWorldState(s: SerializedWorldState): WorldState {
   }
   // #290 PR 2 — the tick domain is int32: tick-valued ant columns
   // (`lastMealTick`, `fleeShelterUntilTick`) are Int32Arrays. 2^31 ticks is
-  // ~3.4 years of play at 20 Hz. A two-queen match has no time limit from V67
-  // (#376; before, it ended at MATCH_TIMEOUT_TICKS, 24 000), but no real world
-  // runs anywhere near that long; the bound keeps a tampered save from loading
-  // into a world whose tick columns would wrap.
+  // ~3.4 years of play at 20 Hz. A two-queen match has no time limit (#376, V67;
+  // before, it ended at tick 24 000), but no real world runs anywhere near that
+  // long; the bound keeps a tampered save from loading into a world whose tick
+  // columns would wrap.
   // rngState — same hardening for symmetry. Rng's `state | 0` would coerce
   // NaN/strings to 0 on first use, but boundary validation surfaces tampering
   // explicitly instead of silently snapping.

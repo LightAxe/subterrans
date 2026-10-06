@@ -10,12 +10,7 @@
 // No floats — all positions use fixed-point (FP_SHIFT=8).
 
 import type { WorldState, SpiderState } from './types.js';
-import {
-  createWorldState,
-  allocateEntityId,
-  LATEST_SIM_VERSION,
-  SIM_VERSION_V69_FOOD_FAIRNESS,
-} from './types.js';
+import { createWorldState, allocateEntityId, LATEST_SIM_VERSION } from './types.js';
 import { createDefaultAIStateRecord, tierIndex } from './ai-state.js';
 import {
   createSurfaceGrid,
@@ -309,10 +304,9 @@ function _placeSpider(world: WorldState): SpiderState {
   // [margin, size-1-margin] instead of the full [0, size-1] grid, so the spider
   // never spawns inside the margin band the per-tick clamp (tickSpiderV23 step 6b)
   // enforces during play. Without this the spider could spawn at the very edge and
-  // jump inward on its first tick. The lair is placed the same at every simVersion
-  // (only the V69 food-fairness pass of createScenario is version-gated, #395), so no
-  // simVersion gate here — only the runtime movement clamp is gated, for save-replay
-  // determinism.
+  // jump inward on its first tick. The lair is placed the same at every simVersion:
+  // createScenario has no version gates (#408 reaped the last one, V69's food
+  // fairness).
   const spanX = SURFACE_GRID_WIDTH - 2 * SPIDER_EDGE_MARGIN_TILES;
   const spanY = SURFACE_GRID_HEIGHT - 2 * SPIDER_EDGE_MARGIN_TILES;
 
@@ -412,9 +406,14 @@ function _placeSpider(world: WorldState): SpiderState {
  *                     Defaults to 'Normal' for backward-compatible call sites.
  * @param simVersion - #395: the simVersion of the world to create, stored on
  *                     world.simVersion. A new game takes the default, LATEST. A replay
- *                     from seed passes the recorded world's version, because map
- *                     generation itself is version-gated (V69 food fairness): the
- *                     same seed generates the V68 map at V68 and below.
+ *                     from seed passes the recorded world's version. Today it only
+ *                     stamps the world: no world-generation step is version-gated
+ *                     (#408 reaped V69's food-fairness gate, the only one), so every
+ *                     version gets the same map. It stays because a post-1.0
+ *                     world-generation gate would read it (`world.simVersion >= V_X`
+ *                     here) to rebuild an older world's map, and because
+ *                     analyze-snapshot and the byte gate's BYTE_GATE_SIM_VERSION pin
+ *                     create worlds through it (ARCHITECTURE.md Principle 7).
  */
 export function createScenario(
   seed: number,
@@ -483,7 +482,7 @@ export function createScenario(
   // After the colonies, so it reads where each one actually is (its open entrances).
   // Moves at most one pile (or, with none to move, makes at most one) per colony that
   // lacks it, drawing from the same rng.
-  if (world.simVersion >= SIM_VERSION_V69_FOOD_FAIRNESS) ensureFoodNearEachColony(world, rng);
+  ensureFoodNearEachColony(world, rng);
 
   // PR 4 — assert the connectivity invariant AT WORLD-GEN (not only on save
   // load): every colony entrance (initColony places one at each root start tile,

@@ -35,10 +35,25 @@ export type EntityId = number; // incrementing counter from 0, no recycling per 
  * PRE-1.0 POLICY (2026-10-01; AGENTS.md "simVersion and saves"): a sim-behaviour
  * change adds a SIM_VERSION_V* constant, points LATEST_SIM_VERSION at it, and sets
  * MIN_ACCEPTED_SIM_VERSION (platform/save.ts) to the same value. Do NOT wrap the new
- * behaviour in a `simVersion >=` gate; older saves are rejected instead. The entries
- * below, up to V70, record the earlier gated policy: their gates let an older save
- * replay under the algorithm it was recorded with. Those gates stay until a separate
- * reaping decision; once MIN === LATEST they are production-dead.
+ * behaviour in a `simVersion >=` gate; older saves are rejected instead.
+ * src/platform/no-new-gates.test.ts fails on a SIM_VERSION_V* reference outside the
+ * name an entry declares, the LATEST line (its whole right-hand side) and the MIN
+ * line (and its import) in save.ts, so a top-level flag such as
+ * `USE_FOO = LATEST_SIM_VERSION >= SIM_VERSION_V73_FOO` fails. It also fails on a
+ * comparison of a `simVersion` value or a version constant other than the window
+ * checks' own bound comparisons (snapshot-window.ts snapshotWindowMessage, save.ts
+ * validateSimVersion), and on a rename that would hide one
+ * (`import { LATEST_SIM_VERSION as L }`).
+ *
+ * HISTORY: the entries below, up to V70, record the earlier gated policy. Their gates
+ * let an older save replay under the algorithm it was recorded with. #247, #342 and
+ * #354 reaped the gates up to V49. Once MIN === LATEST the rest were production-dead,
+ * and #408 reaped them (V51–V70), LATEST byte-identical. No code path for a version
+ * below V71 remains, so MIN can never go below it. The entries stay
+ * verbatim, as history and because the snapshot-window.ts recipes parse them. Entry
+ * text in the present tense ("Pre-vNN saves keep …", "gated on …") describes the code
+ * as it was when the entry was written. ARCHITECTURE.md Principle 7, "Re-enabling
+ * simVersion gates (post-1.0)", says how gates return at 1.0.
  *
  * v2 (LEGACY_SIM_VERSION) — issue #15 baseline. withdrawFood drains
  * FoodStorage chambers in colony.chambers array order; no carrier
@@ -66,10 +81,13 @@ export type EntityId = number; // incrementing counter from 0, no recycling per 
  * + Solid-4-neighbor-required gates so SCEN-06 replays of recorded
  * commands stay byte-identical.
  *
- * Saves missing the `simVersion` field load with LEGACY_SIM_VERSION (sticky).
- * New worlds (createWorldState) start at LATEST_SIM_VERSION. Sticky on load
- * preserves SCEN-06 replay determinism — a save recorded before a given
- * fix keeps producing identical ticks across reload under the old algorithm.
+ * New worlds (createWorldState) start at LATEST_SIM_VERSION. A loaded save keeps
+ * the simVersion it was written under (sticky on load); post-1.0 that lets a save
+ * recorded before a gated fix keep producing identical ticks across reload under the
+ * old algorithm. A save whose `simVersion` is missing, not an integer, or below
+ * MIN_ACCEPTED_SIM_VERSION is rejected (OldSimVersionError, platform/save.ts
+ * validateSimVersion); one above LATEST_SIM_VERSION is preserved, not loaded
+ * (FutureSimVersionError).
  */
 import type { SimEvent } from './telemetry.js';
 

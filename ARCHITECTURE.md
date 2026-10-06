@@ -280,7 +280,7 @@ interface SaveFile {
 }
 ```
 
-**Replay verification:** Given a save file, replaying `inputLog` from tick 0 with `seed` should reproduce the snapshot's simulation state — **excluding the pending `commandQueue`**. Autosave fires on a wall-clock timer, not a tick boundary, so a snapshot can capture commands that are queued but not yet drained into `inputLog`; a from-seed replay starts with an empty queue, so that queue legitimately differs and is stripped before comparison (see `scripts/analyze-snapshot.ts`). Two more rules make a replay faithful (#296, `src/platform/input-log-replay.ts`): commands are regrouped by the recorded per-command `drainTick` — the tick whose batch the sim actually consumed them in — not by `issuedAtTick` (the sim's own self-emits are issued one tick before they drain; for logs without `drainTick` the fallback is `origin === 'sim' ? issuedAtTick + 1 : issuedAtTick`), and the replaying world's regenerated `commandQueue` is discarded before each tick so a self-emit is never applied twice. The replaying world is generated with `createScenario(seed, difficulty, simVersion)` at the snapshot's recorded `simVersion`, not created at LATEST and re-stamped: map generation is itself version-gated (V69's food fairness moves piles at world creation, #395), so only a world created at the recorded version has the recorded map. A mismatch in the rest of the state means the save is corrupt or the simulation has a non-determinism bug. The underlying determinism property is proven separately by `src/sim/determinism.test.ts` — two fresh runs from the same seed produce byte-identical serialized state (there both queues are identical, so nothing is excluded).
+**Replay verification:** Given a save file, replaying `inputLog` from tick 0 with `seed` should reproduce the snapshot's simulation state — **excluding the pending `commandQueue`**. Autosave fires on a wall-clock timer, not a tick boundary, so a snapshot can capture commands that are queued but not yet drained into `inputLog`; a from-seed replay starts with an empty queue, so that queue legitimately differs and is stripped before comparison (see `scripts/analyze-snapshot.ts`). Two more rules make a replay faithful (#296, `src/platform/input-log-replay.ts`): commands are regrouped by the recorded per-command `drainTick` — the tick whose batch the sim actually consumed them in — not by `issuedAtTick` (the sim's own self-emits are issued one tick before they drain; for logs without `drainTick` the fallback is `origin === 'sim' ? issuedAtTick + 1 : issuedAtTick`), and the replaying world's regenerated `commandQueue` is discarded before each tick so a self-emit is never applied twice. The replaying world is generated with `createScenario(seed, difficulty, simVersion)` at the snapshot's recorded `simVersion`, not created at LATEST and re-stamped, so that a world-generation gate rebuilds the recorded map (#395). No world-generation step is gated today: #408 reaped the only one, V69's food fairness. Post-1.0 world-generation gates make it matter again. A mismatch in the rest of the state means the save is corrupt or the simulation has a non-determinism bug. The underlying determinism property is proven separately by `src/sim/determinism.test.ts` — two fresh runs from the same seed produce byte-identical serialized state (there both queues are identical, so nothing is excluded).
 
 **Save versioning and `simVersion`:** The envelope lives in `localStorage` with a 30-second autosave. A save loads by **deserializing its snapshot**. The snapshot is authoritative: loading does not re-derive state from `seed` + `inputLog`. Separately from the envelope `version`, the simulation carries a `simVersion`. It increments whenever a change would make an already-written save **deserialize or continue incorrectly**, or would change the world a seed generates:
 
@@ -291,7 +291,11 @@ interface SaveFile {
 - a change to the rule-based AI's policy (`src/render/ai-controller.ts`), because a loaded game continues under the AI;
 - an algorithm change to world generation (`createScenario`), even though no saved snapshot is affected (#395). A bare constant retune does not count; see below.
 
-**World generation, replay and Retry.** The from-seed replay above regenerates the world at the snapshot's recorded `simVersion`. Retry from the end-of-game survey does not: it starts the seed again at LATEST, the newest rules, just as a new game does (`createRetryWorld` in `src/render/game-scene-logic.ts`). So a game resumed from an older save retries under the newest rules: while pre-V69 saves still loaded (MIN was V50 until #400), one retried with V69's food placement on the same terrain. Building the old map and stamping LATEST on it would leave a world whose map no longer follows from its `seed` and `simVersion`, and the from-seed replay relies on that link. `createScenario`'s `simVersion` argument reproduces an older map only through the existing gates (V69's food fairness). A pre-1.0 world-generation change is not gated, so `createScenario` cannot rebuild a map from before it. Once `MIN === LATEST`, `analyze-snapshot` accepts only snapshots at LATEST, and a replay is faithful only on the build that recorded it.
+**World generation, replay and Retry.** The from-seed replay above regenerates the world at the snapshot's recorded `simVersion`. Retry from the end-of-game survey does not: it starts the seed again at LATEST, the newest rules, just as a new game does (`createRetryWorld` in `src/render/game-scene-logic.ts`). Building an older map and stamping LATEST on it would leave a world whose map no longer follows from its `seed` and `simVersion`, and the from-seed replay relies on that link.
+
+Since #408, `createScenario`'s `simVersion` argument only stamps the world. No world-generation step is version-gated, so every version gets the same map, and with `MIN === LATEST` Retry regenerates the map the lost game started on. While V69's food fairness was gated and pre-V69 saves still loaded (MIN was V50 until #400), a game resumed from one retried on its seed's V69 map: same terrain, different food. The argument stays because post-1.0 world-generation gates make it matter again. Such a gate in `createScenario` reads `world.simVersion`, which the function's first step sets from the argument. The replay and the byte gate's `BYTE_GATE_SIM_VERSION` pin both pass a version through it.
+
+A pre-1.0 world-generation change is not gated, so `createScenario` cannot rebuild a map from before it. Once `MIN === LATEST`, `analyze-snapshot` accepts only snapshots at LATEST, and a replay is faithful only on the build that recorded it.
 
 Saves below `MIN_ACCEPTED_SIM_VERSION` are rejected outright. There is no migration of an old save *format* into a new one. Saves from a *newer* build are preserved, not loaded, so they can be recovered there.
 
@@ -301,23 +305,118 @@ Saves below `MIN_ACCEPTED_SIM_VERSION` are rejected outright. There is no migrat
 - **Both versions move together.** Each sim-behaviour change bumps `LATEST_SIM_VERSION` and raises `MIN_ACCEPTED_SIM_VERSION` to the same value. `MIN === LATEST` is the normal state. Once it holds, a save loads only on a build at its own `simVersion`.
 - **Older in-progress saves are wiped.** They are rejected with `OldSimVersionError`, and that is accepted.
 - **Determinism within a build still holds.** The same seed and commands give the same game, proven by replay and save/load-continue tests. Once `MIN === LATEST`, sticky-on-load holds trivially, because every loadable save is at LATEST.
-- **Existing gates are being reaped (#408).** About 60 gates predate this rule. Most are in `src/sim/`; a few are in the AI controller, HUD readers and `save.ts`. Once `MIN === LATEST`, all of them are production-dead and can be reaped (below). Issue #408 is that decision; it keeps the gating machinery for post-1.0.
-- **Legacy version-pinned tests.** An existing test pinned to an old version may break after an ungated change or a MIN raise. Examples are a `*-vNN-parity.test.ts` golden or a save test that loads a pre-MIN save. Delete such a test or re-pin it to LATEST; never keep it green with a gate.
+- **Existing gates were reaped (#408).** 64 gate sites across 20 versions, V51 to V70, predated this rule. Most were in `src/sim/`; a few were in the AI controller, HUD readers and `save.ts`. With `MIN === LATEST` all of them were production-dead.
+  - #408 removed them in three PRs (#417, #420 and part 3) as the mechanical refactor below, keeping LATEST byte-identical.
+  - It kept the gating machinery for post-1.0 (see "Re-enabling simVersion gates" below).
+  - The rules of V70 and earlier no longer exist in code, so MIN can never go below V71: the reap floor.
+- **Legacy version-pinned tests.** Delete or re-pin to LATEST any old-version-pinned test that an ungated change or a MIN raise breaks. Examples are a `*-vNN-parity.test.ts` golden or a save test that loads a pre-MIN save. Never keep one green with a gate.
+  - #408 deleted the goldens and the pins on the reaped gates.
+  - A few pre-V50 pins on rules that have no gate remain. They are harmless.
 - **Out-of-window snapshots replay on their own build.** A snapshot outside `[MIN, LATEST]` (an F9 export or a playtrace) must be replayed on the build that recorded it. `scripts/analyze-snapshot.ts` says so and points at a build. For a playtrace that is the recording build itself, from its `gameVersion` git SHA. An F9 export has no build id, so the CLI points at the last commit at that `simVersion`. If origin/main never reached that version, it lists the branch commits that touched it. That commit is not necessarily the recording build: a bare constant retune at the same `simVersion` (retunes never bump it) can still make the replay diverge.
-- **Transition and guard.** Sim PRs opened under the earlier policy (#402 V69, #405 V70) landed gated with MIN left at V50. The first sim PR after them, #400 (V71), set `MIN === LATEST`. `version-policy.test.ts` enforces the MIN/LATEST rules. "No gates" is a review rule.
+- **Transition and guards.** Sim PRs opened under the earlier policy (#402 V69, #405 V70) landed gated with MIN left at V50. The first sim PR after them, #400 (V71), set `MIN === LATEST`.
+  - `version-policy.test.ts` enforces the MIN/LATEST rules.
+  - "No gates" is a review rule, backed by `src/platform/no-new-gates.test.ts`. That test scans non-test TypeScript or JavaScript sources under `src/`, `scripts/` and `bench/`, and the build configs at the repo root (`vite.config.ts`, `vite.lib.config.ts` and the rest, not recursively). Shell scripts and data files aren't scanned, since only TS/JS runs or builds the sim, and `index.html` must not name a version at all. It fails on any of these:
+    - a `SIM_VERSION_V<n>` reference outside the registry itself: the name an entry declares and the `LATEST_SIM_VERSION` line in `src/sim/types.ts`, and the `MIN_ACCEPTED_SIM_VERSION` line (and its import) in `save.ts`. Another top-level const, such as a build-wide flag `USE_FOO = LATEST_SIM_VERSION >= SIM_VERSION_V73_FOO`, counts;
+    - a relational comparison (`<`, `<=`, `>`, `>=`) of a `simVersion` value or of a version constant (`LATEST_SIM_VERSION`, `MIN_ACCEPTED_SIM_VERSION`, any `*_SIM_VERSION` or `SIM_VERSION_V<n>`), other than the two window checks' own bound comparisons (`snapshotWindowMessage` in `snapshot-window.ts` and `validateSimVersion` in `save.ts`; any other comparison inside them still fails), or a rename that would hide one (`import { LATEST_SIM_VERSION as L }`).
+  - The no-new-gates test is deleted at 1.0 (below).
 
-**Post-1.0 plan: sticky gates and a rolling acceptance window.** This is how the existing gates were written between #228 and 2026-10-01. It is meant to return at 1.0, once players have saves worth keeping.
+**Post-1.0 plan: sticky gates and a rolling acceptance window.** This is how the gates were written between #228 and 2026-10-01 (#408 has since reaped them). It is meant to return at 1.0, once players have saves worth keeping; the next section is the turn-on guide.
 
 - **Sticky on load.** A save keeps the `simVersion` it was written under; it is never silently upgraded. Behaviour changes are wrapped in `if (world.simVersion >= V_X)` gates, so a save from an earlier accepted version continues under the rules it was created with.
 - **Rolling acceptance window.** Within the accepted window, deserialization validates each field and defaults the ones introduced across that window. For example, a pre-difficulty save loads as `Normal`, and a pre-spider save's spider fields load as `null`. A supported older save therefore opens without a transform step. The window is honoured, not zero-width: `MIN_ACCEPTED_SIM_VERSION` stays put while `LATEST_SIM_VERSION` advances, and each behaviour change ships a sticky `simVersion >=` gate. Raising MIN is then a deliberate, justified exception, because it wipes real players' saves. (#228)
 
-**Gate reaping (dead-branch removal, #228).** Once `MIN_ACCEPTED_SIM_VERSION` passes a version `VNN`, every `world.simVersion < VNN` branch is unreachable in production: no loadable save and no fresh world can be below MIN. `createScenario`'s `simVersion` argument creates such a world only in tests, because `analyze-snapshot` refuses a snapshot below MIN. Pre-1.0, once `MIN === LATEST`, that covers every existing gate. Reaping them is a mechanical refactor:
+**Re-enabling simVersion gates (post-1.0).** This is the turn-on guide for 1.0. It says what already exists, what the one turn-on PR changes, and what each gated PR after it does.
 
-1. List gates with `git grep -n "SIM_VERSION_V" src/` (most are in `src/sim/`; a few are in the AI controller, HUD readers and `save.ts`) and pick those with `VNN <= MIN_ACCEPTED_SIM_VERSION`.
-2. Delete the legacy branch, making the `>=` side unconditional. Do not otherwise reword the surviving code.
-3. Delete the tests that pin the old side (they artificially set `world.simVersion` below `VNN`).
-4. Prove byte-identity with the capture/verify harness (`src/platform/byte-gate.test.ts`): `BYTE_GATE_MODE=capture` on the pre-reap commit, `BYTE_GATE_MODE=verify` after. `src/sim/determinism.test.ts` must also be green.
-5. Keep the registry entries in `types.ts` (history + save validation), and reap in small batches, one subsystem per PR.
+*Status.* #408 reaped the last pre-1.0 gates (V51–V70), keeping LATEST byte-identical. #247, #342 and #354 had already reaped those up to V49.
+- The mechanism that gates need stayed, listed below. Do not rebuild it.
+- The rules of V70 and earlier no longer exist in code, so MIN can never go below V71. `LAST_GATED_SIM_VERSION` in `version-policy.test.ts` enforces that floor.
+- Until the turn-on, `src/platform/no-new-gates.test.ts` keeps new gates out.
+
+*Already in place: do not rebuild.*
+
+| Piece | Where |
+|---|---|
+| `world.simVersion`: the field, stamped LATEST on a new world, copied with the world | `src/sim/types.ts` (`WorldState.simVersion`, `createWorldState`, `copyWorldState`) |
+| Serialized and sticky on load: the saved value is validated and kept, never restamped | `src/platform/save.ts` (`serializeWorldState`, `deserializeWorldState`) |
+| Load validation, run first: `validateSimVersion`, `OldSimVersionError`, `FutureSimVersionError`. A save from a newer build is preserved, not deleted (`'incompatible-future'`) | `src/platform/save.ts`; `bootFromSave` in `src/render/game-scene.ts` |
+| `LATEST_SIM_VERSION`; `MIN_ACCEPTED_SIM_VERSION` with its "why it is VNN" notes | `src/sim/types.ts`; `src/platform/save.ts` |
+| The version registry: `LEGACY_SIM_VERSION` and every `SIM_VERSION_V<n>_<SUFFIX>` entry with its history. Keep the names and the `export const LATEST_SIM_VERSION = SIM_VERSION_V<n>_<SUFFIX>;` line format, because the git pickaxe recipes parse them | `src/sim/types.ts`; the recipes in `src/platform/snapshot-window.ts` |
+| Policy guard: LATEST is the newest registered version, MIN ≤ LATEST, the floor | `src/platform/version-policy.test.ts` |
+| Byte gate: capture/verify, the `BYTE_GATE_SIM_VERSION` pin (`parsePinnedSimVersion`), `BYTE_GATE_SWEEP`, `BYTE_GATE_PROJECTION`, `BYTE_GATE_COVERAGE` | `src/platform/byte-gate.test.ts`, `world-hash.ts`, `food-projection.ts` |
+| World generation at a given version | `createScenario(seed, difficulty, simVersion)` in `src/sim/scenario.ts` |
+| Retry and new games at LATEST | `createRetryWorld` in `src/render/game-scene-logic.ts` |
+| Snapshot replay. An out-of-window snapshot is refused with a pointer to its recording build; an in-window one replays at its own version | `scripts/analyze-snapshot.ts`, `src/platform/snapshot-window.ts` |
+| Envelopes that carry the version: the playtrace `simVersion` and `gameVersion` SHA, and the F9 debug snapshot | `src/render/playtrace-upload.ts`, `src/platform/debug-snapshot.ts` |
+| Load-side defaults for fields added inside the window, the rolling-window pattern. Examples: `fleeShelterUntilTick` is optional on load, an absent `alarmActive` loads as false, an absent difficulty as Normal, absent V54 spider fields as −1 | `src/platform/save.ts` |
+| Policy docs | AGENTS.md "simVersion and saves", this principle, CONTEXT.md (`simVersion`), `.coderabbit.yaml` |
+
+*Turn-on checklist: one PR at 1.0.*
+- **(a) Floor.** Set MIN to the 1.0 LATEST, never below the reap floor (V71). Pre-1.0, MIN already equals LATEST. If the 1.0 release bumps LATEST, every pre-1.0 save is rejected then, once. From then on MIN is held.
+- **(b) `version-policy.test.ts`.** Replace "MIN equals LATEST once past the transition", and the transition branches, with the window rule: MIN is held while LATEST advances, and raising MIN needs a declared break. Keep the newest-registered, MIN ≤ LATEST and floor assertions. Templates:
+  - the rolling-window test: `git show c8889d4^:src/platform/version-policy.test.ts`;
+  - the `DELIBERATE_WINDOW_BREAK_AT` ritual: `git show c8889d4^:src/platform/save.ts`.
+
+  The turn-on PR itself leaves MIN === LATEST, so under that rule it declares the break at the 1.0 LATEST. The next PR that bumps LATEST sets it back to `null` and opens the window.
+- **(c) Policy text and the guard.**
+  - AGENTS.md "simVersion and saves": the rules, the standing rebuttal list and the PR checklist line;
+  - the "Current rule, pre-1.0" block above, which this section's rule replaces;
+  - the CONTEXT.md `simVersion` and "Input log / replay" entries;
+  - the `.coderabbit.yaml` `**` instruction: flag a missing gate, and require `BYTE_GATE_SIM_VERSION` evidence for a gated change;
+  - delete `src/platform/no-new-gates.test.ts`.
+
+  Every other statement of the pre-1.0 rule changes too. Find them with `git grep -nE "[Pp]re-1\.0|PRE-1\.0|[Bb]efore 1\.0|[Uu]ntil 1\.0"`; the grep is the instruction. Today they include:
+  - the `types.ts` registry header, which every gated PR reads when it adds its constant;
+  - the `save.ts` MIN doc;
+  - the `constants.ts` header;
+  - `snapshot-window.ts`, both its header and the `SAME_BUILD_RULE` text the CLI prints;
+  - `analyze-snapshot.ts`;
+  - the `byte-gate.test.ts` header;
+  - in AGENTS.md: the principle summary (item 7), the deterministic-replay-tests bullet and the replay review guideline;
+  - in this document: the last sentences of "World generation, replay and Retry", the "What a bump does" list and the closing pointer to AGENTS.md;
+  - the `.coderabbit.yaml` `src/sim/**` entry's pointer to the policy;
+  - test comments in `save.test.ts`, `snapshot-window.test.ts` and `food-fairness.test.ts`.
+- **(d) Tracking.** If no 1.0 tracking issue links here yet, file one, and close it with this PR.
+
+*Every gated PR after that.*
+- **(a) Version.** Add `SIM_VERSION_V<n>_<SUFFIX>` with a registry entry, and point LATEST at it. MIN does not move.
+- **(b) Gate.** Wrap the new behaviour in `if (world.simVersion >= SIM_VERSION_V<n>_<SUFFIX>)` and leave the old path byte-untouched. Besides sim code, that covers:
+  - world generation in `createScenario`, which reads `world.simVersion` (its first step sets it from the argument);
+  - the AI controller's policy (`src/render/ai-controller.ts`), because a loaded game continues under the AI;
+  - render readers that interpret the rule, such as a HUD bar or a caption.
+- **(c) New `WorldState` fields.** The serializer always writes them. The deserializer defaults them for older in-window saves, and any validation that depends on the version keys on the validated `simVersion`.
+- **(d) `analyze-snapshot`.** Strip from the replay's serialization any always-emitted new field that an older in-window snapshot lacks. Otherwise every such snapshot reads as a SCEN-06 regression.
+- **(e) Proof.** Capture the byte gate on the base with `BYTE_GATE_SWEEP=1`. Then verify on the branch with `BYTE_GATE_SWEEP=1` and `BYTE_GATE_SIM_VERSION=<base LATEST>`: the old path must stay byte-identical. The sweep flag is stored in the baseline, so a mismatched pair fails loudly. The new behaviour gets the usual within-build determinism, economy sweep and mutation tests.
+- **(f) Optional V-pinned tests.** An audit of V(n−1) against Vn, or a golden pinned at V(n−1).
+
+*Worked examples in history.* At `884b649`, the merge base of #408's first PR, every pre-1.0 gate is still in place:
+- `src/sim/ant/ant-raid.ts`: four versions (V52, V53, V59, V60) in one module;
+- `src/sim/scenario.ts:486`: a world-generation gate (V69);
+- `src/render/ai-controller.ts`: AI-policy gates (V53, V61–V63, V69);
+- `src/render/hud-stats.ts`, `src/render/queen-danger.ts`: render readers (V66);
+- `src/platform/save.ts:1952`, `:2167`, `:2195`: version-conditional load validation (V60, V52, V51/V66);
+- `scripts/analyze-snapshot.ts:274–300`: the V54 snapshot-key strip;
+- tests: the V64-against-V65 audit in `src/sim/alarm-invasion.test.ts`, and the golden pinned at V67, `src/sim/rampage-shelter-v67-parity.test.ts`.
+
+#408's three squash commits on main (`git log --grep='#408 part'`), read in reverse, show each gate's full footprint: site, orphans and tests. Each PR's per-subsystem commits stay fetchable, for example `git fetch origin pull/417/head` for part 1 and `pull/420/head` for part 2.
+
+*Why the old gates were not kept.* The old gates kept pre-1.0 saves replaying under their own rules. At 1.0, MIN rises to the 1.0 LATEST, so no pre-1.0 save will ever load again, and post-1.0 gates guard only post-1.0 changes. No pre-1.0 legacy branch could ever be reached again, so keeping those 64 sites would have cost review and test time for nothing. What a post-1.0 gate needs is the mechanism, which stayed. Git history keeps every pattern as a template.
+
+**Gate reaping (dead-branch removal, #228, #408).** Once `MIN_ACCEPTED_SIM_VERSION` passes a version `VNN`, every `world.simVersion < VNN` branch is unreachable in production: no loadable save and no fresh world can be below MIN. `createScenario`'s `simVersion` argument creates such a world only in tests, because `analyze-snapshot` refuses a snapshot below MIN. #408 used this to reap the remaining pre-1.0 gates, after #247, #342 and #354. Post-1.0 it applies whenever a deliberate MIN raise leaves gates behind. Reaping is a mechanical refactor:
+
+0. **Spike first.** In a scratch worktree, reap every candidate site at once and run the full suite and the byte gate. The failing tests are the exact fallout map for each commit, including tests that pinned an old version by accident. Throw the spike away.
+1. **List the gates.** Run `git grep -n "SIM_VERSION_V" -- src scripts bench` (most are in `src/sim/`; a few are in the AI controller, HUD readers, `save.ts` and `analyze-snapshot`). Pick those with `VNN <= MIN_ACCEPTED_SIM_VERSION`.
+2. **Delete the legacy branch,** making the `>=` side unconditional. Do not otherwise reword the surviving code. Delete the orphans with it: constants, helpers, imports and "before VNN …" comment sentences that only the legacy side used. Keep provenance tags such as "(#NNN, VNN)".
+3. **Fix the tests.**
+   - Delete the tests that pin the old side (they set `world.simVersion` below `VNN`).
+   - Rewrite a comparison test (V(n−1) against Vn, or an audit) to its LATEST half, as absolute assertions.
+   - Refixture a test that pinned an old version by accident.
+   - Never `-u` a snapshot.
+4. **Prove byte-identity** with the capture/verify harness (`src/platform/byte-gate.test.ts`). Capture with `BYTE_GATE_MODE=capture BYTE_GATE_SWEEP=1` on the pre-reap commit and verify with the same flags after. `BYTE_GATE_SWEEP` adds a both-AI sweep and a raid-type cycle to the six scenarios.
+   - `src/sim/determinism.test.ts` must also be green, and the `__snapshots__` must not change.
+   - Once per PR, compare `check:ai-economy --seeds=200` and `--both-ai --seeds=100` per-seed rows between base and head. That samples about 50× more AI ticks than the byte gate.
+5. **Build a mutation table.** For every reaped site, force the legacy behaviour at LATEST and run the related tests; each mutant must fail at least one. This replaces the non-vacuity that the deleted old-version halves gave. Pin a surviving mutant with a new LATEST test, or show that it is equivalent.
+6. **Keep the registry entries** in `types.ts`: they are history, and the `snapshot-window.ts` recipes parse them.
+7. **Split by subsystem.** Reap one subsystem per commit, each commit green and byte-identical on its own, and group the commits into a few cohesive PRs.
 
 **What does *not* bump `simVersion`:**
 

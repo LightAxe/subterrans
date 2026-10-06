@@ -163,9 +163,9 @@ export type PlaytraceUploadResult =
 
 /** Round end reason — orthogonal to outcome; lets telemetry join outcome ×
  *  end-reason for D-30 distribution. 'QueenDeath' is the only reason in
- *  S0b-S4; TimeoutTiebreak and StalemateTiebreak land in S5. #376: from
- *  simVersion V67 a round has no time limit, so TimeoutTiebreak comes only from
- *  worlds created before V67 (the wire enum keeps it for them). */
+ *  S0b-S4; TimeoutTiebreak and StalemateTiebreak land in S5. #376 (V67) removed
+ *  the round time limit, and since #408 no world this build runs emits
+ *  TimeoutTiebreak. The wire enum keeps the value (older uploads carry it). */
 export type RoundEndReason = 'QueenDeath' | 'TimeoutTiebreak' | 'StalemateTiebreak';
 
 /** Envelope as it goes over the wire (pre-gzip). Exported so tests can
