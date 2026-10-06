@@ -165,7 +165,7 @@ function topLevelConstSlot(node: ts.Node): { slot: 'name' | 'initializer'; name:
   const list = decl.parent;
   if (
     !ts.isVariableDeclarationList(list) ||
-    (list.flags & ts.NodeFlags.BlockScoped) !== ts.NodeFlags.Const ||
+    (list.flags & ts.NodeFlags.BlockScoped) !== Number(ts.NodeFlags.Const) ||
     !ts.isVariableStatement(list.parent) ||
     !ts.isSourceFile(list.parent.parent)
   ) {
