@@ -27,11 +27,12 @@
 //
 // It is about the viewing colony's opponent (ai-state.ts opponentColonyId: "their"
 // queen). The game has no fog of war — the X toggle shows the enemy's nest, and her,
-// at any time — so the caption reveals nothing her sprite and bar do not. Before she
-// founds her nest she stands on the surface, where no bar is drawn: no look there
-// decides anything (a wound taken there is announced once she is home, if she is
-// still below half then), and stepping off home ground, which lowers her max HP, can
-// neither raise nor re-arm it.
+// at any time — and her HP is the stat her bar shows there, so the caption reveals a
+// stat of an entity the player can already inspect at any time, nothing her bar does
+// not. Before she founds her nest she stands on the surface, where no bar is drawn:
+// no look there decides anything (a wound taken there is announced once she is home,
+// if she is still below half then), and stepping off home ground, which lowers her
+// max HP, can neither raise nor re-arm it.
 //
 // It DECIDES per sim tick and PRESENTS per render frame, as the queen-danger caption
 // does since #418 (queen-danger.ts): a frame can run up to MAX_CATCHUP_TICKS ticks,

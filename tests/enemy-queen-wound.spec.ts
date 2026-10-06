@@ -17,9 +17,9 @@
 // ticks of sim, then the enemy queen wounded to 12 HP by a blow on the last of them.
 // She cannot heal for HEAL_SAFE_TICKS, then heals 1 HP per 40 ticks, so she stays
 // below half until about sim tick 600 (30 s of game time at 1x); the bar is measured
-// with the game paused, well before that. The game boots it
-// through Continue. Positions and HP are read through the Dev-only
-// __phase9_test.getEnemyQueenHpBar hook; one pixel probe checks the fill is drawn.
+// with the game paused, well before that. The game boots it through Continue.
+// Positions and HP are read through the Dev-only __phase9_test.getEnemyQueenHpBar
+// hook; two pixel probes check the fill is drawn at that fraction.
 //
 // Screenshot (for a human eye; not compared): test-results/enemy-queen-wound-bar.png.
 
@@ -30,7 +30,7 @@ import { bootFromSave, runUntil, saveOf } from './helpers/save.js';
 import { createScenario } from '../src/sim/scenario.js';
 import { stageQueenInNest } from '../src/sim/health-test-utils.js';
 import { ENEMY_COLONY_ID, PLAYER_COLONY_ID, QUEEN_HP_HOME } from '../src/sim/constants.js';
-import { hpBarFillColor, hpBarFillWidth, HP_BAR_H, HP_BAR_W } from '../src/render/hp-bar.js';
+import { HP_BAR_H, HP_BAR_W } from '../src/render/hp-bar.js';
 
 const WOUNDED = 'Their queen is wounded!';
 /** Her HP in the save: below half of her 50 in her nest. */
@@ -142,9 +142,11 @@ test('#427 — a wounded enemy queen: "Their queen is wounded!" once, and her HP
   // The enemy's nest (X centres the camera on her Queen chamber): her bar.
   await page.keyboard.press('x');
   await expect.poll(() => enemyQueenBar(page), { timeout: 10_000 }).not.toBeNull();
-  // Freeze the sim so her HP holds while the bar is measured (the draw runs on).
+  // Freeze the sim so her HP holds while the bar is measured (the draw runs on), then
+  // wait for a frame rendered after the pause (sampleArea settles on the next frame's
+  // snapshot) so the bar the hook reports is the paused world's.
   await setPaused(page, true);
-  await page.waitForTimeout(100);
+  await pixel(page, 0, 0);
   const bar = (await enemyQueenBar(page))!;
 
   // Her HP over her max HP where she stands (her nest: 50), still below half.
@@ -152,26 +154,31 @@ test('#427 — a wounded enemy queen: "Their queen is wounded!" once, and her HP
   expect(bar.hp).toBeGreaterThanOrEqual(HP);
   expect(bar.hp).toBeLessThan(QUEEN_HP_HOME / 2);
   expect(bar.ratio).toBe(bar.hp / QUEEN_HP_HOME);
-  expect(bar.fillW).toBe(hpBarFillWidth(bar.ratio));
-  expect(bar.color).toBe(hpBarFillColor(bar.ratio));
   expect(bar.world.w).toBe(HP_BAR_W);
   expect(bar.world.h).toBe(HP_BAR_H);
 
-  // On screen, clear of every HUD zone.
+  // On screen, clear of every HUD zone: the track's box grown by its 1-world-px
+  // outline on each side (zoom canvas px).
   const s = bar.screen;
-  expect(s.x).toBeGreaterThanOrEqual(0);
-  expect(s.y).toBeGreaterThanOrEqual(0);
+  const zoom = s.w / bar.world.w;
+  const painted: Rect = { x: s.x - zoom, y: s.y - zoom, w: s.w + 2 * zoom, h: s.h + 2 * zoom };
+  expect(painted.x).toBeGreaterThanOrEqual(0);
+  expect(painted.y).toBeGreaterThanOrEqual(0);
   for (const zone of HUD_ZONE_RECTS) {
-    expect(intersects(s, zone.rect), `bar ${JSON.stringify(s)} overlaps ${zone.name}`).toBe(false);
+    expect(
+      intersects(painted, zone.rect),
+      `bar ${JSON.stringify(painted)} overlaps ${zone.name}`,
+    ).toBe(false);
   }
 
-  // Drawn: the middle of the fill is the fill colour, and the middle of the track past
-  // the fill is not (the fraction is visible on the canvas, not just in the hook).
-  const zoom = s.w / bar.world.w;
+  // Drawn at that fraction: on the canvas, the middle of the fill — the track's width
+  // times her HP fraction, rounded — is the fill colour, and the middle of the track
+  // past it is not.
+  const fillW = Math.round(HP_BAR_W * bar.ratio);
   const midY = Math.floor(s.y + s.h / 2);
-  const filled = await pixel(page, Math.floor(s.x + (bar.fillW * zoom) / 2), midY);
+  const filled = await pixel(page, Math.floor(s.x + (fillW * zoom) / 2), midY);
   expect(near(filled, rgb(bar.color), 12), `fill pixel ${filled.join(',')}`).toBe(true);
-  const unfilled = await pixel(page, Math.floor(s.x + ((bar.fillW + HP_BAR_W) * zoom) / 2), midY);
+  const unfilled = await pixel(page, Math.floor(s.x + ((fillW + HP_BAR_W) * zoom) / 2), midY);
   expect(near(unfilled, rgb(bar.color), 40), `track pixel ${unfilled.join(',')}`).toBe(false);
 
   const box = await page.locator('canvas').first().boundingBox();
@@ -181,7 +188,10 @@ test('#427 — a wounded enemy queen: "Their queen is wounded!" once, and her HP
     clip: { x: box.x, y: box.y, width: box.width, height: box.height },
   });
 
-  // Once per wound spell: running on, she stays wounded and it does not come again.
+  // Still one caption after running on. This guards only against a re-fire on every
+  // frame or tick while she stays wounded; it cannot catch a re-arm bug (her earliest
+  // re-arm, healed from 12 HP to ¾, is at about sim tick 1120, far past this check;
+  // the unit tests pin the re-arm).
   await setPaused(page, false);
   const t0 = await simTick(page);
   await expect.poll(() => simTick(page), { timeout: 10_000 }).toBeGreaterThan(t0 + 40);

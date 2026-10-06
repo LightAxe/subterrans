@@ -346,8 +346,9 @@ _Avoid_: **regen** (say heal), **armour**, **shield**; **home** alone for home g
 **Wound spell / "Their queen is wounded!"** (#427, render-only):
 The enemy-nest view (the X toggle) draws the enemy queen's **HP bar** over her, as
 the spider's is drawn over it: her HP out of her max where she stands, full or
-wounded. It is drawn with her sprite and only when her sprite is (the game has no fog
-of war underground, so it shows nothing her sprite does not). A **wound spell** starts
+wounded. It is drawn with her sprite and only when her sprite is: it reveals a stat of
+an entity the player can already inspect at any time (there is no fog of war
+underground), and only where she can be seen. A **wound spell** starts
 when she drops below half her max HP and ends once she has healed back to three
 quarters; the caption "Their queen is wounded!" comes once per spell
 (`src/render/enemy-queen-wound.ts`).

@@ -154,8 +154,9 @@ const scratchStaticOptsUg: StaticSpriteDrawOptions = {
 // 1½ minutes to full), which only pays off if the player knows to press on.
 //
 // VISIBILITY. The game has no fog of war underground: the X toggle shows the enemy's
-// nest at any time, with every ant, chamber and brood in it, the queen included. So
-// the bar shows exactly what her sprite already shows and nothing more: it is drawn
+// nest at any time, with every ant, chamber and brood in it, the queen included. Her
+// HP is new information, but it is a stat of an entity the player can already
+// inspect at any time, and it is shown only where she can be seen: the bar is drawn
 // with her sprite, in the same pass, only when that sprite is drawn — she is alive,
 // underground in the grid being viewed (her own nest), and not culled out of view —
 // and only when the nest being viewed is not the viewer's own (the player's queen has
