@@ -1249,7 +1249,11 @@ describe('#421 — a full army launches without the food check (V73)', () => {
               rec.lastProbeEndTick = t;
               world.tick = t;
               world.events.length = 0;
-              const need = invasionFighterNeed(world, rec);
+              // Independent of ai-state.ts: literal per-tier base need; the floor counts only
+              // while it is above the base and its patience has not run out.
+              const base = { Easy: 18, Normal: 15, Hard: 12 }[d];
+              const need =
+                floor > base && t - 10_000 < AI_INVASION_FLOOR_PATIENCE_TICKS ? floor : base;
               const fed = food * 100 >= c * AI_INVADING_FOOD_FRAC_PCT;
               const v72 = fighters >= need && fed && t >= AI_INVADING_MIN_TICK;
               // The spec: below 32 the V72 gate; from 32 the V72 gate without the food check.

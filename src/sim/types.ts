@@ -1749,9 +1749,9 @@ export const SIM_VERSION_V72_AI_ESCALATION = 72 as const;
  * #398 floor included), AI_INVADING_MIN_TICK, Recovery, the Peacetime → WarFooting
  * check (50 % food) and the controller's raid hold are unchanged; the raid hold defers
  * the cohort, not the launch, so a full army can now enter Invading during a raid
- * whatever its food (at V72 only at 70 %). The colony launches as soon as the gate
- * sees 32 or more, with every fighter it has then (all answer an invasion's rally; the
- * committed cohort is still capped at 32); in playtest 4 a held army only grew, so the
+ * whatever its food (at V72 only at 70 %). The colony enters Invading as soon as the
+ * gate sees 32 or more; when the cohort commits, every fighter it has then answers the
+ * rally (the committed cohort is still capped at 32); in playtest 4 a held army only grew, so the
  * wave leaves sooner and smaller. Below 32 fighters the gate is V72's, so the launch
  * of a wave mustered with fewer (in playtest 4, waves 1–3) is unchanged.
  * Colony-agnostic (CLNY-08). No new field, no command, no world.rngState draw, no

@@ -1325,8 +1325,8 @@ export const AI_MAX_OPERATION_FIGHTERS = 32 as const;
  * this big has every fighter its need can ask for, and while it waits for food it eats
  * faster than its foragers fill the stores (playtest 4, Hard against a defender: 29 →
  * 87 fighters at home over 15 minutes, the stores falling from 54 % to 22–37 %, and no
- * launch). It launches as soon as the gate sees 32 or more, with every fighter it has
- * then (all answer an invasion's rally; the committed cohort is capped at 32). In
+ * launch). It enters Invading as soon as the gate sees 32 or more; when the cohort
+ * commits, every fighter it has then answers the rally (the cohort is capped at 32). In
  * playtest 4 a held army only grew, so the wave leaves sooner and smaller. Below it
  * the gate is V72's. Bare balance value.
  */

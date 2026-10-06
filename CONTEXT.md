@@ -555,8 +555,8 @@ least `AI_INVADING_MIN_TICK` old. From **#421 (simVersion V73)** a colony with
 `AI_INVADING_FOOD_GATE_BYPASS_FIGHTERS` (32, the cohort cap) or more of its own
 fighters skips the food check: a big army eats faster than its foragers fill the
 stores, so up to V72 it could sit at home, growing, and never launch. It now
-launches as soon as the gate sees 32 or more, with every fighter it has then (all
-answer an invasion's rally); in playtest 4 a held army only grew, so the wave leaves
+enters Invading as soon as the gate sees 32 or more; when the cohort commits, every
+fighter it has then answers the rally; in playtest 4 a held army only grew, so the wave leaves
 sooner and smaller. Below 32 the gate is unchanged, and so is Peacetime → WarFooting
 (50 % food). The AI's raid hold defers an invasion's cohort, not the launch.
 _Avoid_: "food gate" for the whole launch gate (the food check is one of its three
