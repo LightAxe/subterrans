@@ -132,7 +132,8 @@ reviews:
         src/platform/snapshot-window.ts, validateSimVersion in
         src/platform/save.ts), and so is a rename that would hide one
         (`import { LATEST_SIM_VERSION as L }`); src/platform/no-new-gates.test.ts
-        fails on all three. Keep the machinery: the simVersion field, the
+        fails on all three in TS/JS sources (shell scripts are not scanned:
+        only TS/JS runs the sim). Keep the machinery: the simVersion field, the
         SIM_VERSION_V* registry, save-load validation, createScenario's
         simVersion argument, BYTE_GATE_SIM_VERSION. Do not ask to remove it.
         It is the post-1.0 plan (ARCHITECTURE.md Principle 7, "Re-enabling

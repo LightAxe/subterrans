@@ -6,9 +6,11 @@
 // Pre-1.0 policy (AGENTS.md "simVersion and saves"): a sim behaviour change is not
 // gated behind `simVersion`. It bumps LATEST_SIM_VERSION and sets
 // MIN_ACCEPTED_SIM_VERSION to the same value. #408 reaped every old gate, and this
-// guard keeps new ones out mechanically. It parses every non-test .ts file under
-// src/, scripts/ and bench/ with the TypeScript compiler API (syntax only, no type
-// checker) and fails on three kinds of reference.
+// guard keeps new ones out mechanically. It parses every non-test TypeScript or
+// JavaScript source (.ts .mts .cts .tsx .js .mjs .cjs .jsx) under src/, scripts/ and
+// bench/ with the TypeScript compiler API (syntax only, no type checker) and fails on
+// three kinds of reference. Shell scripts and data files are not scanned: the sim runs
+// only in TS/JS, so only TS/JS can gate its behaviour on a version.
 //
 //   1. 'registry name': a version-registry constant, `SIM_VERSION_V<n>` with or
 //      without a `_<SUFFIX>` (the shape version-policy.test.ts enumerates). An
@@ -48,9 +50,10 @@
 //
 // A version bump touches only the registry and the MIN line, so it never trips this
 // guard. Comments are not code (the AST skips them), and a template such as
-// `SIM_VERSION_V${n}` is not a registry name. Only *.test.ts files are skipped:
-// tests may pin and compare versions. Test helpers that are not *.test.ts (e.g.
-// food-test-utils.ts) are scanned like any other file.
+// `SIM_VERSION_V${n}` is not a registry name. Only test files (*.test.<ext>) and
+// declaration files are skipped: tests may pin and compare versions. Test helpers
+// that are not *.test.<ext> (e.g. food-test-utils.ts) are scanned like any other
+// file.
 //
 // Known limits (syntactic analysis cannot close them; review covers them):
 //   - a version copied to another name and compared under it
@@ -63,7 +66,16 @@
 //   - a name built at run time ('SIM_VERSION_V' + n, w['sim' + 'Version']).
 
 import { describe, it, expect } from 'vitest';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
@@ -232,7 +244,8 @@ function allowedBy(file: string, kind: Kind, node: ts.Node): Allowance | null {
 
 /** Every registry-name reference and simVersion comparison in one file's source. */
 function findGateRefs(file: string, source: string): Ref[] {
-  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  // No explicit ScriptKind: the compiler infers TS or JS from the file's extension.
+  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
   const refs: Ref[] = [];
   const hit = (node: ts.Node, kind: Kind): void => {
     refs.push({
@@ -266,14 +279,17 @@ function findGateRefs(file: string, source: string): Ref[] {
   return refs;
 }
 
-function listTsFiles(dir: string): string[] {
+/** TS/JS sources the guard scans; everything else (shell, JSON, snapshots) is not code the sim runs. */
+const SOURCE_FILE = /\.[mc]?[tj]sx?$/;
+/** Skipped: tests (which may pin versions) and declaration files. */
+const SKIPPED_FILE = /\.test\.[mc]?[tj]sx?$|\.d\.[mc]?ts$/;
+
+function listSourceFiles(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir)) {
     const p = join(dir, entry);
-    if (statSync(p).isDirectory()) out.push(...listTsFiles(p));
-    else if (entry.endsWith('.ts') && !entry.endsWith('.test.ts') && !entry.endsWith('.d.ts')) {
-      out.push(p);
-    }
+    if (statSync(p).isDirectory()) out.push(...listSourceFiles(p));
+    else if (SOURCE_FILE.test(entry) && !SKIPPED_FILE.test(entry)) out.push(p);
   }
   return out;
 }
@@ -282,7 +298,7 @@ let treeRefs: Ref[] | null = null;
 /** Every reference in the scanned tree (parsed once, on first use). */
 function scanTree(): Ref[] {
   if (treeRefs === null) {
-    const files = SCAN_DIRS.flatMap((d) => listTsFiles(join(ROOT, d)));
+    const files = SCAN_DIRS.flatMap((d) => listSourceFiles(join(ROOT, d)));
     expect(files.length).toBeGreaterThan(100); // the walk found the tree
     treeRefs = files.flatMap((f) =>
       findGateRefs(relative(ROOT, f).split('\\').join('/'), readFileSync(f, 'utf8')),
@@ -496,6 +512,46 @@ describe('#408 no-new-gates detector (self-test)', () => {
     ]) {
       expect(flagged('src/platform/save.ts', src), src).toEqual([
         'registry name: SIM_VERSION_V99_FOO',
+      ]);
+    }
+  });
+
+  it('walks TS and JS sources, and skips only tests and declaration files (Codex on #422)', () => {
+    // The walker itself, on a scratch tree: every TS/JS extension is listed, at any
+    // depth; tests, declaration files, shell scripts and data files are not.
+    const dir = mkdtempSync(join(tmpdir(), 'no-new-gates-'));
+    try {
+      mkdirSync(join(dir, 'nested'));
+      const scanned = [
+        'a.ts',
+        'b.mts',
+        'c.cts',
+        'd.tsx',
+        'e.js',
+        'f.mjs',
+        'g.cjs',
+        'h.jsx',
+        'nested/i.ts',
+      ];
+      const skipped = [
+        'x.test.ts',
+        'y.test.mjs',
+        'z.d.ts',
+        'w.d.mts',
+        'run.sh',
+        'data.json',
+        'nested/v.snap',
+      ];
+      for (const f of [...scanned, ...skipped]) writeFileSync(join(dir, f), '');
+      const listed = listSourceFiles(dir).map((f) => relative(dir, f).split('\\').join('/'));
+      expect(listed.sort()).toEqual([...scanned].sort());
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    // And a JS-kind or TSX-kind file is parsed and its gate caught.
+    for (const file of ['scripts/foo.mjs', 'scripts/foo.cjs', 'bench/foo.js', 'src/foo.tsx']) {
+      expect(flagged(file, 'if (world.simVersion >= 72) run();'), file).toEqual([
+        'simVersion comparison: world.simVersion >= 72',
       ]);
     }
   });

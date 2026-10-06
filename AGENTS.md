@@ -120,7 +120,7 @@ Use strong language deliberately — these are non-negotiable invariants of the 
   - LATEST is the newest registered version;
   - once past the transition below, MIN equals LATEST.
 
-  The "no gates" rule is a review rule, and `src/platform/no-new-gates.test.ts` backs it mechanically. In non-test code under `src/`, `scripts/` and `bench/`, the test fails on two things:
+  The "no gates" rule is a review rule, and `src/platform/no-new-gates.test.ts` backs it mechanically. In non-test TypeScript and JavaScript sources under `src/`, `scripts/` and `bench/` (shell scripts and data files aren't scanned: only TS/JS runs the sim), the test fails on two things:
   - any `SIM_VERSION_V<n>` reference outside the registry itself: the name an entry declares and the `LATEST_SIM_VERSION` line in `src/sim/types.ts`, and the `MIN_ACCEPTED_SIM_VERSION` line (and its import) in `src/platform/save.ts`. Any other top-level const counts, so a build-wide flag such as `USE_FOO = LATEST_SIM_VERSION >= SIM_VERSION_V73_FOO` fails;
   - any relational comparison of a `simVersion` value, or of a version constant (`LATEST_SIM_VERSION`, `MIN_ACCEPTED_SIM_VERSION`, any `*_SIM_VERSION` or `SIM_VERSION_V<n>`), outside the two window checks: `snapshot-window.ts` `snapshotWindowMessage` and `save.ts` `validateSimVersion`. A rename that would hide such a comparison (`import { LATEST_SIM_VERSION as L }`, `const { simVersion: v } = world`) fails too.
 
