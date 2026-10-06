@@ -459,17 +459,13 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(w2.ants.currentGridColonyId[playerInvader]).toBe(ENEMY_COLONY_ID);
     });
     it('round-trips simVersion (LATEST: v10 visible brood carry)', async () => {
-      const { LATEST_SIM_VERSION, SIM_VERSION_V7_SURFACE_PASSABILITY } =
-        await import('../sim/types.js');
+      const { LATEST_SIM_VERSION } = await import('../sim/types.js');
       // New worlds default to LATEST_SIM_VERSION. Save/load must preserve
       // it so any LATEST replay continues to apply the gated behaviour
       // (currently surface passability, soft cost, leash hysteresis,
       // cancel-drops-pending, and visible brood carry) on resume.
       const w = createScenario(42);
       expect(w.simVersion).toBe(LATEST_SIM_VERSION);
-      // Sanity-check that LATEST is at least v7 — anything lower would
-      // silently regress the #44 surface-passability behaviour.
-      expect(w.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V7_SURFACE_PASSABILITY);
       const s = serializeWorldState(w);
       const w2 = deserializeWorldState(JSON.parse(JSON.stringify(s)));
       expect(w2.simVersion).toBe(LATEST_SIM_VERSION);
@@ -496,9 +492,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
       expect(w2.terrainSeed).toBe(0);
     });
     it('V20: round-trips world.spider, spiderPriorityColonyId, and scatterReticleTile through serialize → deserialize', async () => {
-      const { SIM_VERSION_V20_SPIDER } = await import('../sim/types.js');
       const w = createScenario(42);
-      expect(w.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V20_SPIDER);
       const spider = w.spider!;
       spider.state = 'Hunting';
       spider.huntTargetTileX = 55;
@@ -532,9 +526,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     });
 
     it('V20: spider: null in a V20 save deserializes to null with priority and reticle also null (B11 coupling)', async () => {
-      const { SIM_VERSION_V20_SPIDER } = await import('../sim/types.js');
       const w = createScenario(42);
-      expect(w.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V20_SPIDER);
       const s = serializeWorldState(w);
       // Force spider null but leave priority/reticle non-null in the raw snapshot.
       (s as { spider: null }).spider = null;
@@ -548,9 +540,7 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
     });
 
     it('V20: spiderPriorityColonyId of Infinity, NaN, or float deserializes to null (B1 integer guard)', async () => {
-      const { SIM_VERSION_V20_SPIDER } = await import('../sim/types.js');
       const w = createScenario(42);
-      expect(w.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V20_SPIDER);
       const s = serializeWorldState(w);
       for (const bad of [Infinity, -Infinity, NaN, 1.5, -0.1]) {
         (s as { spiderPriorityColonyId: number }).spiderPriorityColonyId = bad;

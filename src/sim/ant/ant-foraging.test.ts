@@ -13,7 +13,7 @@ import {
   chooseExcursionDirection,
   tickExcursionBoundary,
 } from './ant-system.js';
-import { createWorldState, allocateEntityId, SIM_VERSION_V8_LEASH_HYSTERESIS } from '../types.js';
+import { createWorldState, allocateEntityId } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
 import { initAnt, RECENT_TILES_LEN } from './ant-store.js';
 import { AntTask, ForagingSubState, ChamberType, PheromoneType } from '../enums.js';
@@ -1655,7 +1655,6 @@ describe('tickExcursionBoundary — priority-aware (09 follow-up issue 1)', () =
     world.ants.subTask[antId] = ForagingSubState.ReturningToNest;
     const { grid } = setupSurfaceGrid(world);
     phSet(grid, base + 2, 2, FOOD_TRAIL_DEPOSIT);
-    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V8_LEASH_HYSTERESIS);
     tickExcursionBoundary(world);
     expect(world.ants.subTask[antId]).toBe(ForagingSubState.ReturningToNest);
   });

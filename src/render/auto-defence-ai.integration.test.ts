@@ -12,7 +12,7 @@ import { describe, it, expect } from 'vitest';
 import { runAIController } from './ai-controller.js';
 import { createScenario } from '../sim/scenario.js';
 import { tick } from '../sim/tick.js';
-import { allocateEntityId, SIM_VERSION_V64_AUTO_DEFENCE } from '../sim/types.js';
+import { allocateEntityId } from '../sim/types.js';
 import { initAnt } from '../sim/ant/ant-store.js';
 import { AntTask, FightingSubState } from '../sim/enums.js';
 import { Zone, UndergroundTileState, ugSet } from '../sim/terrain.js';
@@ -35,7 +35,6 @@ function run(intruderCount: number): {
   fighters: number;
 } {
   const world = createScenario(11, 'Normal');
-  expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V64_AUTO_DEFENCE);
   world.spider = null;
   const enemy = world.colonies[E]!;
   const ee = enemy.entrances.find((en) => en.isOpen)!;

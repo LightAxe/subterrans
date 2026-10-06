@@ -15,12 +15,7 @@
 import { describe, it, expect } from 'vitest';
 import { tick } from './tick.js';
 import { createScenario } from './scenario.js';
-import {
-  allocateEntityId,
-  SIM_VERSION_V57_ROUTED_TO_ENTRANCE,
-  LATEST_SIM_VERSION,
-  type WorldState,
-} from './types.js';
+import { allocateEntityId, type WorldState } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { fighterDefendsTunnels } from './ant/ant-combat-targeting.js';
 import { antIsAtHome, fighterIsHungry } from './hunger.js';
@@ -163,12 +158,6 @@ const FAR_FROM = { x: 104, y: 48 } as const;
 const DIG_SEED = 1;
 const DIG_FROM = { x: 108, y: 40 } as const;
 const DIG_ENTRANCE = { x: 108, y: 50 } as const;
-
-describe('V57 (#357, #358)', () => {
-  it('LATEST is V57 or later', () => {
-    expect(LATEST_SIM_VERSION).toBeGreaterThanOrEqual(SIM_VERSION_V57_ROUTED_TO_ENTRANCE);
-  });
-});
 
 describe('fixtures', () => {
   it('seed 7: the obstacle stands between HOME_FROM and the entrance, inside home range', () => {

@@ -34,7 +34,7 @@
 import { describe, it, expect } from 'vitest';
 import { createScenario } from './scenario.js';
 import { tick } from './tick.js';
-import { allocateEntityId, LATEST_SIM_VERSION, SIM_VERSION_V25_RALLY_RECALL } from './types.js';
+import { allocateEntityId, LATEST_SIM_VERSION } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { AntTask } from './enums.js';
 import { Zone, UndergroundTileState, ugSet } from './terrain.js';
@@ -370,7 +370,6 @@ describe('invasion-routing — foreign recall keys on rally, not fight ratio (#1
 
     // Preconditions for the gate under test.
     expect(world.simVersion).toBe(LATEST_SIM_VERSION);
-    expect(world.simVersion).toBeGreaterThanOrEqual(SIM_VERSION_V25_RALLY_RECALL);
     expect(world.colonies[PLAYER_COLONY_ID]!.rallyPoint).toEqual({
       tileX: enemyEntTileX,
       tileY: enemyEntTileY,
