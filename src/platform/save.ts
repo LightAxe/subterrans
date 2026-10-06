@@ -1321,7 +1321,9 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
  * caught by `bootFromSave`'s try/catch in render/game-scene.ts.
  *
  * One of the two window checks that no-new-gates.test.ts lets compare against
- * LATEST_SIM_VERSION and MIN_ACCEPTED_SIM_VERSION; it finds this one by name.
+ * LATEST_SIM_VERSION and MIN_ACCEPTED_SIM_VERSION. It finds this one by name and by
+ * its two exact comparisons (WINDOW_COMPARISONS there): `raw` must stay this
+ * function's plain parameter, and the bounds the imported LATEST and the MIN line.
  */
 function validateSimVersion(raw: unknown): number {
   if (typeof raw !== 'number' || !Number.isInteger(raw)) {

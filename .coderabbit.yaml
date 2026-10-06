@@ -127,14 +127,17 @@ reviews:
         src/platform/save.ts) is a new gate, a build-wide flag such as
         `USE_FOO = LATEST_SIM_VERSION >= SIM_VERSION_V73_FOO` included. So is a
         relational comparison of a simVersion value or of a version constant
-        (LATEST_SIM_VERSION, MIN_ACCEPTED_SIM_VERSION, SIM_VERSION_V*) outside
-        the window checks (snapshotWindowMessage in
+        (LATEST_SIM_VERSION, MIN_ACCEPTED_SIM_VERSION, SIM_VERSION_V*) other
+        than the window checks' own bound comparisons (snapshotWindowMessage in
         src/platform/snapshot-window.ts, validateSimVersion in
-        src/platform/save.ts), and so is a rename that would hide one
+        src/platform/save.ts; any other comparison inside them is a gate too),
+        and so is a rename that would hide one
         (`import { LATEST_SIM_VERSION as L }`); src/platform/no-new-gates.test.ts
-        fails on all three in TS/JS sources (shell scripts are not scanned:
-        only TS/JS runs the sim). Keep the machinery: the simVersion field, the
-        SIM_VERSION_V* registry, save-load validation, createScenario's
+        fails on all three in TS/JS sources under src/, scripts/ and bench/ and
+        in the repo root's build configs, such as vite.config.ts and
+        vite.lib.config.ts (not recursively; shell scripts are not scanned:
+        only TS/JS runs or builds the sim). Keep the machinery: the simVersion
+        field, the SIM_VERSION_V* registry, save-load validation, createScenario's
         simVersion argument, BYTE_GATE_SIM_VERSION. Do not ask to remove it.
         It is the post-1.0 plan (ARCHITECTURE.md Principle 7, "Re-enabling
         simVersion gates"). A gate-reap PR (that principle's playbook) keeps
