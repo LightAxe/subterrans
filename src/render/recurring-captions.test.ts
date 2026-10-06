@@ -80,18 +80,24 @@ const at = (
 describe('recurringCaptionStillOwed (#372)', () => {
   it('true while the rampage warning or an untaken raid caption is owed', () => {
     const r = createRampageCaptionState();
-    expect(recurringCaptionStillOwed(r, null, false)).toBe(false);
-    expect(recurringCaptionStillOwed(r, 'raided', false)).toBe(true);
+    expect(recurringCaptionStillOwed(r, null, false, false)).toBe(false);
+    expect(recurringCaptionStillOwed(r, 'raided', false, false)).toBe(true);
     oweRampageCaption(r, 10, 100);
-    expect(recurringCaptionStillOwed(r, null, false)).toBe(true);
+    expect(recurringCaptionStillOwed(r, null, false, false)).toBe(true);
   });
 
   it('true while an untaken army warning is owed (#395: behind the storage hint)', () => {
     const r = createRampageCaptionState();
-    expect(recurringCaptionStillOwed(r, null, true)).toBe(true);
-    expect(recurringCaptionStillOwed(r, 'raided', true)).toBe(true);
+    expect(recurringCaptionStillOwed(r, null, true, false)).toBe(true);
+    expect(recurringCaptionStillOwed(r, 'raided', true, false)).toBe(true);
     oweRampageCaption(r, 10, 100);
-    expect(recurringCaptionStillOwed(r, null, true)).toBe(true);
+    expect(recurringCaptionStillOwed(r, null, true, false)).toBe(true);
+  });
+
+  it('true while an untaken counter-attack caption is owed (playtest 4)', () => {
+    const r = createRampageCaptionState();
+    expect(recurringCaptionStillOwed(r, null, false, false)).toBe(false);
+    expect(recurringCaptionStillOwed(r, null, false, true)).toBe(true);
   });
 });
 

@@ -212,9 +212,10 @@ function storageHintText(world: WorldState, colony: ColonyRecord, keyText: strin
  * Re-arms the caption once the stall has cleared (storage covering the need for
  * STORAGE_HINT_REARM_TICKS, or capacity grown since the caption was offered) and
  * STORAGE_HINT_COOLDOWN_TICKS have passed since it was offered. With `mayOffer` false
- * (#395: a recurring caption — the army warning, the rampage warning or raid news — is
- * owed and goes first) the dwell, re-arm and cooldown clocks run on but no caption is
- * offered this frame; a due one is offered on the next frame that may.
+ * (#395: a recurring caption — the army warning, the rampage warning, raid news or the
+ * counter-attack caption — is owed and goes first) the dwell, re-arm and cooldown
+ * clocks run on but no caption is offered this frame; a due one is offered on the next
+ * frame that may.
  */
 export function advanceStorageHint(
   state: StorageHintState,

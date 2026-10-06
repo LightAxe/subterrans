@@ -645,6 +645,19 @@ It replaced the one-time "The enemy is attacking your hive." invasion caption.
 _Avoid_: "gathering warning" for a warning that may be about a march; "invasion
 caption".
 
+**Counter-attack caption** (playtest 4, render-only):
+The caption that tells the player to strike back after a **fighter rout**: "Their
+army is broken — strike their nest now! Assault: right-click or long-press their
+entrance." (the raid menu's Assault order). It is owed for each invasion of the colony
+that ends in a fighter rout (not the timeout, a pre-cohort ending or a queen kill)
+while the attacker's whole army is then below its tier's base invasion need
+(`AI_INVADING_FIGHTER_THRESHOLD`), and not within
+`COUNTER_ATTACK_CAPTION_COOLDOWN_TICKS` of the last rout that owed it.
+Decided per sim tick from the AI's `invasion_end` and Invading → Recovery
+`ai_state_transition` events; a recurring caption, so it waits for an idle queue.
+_Avoid_: "victory caption"; "rout caption" (a rout is the AI's, the caption the
+player's).
+
 **Difficulty**:
 The tier chosen at boot — `Easy` / `Normal` / `Hard` — which tunes AI rates,
 spider hunger, and the egg interval.
