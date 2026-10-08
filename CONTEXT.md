@@ -686,7 +686,12 @@ foragers have room." Owed when the colony has a completed Food Storage chamber, 
 stores read at least three-quarters of capacity, none is designated, and storage is
 not already holding the queen back (that is the storage hint's to say), for a 10 s
 dwell; not again within 60 s of that or of the storage hint. Decided per sim tick; a
-recurring caption, so it waits for an idle queue.
+recurring caption, so it waits for an idle queue. Once owed it is offered for up to
+10 s, and dropped sooner if any tick makes its trigger false. Its 60 s cooldown runs
+from the tick it became owed (or from the storage hint's last offer); a caption dropped
+without being shown frees that cooldown, so a trigger that still holds owes it again on
+the next tick (the dwell clock runs on; only a tick that breaks the trigger restarts
+it).
 _Avoid_: "storage hint" (the #395/#413 caption about a queen held back by storage).
 
 **Difficulty**:
