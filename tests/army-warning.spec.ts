@@ -4,8 +4,8 @@
 // browser.
 //
 // The detection, the hysteresis (once per wave, every wave), the entrance aim and
-// CLNY-08 are pinned in src/render/enemy-march.test.ts and
-// src/render/enemy-gathering.test.ts, and the ring's draw calls in
+// CLNY-08 are pinned in src/render/enemy-march.test.ts,
+// src/render/enemy-gathering.test.ts and src/render/army-warning.test.ts, and the ring's draw calls in
 // src/render/minimap.test.ts. What only a browser proves is the wiring: GameScene
 // feeds the march history and runs the warning each frame, the caption queue shows
 // it, and UIScene rings the moving army on the minimap.
@@ -40,7 +40,8 @@
 import { test, expect, type Page } from '@playwright/test';
 import { clickCanvasRect, settleToPlaying, waitForUiHook } from './helpers/boot.js';
 import { MINIMAP_RECT, SAVE_PROMPT_CONTINUE_RECT } from './helpers/geometry.js';
-import { GATHER_CAPTION_HOLD_MS, GATHER_RADIUS_TILES } from '../src/render/enemy-gathering.js';
+import { ARMY_CAPTION_HOLD_MS } from '../src/render/army-warning.js';
+import { GATHER_RADIUS_TILES } from '../src/render/enemy-gathering.js';
 import { MINIMAP_RING_MAX_R, MINIMAP_RING_MIN_R } from '../src/render/minimap.js';
 import { MAX_CATCHUP_TICKS } from '../src/platform/game-loop.js';
 
@@ -396,11 +397,11 @@ test.describe('#394 — an enemy army marching on an entrance', () => {
     });
     await setPaused(page, false);
 
-    // It holds long enough to read: GATHER_CAPTION_HOLD_MS at full opacity, and
+    // It holds long enough to read: ARMY_CAPTION_HOLD_MS at full opacity, and
     // nothing queued behind it made it give way. Read from UIScene's hold log.
     await expect
       .poll(() => warningHold(page), { timeout: 15_000 })
-      .toEqual({ holdMs: GATHER_CAPTION_HOLD_MS, yielded: false });
+      .toEqual({ holdMs: ARMY_CAPTION_HOLD_MS, yielded: false });
 
     // Once per wave: the army has reached its rally by the door and stands there
     // 10 s of game time later, the queue long idle — and no second warning (of

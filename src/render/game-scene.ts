@@ -220,19 +220,17 @@ import {
   resetRampageCaptionState,
 } from './recurring-captions.js';
 import {
+  ARMY_CAPTION_HOLD_MS,
+  armyWarningLogEntry,
   createArmyWarningState,
-  GATHER_CAPTION_HOLD_MS,
   markArmyWarningShown,
   nextArmyWarning,
   noteArmyWarningEvent,
   noteInvasionUnderWay,
   resetArmyWarningState,
-} from './enemy-gathering.js';
-import {
-  armyWarningLogEntry,
-  measureEnemyMarchThisTick,
   type ArmyWarningLogEntry,
-} from './enemy-march.js';
+} from './army-warning.js';
+import { measureEnemyMarchThisTick } from './enemy-march.js';
 import { checkAndTrigger, resetCaptions, type CaptionKey } from './onboarding-captions.js';
 import { advanceQueenDanger, createQueenDangerState } from './queen-danger.js';
 import { advanceEnemyQueenWound, createEnemyQueenWoundState } from './enemy-queen-wound.js';
@@ -2040,7 +2038,7 @@ export class GameScene extends Phaser.Scene {
       // never takes a one-shot caption's slot.)
 
       // #404 review — an invasion launched at the player is noted for the army
-      // warning's fallback (enemy-gathering.ts nextArmyWarning).
+      // warning's fallback (army-warning.ts nextArmyWarning).
       noteArmyWarningEvent(this.armyWarning, ev, PLAYER_COLONY_ID);
       // Playtest 4 — a wave routed at the player owes the counter-attack caption,
       // decided as of the event's own tick (counter-attack-caption.ts), so the frame
@@ -2176,7 +2174,7 @@ export class GameScene extends Phaser.Scene {
     // the storage hint waits (below).
     let armyWarningOwed = false;
     if (armyText !== null && uiScene) {
-      if (offerRecurringCaption(uiScene, armyText, this.layout.w / 2, 60, GATHER_CAPTION_HOLD_MS)) {
+      if (offerRecurringCaption(uiScene, armyText, this.layout.w / 2, 60, ARMY_CAPTION_HOLD_MS)) {
         const owedTick = this.armyWarning.owedSinceTick;
         markArmyWarningShown(this.armyWarning);
         if (import.meta.env.DEV) {

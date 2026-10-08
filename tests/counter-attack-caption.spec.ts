@@ -45,7 +45,7 @@ import {
   COUNTER_ATTACK_READY_FIGHTERS,
 } from '../src/render/counter-attack-caption.js';
 
-/** Every army warning (enemy-gathering.ts). */
+/** Every army warning (army-warning.ts). */
 const ARMY_WARNING_PREFIX = 'An enemy army is';
 
 interface CounterAttackCaption {

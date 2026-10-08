@@ -626,10 +626,10 @@ enclose both (else each gets its own).
 _Avoid_: "invasion" for the march (an invasion is the AI operation, or fighters
 inside the nest), "attack" alone.
 
-**Army warning** (#372, #394, render-only):
+**Army warning** (#372, #394, #409, render-only; lives in `src/render/army-warning.ts`, which reads both detectors):
 The caption that warns of an enemy army, once per **wave** (from the warning, or
 an invasion that broke in unwarned, until things are quiet again — below — for
-`GATHER_REARM_QUIET_TICKS`): "An enemy army is
+`ARMY_REARM_QUIET_TICKS`): "An enemy army is
 marching on your east entrance. Train fighters and rally there." once a **march**
 has held `MARCH_DWELL_TICKS` (a quarter-second), or "…is gathering near…" once a
 **gathering** has held `GATHER_DWELL_TICKS`. It names the entrance by compass direction from the middle of
@@ -638,10 +638,10 @@ not single it out). An **invasion** — at least `INVASION_NEST_MIN_FIGHTERS` en
 fighters in the colony's tunnels — raises no warning of a gathering (the army at the
 door is the invasion itself) but, when the fallback has not warned of it, does not
 use the wave up: an army still marching behind a vanguard that slipped in is warned
-of. The warning re-arms for the next wave once at most `GATHER_REARM_MAX_FIGHTERS`
+of. The warning re-arms for the next wave once at most `ARMY_REARM_MAX_FIGHTERS`
 are near any entrance, at most that many are marching and no invasion is under way
 (in the tunnels, or launched and not yet ended), continuously for
-`GATHER_REARM_QUIET_TICKS`.
+`ARMY_REARM_QUIET_TICKS`.
 An invasion the AI launches is warned of at its launch (#404 review): an invasion
 launched at the colony (its `invasion_start`) while the warning is armed, and not yet
 warned of by a reading, is warned of ("…is marching on…", naming the entrance it

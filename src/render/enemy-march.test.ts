@@ -14,7 +14,6 @@ import {
   MARCH_MIN_STEP_TILES,
   MARCH_SAMPLE_TICKS,
   MARCH_WINDOW_TICKS,
-  armyWarningLogEntry,
   createMarchHistory,
   isEnemyMarching,
   measureEnemyMarch,
@@ -946,58 +945,5 @@ describe('measureEnemyMarchThisTick — shared history, one measurement per worl
     measureEnemyMarchThisTick(b, P);
     expect(measureEnemyMarchThisTick(a, P)!.fighters).toBe(MARCH_MIN_FIGHTERS);
     expect(measureEnemyMarchThisTick(b, P)).toBeNull();
-  });
-});
-
-describe('armyWarningLogEntry — what the dev log records of a warning', () => {
-  it('the tick, the text, the march size and its nearest distance from the door', () => {
-    const quiet = raidWorld().world;
-    expect(armyWarningLogEntry(quiet, P, 'x', quiet.tick - 3)).toEqual({
-      tick: quiet.tick,
-      owedTick: quiet.tick - 3,
-      text: 'x',
-      marching: 0,
-      marchDistanceTiles: null,
-    });
-    const { world: w } = raidWorld();
-    const ids = army(w, MARCH_MIN_FIGHTERS, 60, 63);
-    for (let t = 0; t < MARCH_WINDOW_TICKS; t++) {
-      measureEnemyMarchThisTick(w, P);
-      advance(w, 1);
-    }
-    for (const id of ids) {
-      const [x, y] = pos(w, id);
-      place(w, id, x - 10, y);
-    }
-    // Box x 50.5..53.5, rows 63.5..64.5; the door centre (24.5, 64.5) is 26 tiles
-    // west of its near edge, inside its rows.
-    const e = armyWarningLogEntry(w, P, 'march', w.tick - 7);
-    expect(e.tick).toBe(w.tick);
-    expect(e.owedTick).toBe(w.tick - 7);
-    expect(e.marching).toBe(MARCH_MIN_FIGHTERS);
-    expect(e.marchDistanceTiles).toBeCloseTo(26, 5);
-  });
-
-  it('chasers only (a warning they kept owed) log as no march', () => {
-    const { world: w } = raidWorld();
-    const ids = army(w, MARCH_MIN_FIGHTERS, 80, 64);
-    const own = addFighter(w, P, 40, 64, null);
-    place(w, own, 77.5, 65);
-    for (let t = 0; t < MARCH_WINDOW_TICKS; t++) {
-      measureEnemyMarchThisTick(w, P);
-      advance(w, 1);
-    }
-    for (const id of [...ids, own]) {
-      const [x, y] = pos(w, id);
-      place(w, id, x - 10, y);
-    }
-    expect(measureEnemyMarchThisTick(w, P)).toMatchObject({
-      fighters: 0,
-      chasing: MARCH_MIN_FIGHTERS,
-    });
-    expect(armyWarningLogEntry(w, P, 'march', w.tick)).toMatchObject({
-      marching: 0,
-      marchDistanceTiles: null,
-    });
   });
 });

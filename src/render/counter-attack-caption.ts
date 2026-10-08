@@ -58,7 +58,7 @@ import {
 import { AI_INVADING_FIGHTER_THRESHOLD } from '../sim/constants.js';
 import { rallyEnemyEntrance } from '../sim/raid-order.js';
 import { offerRecurringCaption, type RecurringCaptionSink } from './recurring-captions.js';
-import { GATHER_CAPTION_HOLD_MS } from './enemy-gathering.js';
+import { ARMY_CAPTION_HOLD_MS } from './army-warning.js';
 
 /**
  * The caption. Its second sentence names the raid menu's Assault order
@@ -73,10 +73,10 @@ import { GATHER_CAPTION_HOLD_MS } from './enemy-gathering.js';
 export const COUNTER_ATTACK_CAPTION_TEXT =
   'Their army is broken — strike their nest now! Assault: right-click or long-press their entrance.';
 
-/** Full-opacity hold (ms): the army warning's (GATHER_CAPTION_HOLD_MS), as it must be
+/** Full-opacity hold (ms): the army warning's (ARMY_CAPTION_HOLD_MS), as it must be
  *  read. Like it, it gives way to a caption owed behind it (caption-queue.ts
  *  CAPTION_YIELD_FLOOR_MS). */
-export const COUNTER_ATTACK_CAPTION_HOLD_MS = GATHER_CAPTION_HOLD_MS;
+export const COUNTER_ATTACK_CAPTION_HOLD_MS = ARMY_CAPTION_HOLD_MS;
 
 /**
  * How long (ticks, 20 s) a caption the busy queue has not taken is still offered.

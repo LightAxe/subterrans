@@ -69,7 +69,7 @@ const CAPTION_COURSE_MS = 300 + 800 + 400;
 /** Scene time past a rally caption's whole course and then a hint promoted behind
  *  it (fade-in, its 4 s hold, fade-out), with a margin. */
 const PAST_RALLY_AND_HINT_MS = CAPTION_COURSE_MS + 300 + HOLD_MS + 400 + 1_000;
-/** Every army warning (a march, a gathering, an invasion: enemy-gathering.ts). */
+/** Every army warning (a march, a gathering, an invasion: army-warning.ts). */
 const ARMY_WARNING_PREFIX = 'An enemy army is';
 const RALLY_TEXT = 'Fighters will converge here.';
 /** onboarding-captions.ts foodMark: a Command tap on a food pile. */
@@ -257,7 +257,7 @@ type Variant = 'plain' | 'designate' | 'army' | 'starve' | 'room' | 'hidden';
  *    way), rallied where they stand, so they hold there until the spec rallies
  *    them 13 tiles east of the player's door (rallyColonyAt). The march warning
  *    (#394) is owed about 75 ticks after the rally; the army then stands near the
- *    door without going in, so the warning stays owed (GATHER_CAPTION_OWED_TICKS). */
+ *    door without going in, so the warning stays owed (ARMY_CAPTION_OWED_TICKS). */
 async function seedStorageSave(page: Page, variant: Variant): Promise<void> {
   await page.evaluate(async (variant: Variant) => {
     // Paths are served by the Vite dev server (Playwright always runs it).

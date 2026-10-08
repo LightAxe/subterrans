@@ -1,5 +1,6 @@
 // enemy-march.ts — #394: spot an enemy army marching on one of the viewing
-// colony's entrances, for the army warning caption and the minimap ring.
+// colony's entrances, for the army warning caption (army-warning.ts) and the
+// minimap ring.
 //
 // Since V64 an AI probe sends only its 3-fighter cohort, so the AI no longer
 // stages an army near the player's nest before it invades: it commits the whole
@@ -628,45 +629,4 @@ export function measureEnemyMarchThisTick(
   memo.viewer = viewerColonyId;
   memo.atTick = world.tick;
   return memo.result;
-}
-
-/** #394 — one army warning as the caption queue took it, for the dev-only
- *  __phase9_test.getArmyWarningLog (GameScene): when, what, and how far off the
- *  march it reported still was, so a spec can check the warning came early in
- *  the march without timing it. */
-export interface ArmyWarningLogEntry {
-  /** world.tick the queue took the warning. */
-  tick: number;
-  /** world.tick it became owed (#404 review: when the fallback fired, say, apart
-   *  from how long it then waited for the queue). */
-  owedTick: number;
-  text: string;
-  /** Enemy fighters marching on the viewer's entrances then (0: none). */
-  marching: number;
-  /** Tiles (straight-line) from the centre of the entrance the march heads for to
-   *  the nearest point of the bounding box of the marching fighters aiming at it
-   *  (null: no march). */
-  marchDistanceTiles: number | null;
-}
-
-/** The log entry for an army warning `text`, owed since `owedTick`, that the queue
- *  took now (see ArmyWarningLogEntry). */
-export function armyWarningLogEntry(
-  world: WorldState,
-  viewerColonyId: ColonyId,
-  text: string,
-  owedTick: number,
-): ArmyWarningLogEntry {
-  const m = measureEnemyMarchThisTick(world, viewerColonyId);
-  const tick = world.tick;
-  // Chasers only (a warning they kept owed) is no march to measure.
-  if (m === null || m.fighters === 0) {
-    return { tick, owedTick, text, marching: 0, marchDistanceTiles: null };
-  }
-  const ex = m.entrance.surfaceTileX + 0.5;
-  const ey = m.entrance.surfaceTileY + 0.5;
-  const dx = Math.max(m.minTileX - ex, 0, ex - m.maxTileX);
-  const dy = Math.max(m.minTileY - ey, 0, ey - m.maxTileY);
-  const marchDistanceTiles = Math.hypot(dx, dy);
-  return { tick, owedTick, text, marching: m.fighters, marchDistanceTiles };
 }
