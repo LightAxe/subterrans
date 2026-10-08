@@ -45,6 +45,8 @@ import {
   AI_INVASION_FLOOR_STEP,
   AI_INVASION_FLOOR_MAX,
   AI_INVASION_FLOOR_PATIENCE_TICKS,
+  AI_INVADING_FOOD_FRAC_PCT,
+  AI_INVADING_FOOD_GATE_BYPASS_FIGHTERS,
 } from './constants.js';
 
 // ---------------------------------------------------------------------------
@@ -1093,5 +1095,311 @@ describe('#398 — the invasion floor (V72)', () => {
 
   it('the default record has no floor', () => {
     expect(createDefaultAIStateRecord(E).invasionFloor).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #421 (V73) — a colony with a full army (AI_INVADING_FOOD_GATE_BYPASS_FIGHTERS, the
+// cohort cap) launches its invasion without the food check. The fighter need, the
+// minimum tick and the other states are unchanged.
+// ---------------------------------------------------------------------------
+
+describe('#421 — a full army launches without the food check (V73)', () => {
+  const E = ENEMY_COLONY_ID as ColonyId;
+  const P = PLAYER_COLONY_ID as ColonyId;
+  const FULL = AI_INVADING_FOOD_GATE_BYPASS_FIGHTERS;
+  const TIERS = ['Easy', 'Normal', 'Hard'] as const;
+
+  function gateWorld(difficulty: WorldState['difficulty'] = 'Normal'): WorldState {
+    const world = makeMinimalWorld();
+    world.simVersion = LATEST_SIM_VERSION;
+    world.difficulty = difficulty;
+    return world;
+  }
+
+  /** `cid`'s AI record (created if missing) in WarFooting at `tick`, with `fighters`
+   *  of its own fighters (slots from `startId`) and `foodFp` in its stores. */
+  function armed(
+    world: WorldState,
+    cid: ColonyId,
+    opts: {
+      fighters: number;
+      foodFp: number;
+      tick: number;
+      startId: number;
+      floor?: number;
+      recoveryEndTick?: number;
+    },
+  ): AIStateRecord {
+    let rec = getAIStateForColony(world, cid);
+    if (rec === null) {
+      rec = createDefaultAIStateRecord(cid);
+      world.aiState.push(rec);
+    }
+    rec.state = 'WarFooting';
+    rec.invasionFloor = opts.floor ?? 0;
+    rec.recoveryEndTick = opts.recoveryEndTick ?? 0;
+    rec.lastProbeEndTick = opts.tick;
+    world.tick = opts.tick;
+    spawnFighters(world, cid, opts.fighters, opts.startId);
+    setPoolFoodForTest(world, world.colonies[cid]!, opts.foodFp);
+    return rec;
+  }
+
+  const cap = (world: WorldState, cid: ColonyId = E): number =>
+    colonyFoodCapacity(world.colonies[cid]!);
+  const half = (world: WorldState, cid: ColonyId = E): number => cap(world, cid) >> 1;
+  /** The least food (fp) that passes the 70 % check for a capacity of `c`. */
+  function onTheLine(c: number): number {
+    let f = 0;
+    while (f * 100 < c * AI_INVADING_FOOD_FRAC_PCT) f += 1;
+    return f;
+  }
+  const launches = (world: WorldState, cid: ColonyId = E): boolean =>
+    advanceAIState(world, cid).state === 'Invading';
+
+  it('the constant is the cohort cap, 32', () => {
+    expect(FULL).toBe(AI_MAX_OPERATION_FIGHTERS);
+    expect(FULL).toBe(32);
+  });
+
+  it('32 fighters at 50 % food launch once the need and the minimum tick are met (every tier)', () => {
+    for (const d of TIERS) {
+      const world = gateWorld(d);
+      const rec = armed(world, E, {
+        fighters: FULL,
+        foodFp: half(world),
+        tick: 7000,
+        startId: 200,
+      });
+      expect(invasionFighterNeed(world, rec), d).toBeLessThanOrEqual(FULL);
+      expect(launches(world), d).toBe(true);
+      expect(rec.invasionStartTick, d).toBe(7000);
+      // The transition event records the real stores: below the 70 % line.
+      const ev = world.events.find((e) => e.type === 'ai_state_transition');
+      expect(ev, d).toBeDefined();
+      const tv = (
+        ev?.payload as {
+          to: string;
+          triggerValues: { aiFighterCount: number; aiFoodStored: number; aiFoodCap: number };
+        }
+      ).triggerValues;
+      expect((ev?.payload as { to: string }).to, d).toBe('Invading');
+      expect(tv.aiFighterCount, d).toBe(FULL);
+      expect(tv.aiFoodStored * 100, d).toBeLessThan(tv.aiFoodCap * AI_INVADING_FOOD_FRAC_PCT);
+    }
+  });
+
+  it('31 fighters at 50 % food do not launch (every tier)', () => {
+    for (const d of TIERS) {
+      const world = gateWorld(d);
+      const rec = armed(world, E, {
+        fighters: FULL - 1,
+        foodFp: half(world),
+        tick: 7000,
+        startId: 200,
+      });
+      expect(FULL - 1, d).toBeGreaterThanOrEqual(invasionFighterNeed(world, rec));
+      expect(launches(world), d).toBe(false);
+      expect(rec.state, d).toBe('WarFooting');
+    }
+  });
+
+  it('below 32 the 70 % check is unchanged: 1 fp under the line holds, on the line launches', () => {
+    for (const fighters of [AI_INVADING_FIGHTER_THRESHOLD[NORMAL_TIER_INDEX], 24, FULL - 1]) {
+      for (const [delta, want] of [
+        [-1, false],
+        [0, true],
+      ] as const) {
+        const world = gateWorld();
+        armed(world, E, { fighters, foodFp: 0, tick: 7000, startId: 200 });
+        setPoolFoodForTest(world, world.colonies[E]!, onTheLine(cap(world)) + delta);
+        expect(launches(world), `${fighters} fighters, line ${delta}`).toBe(want);
+      }
+    }
+  });
+
+  it('grid: below 32 fighters the gate is V72’s exactly; from 32 it is V72’s without the food check', () => {
+    const FIGHTERS = [0, 11, 12, 14, 15, 17, 18, 23, 24, 31, 32, 33, 40] as const;
+    const TICKS = [
+      AI_INVADING_MIN_TICK - 1,
+      AI_INVADING_MIN_TICK,
+      10_100,
+      10_000 + AI_INVASION_FLOOR_PATIENCE_TICKS,
+    ] as const;
+    let bypassed = 0; // launched by the bypass alone
+    let heldByFood = 0; // below 32, everything but the food met: held, as at V72
+    let cases = 0;
+    for (const d of TIERS) {
+      const world = gateWorld(d);
+      const rec = armed(world, E, { fighters: 40, foodFp: 0, tick: 7000, startId: 200 });
+      const colony = world.colonies[E]!;
+      const c = cap(world);
+      for (const fighters of FIGHTERS) {
+        for (let i = 0; i < 40; i++) {
+          world.ants.task[200 + i] = i < fighters ? AntTask.Fighting : AntTask.Idle;
+        }
+        for (const food of [0, c >> 1, onTheLine(c) - 1, onTheLine(c), c]) {
+          setPoolFoodForTest(world, colony, food);
+          for (const t of TICKS) {
+            for (const floor of [0, 24, 32]) {
+              rec.state = 'WarFooting';
+              rec.invasionFloor = floor;
+              rec.recoveryEndTick = 10_000;
+              rec.lastProbeEndTick = t;
+              world.tick = t;
+              world.events.length = 0;
+              // Independent of ai-state.ts: literal per-tier base need; the floor counts only
+              // while it is above the base and its patience has not run out.
+              const base = { Easy: 18, Normal: 15, Hard: 12 }[d];
+              const need =
+                floor > base && t - 10_000 < AI_INVASION_FLOOR_PATIENCE_TICKS ? floor : base;
+              const fed = food * 100 >= c * AI_INVADING_FOOD_FRAC_PCT;
+              const v72 = fighters >= need && fed && t >= AI_INVADING_MIN_TICK;
+              // The spec: below 32 the V72 gate; from 32 the V72 gate without the food check.
+              const want = fighters < FULL ? v72 : fighters >= need && t >= AI_INVADING_MIN_TICK;
+              const where = `${d} f${fighters} food${food} t${t} floor${floor}`;
+              expect(launches(world), where).toBe(want);
+              if (want && !v72) bypassed += 1;
+              if (!fed && fighters >= need && fighters < FULL && t >= AI_INVADING_MIN_TICK) {
+                heldByFood += 1;
+              }
+              cases += 1;
+            }
+          }
+        }
+      }
+    }
+    expect(cases).toBe(TIERS.length * FIGHTERS.length * 5 * TICKS.length * 3);
+    expect(bypassed).toBeGreaterThan(0);
+    expect(heldByFood).toBeGreaterThan(0);
+  });
+
+  it('the minimum tick still applies at 32+: 6599 no, 6600 yes', () => {
+    for (const [t, want] of [
+      [AI_INVADING_MIN_TICK - 1, false],
+      [AI_INVADING_MIN_TICK, true],
+    ] as const) {
+      for (const fighters of [FULL, 40]) {
+        const world = gateWorld('Hard');
+        armed(world, E, { fighters, foodFp: half(world), tick: t, startId: 200 });
+        expect(launches(world), `t${t} f${fighters}`).toBe(want);
+      }
+    }
+    // Full stores do not open it early either.
+    const full = gateWorld('Hard');
+    armed(full, E, {
+      fighters: 40,
+      foodFp: cap(full),
+      tick: AI_INVADING_MIN_TICK - 1,
+      startId: 200,
+    });
+    expect(launches(full)).toBe(false);
+  });
+
+  it('the fighter need still applies at 32+: only the food check is skipped', () => {
+    // No escalation reaches past the cap, so a full army always meets its need...
+    expect(Math.max(...AI_INVADING_FIGHTER_THRESHOLD)).toBeLessThanOrEqual(FULL);
+    expect(Math.max(...AI_INVASION_FLOOR_MAX)).toBeLessThanOrEqual(FULL);
+    // ...as at the cap's floor within its patience: 32 at 50 % launch, 31 at full stores do not.
+    for (const [fighters, food, want] of [
+      [FULL, 'half', true],
+      [FULL - 1, 'full', false],
+    ] as const) {
+      const world = gateWorld('Hard');
+      const rec = armed(world, E, {
+        fighters,
+        foodFp: 0,
+        tick: 10_100,
+        startId: 200,
+        floor: AI_INVASION_FLOOR_MAX[tierIndex('Hard')],
+        recoveryEndTick: 10_000,
+      });
+      setPoolFoodForTest(world, world.colonies[E]!, food === 'half' ? half(world) : cap(world));
+      expect(invasionFighterNeed(world, rec)).toBe(FULL);
+      expect(launches(world), `${fighters} ${food}`).toBe(want);
+    }
+    // ...but the need is still read: a floor above the army holds a 35-fighter army at
+    // 50 %. Not reachable in play (escalation caps the floor at AI_INVASION_FLOOR_MAX,
+    // and the save loader clamps it to the tier's cap): it pins that only the food
+    // check is skipped.
+    for (const [fighters, want] of [
+      [35, false],
+      [40, true],
+    ] as const) {
+      const world = gateWorld();
+      const rec = armed(world, E, {
+        fighters,
+        foodFp: 0,
+        tick: 10_100,
+        startId: 200,
+        floor: 40,
+        recoveryEndTick: 10_000,
+      });
+      setPoolFoodForTest(world, world.colonies[E]!, half(world));
+      expect(invasionFighterNeed(world, rec)).toBe(40);
+      expect(launches(world), `${fighters}`).toBe(want);
+    }
+  });
+
+  it('only WarFooting launches: at 40 fighters Peacetime still arms at 50 % food, and Recovery and Probing run their course', () => {
+    // Peacetime: below 50 % a full army does not even arm; at 50 % it arms (WarFooting,
+    // not Invading), and launches from WarFooting on the next tick.
+    const peace = gateWorld();
+    const pRec = armed(peace, E, { fighters: 40, foodFp: 0, tick: 7000, startId: 200 });
+    pRec.state = 'Peacetime';
+    setPoolFoodForTest(peace, peace.colonies[E]!, half(peace) - 1);
+    advanceAIState(peace, E);
+    expect(pRec.state).toBe('Peacetime');
+    setPoolFoodForTest(peace, peace.colonies[E]!, half(peace));
+    advanceAIState(peace, E);
+    expect(pRec.state).toBe('WarFooting');
+    peace.tick += 1;
+    advanceAIState(peace, E);
+    expect(pRec.state).toBe('Invading');
+    // Recovery: stays until it ends, then Peacetime — never straight to Invading.
+    const recovering = gateWorld();
+    const rRec = armed(recovering, E, { fighters: 40, foodFp: 0, tick: 9000, startId: 200 });
+    rRec.state = 'Recovery';
+    rRec.recoveryEndTick = 9000 + AI_RECOVERY_DURATION_TICKS[NORMAL_TIER_INDEX];
+    advanceAIState(recovering, E);
+    expect(rRec.state).toBe('Recovery');
+    recovering.tick = rRec.recoveryEndTick;
+    advanceAIState(recovering, E);
+    expect(rRec.state).toBe('Peacetime');
+    // Probing: a live probe cohort out on the surface keeps the colony Probing.
+    const probe = gateWorld();
+    const qRec = armed(probe, E, { fighters: 40, foodFp: 0, tick: 7000, startId: 200 });
+    setAIRallyOperation(probe, E, 30, 5, [200, 201, 202], 'Probe');
+    expect(qRec.state).toBe('Probing');
+    advanceAIState(probe, E);
+    expect(qRec.state).toBe('Probing');
+  });
+
+  it('CLNY-08: each colony counts its own fighters', () => {
+    for (const [enemyF, playerF] of [
+      [FULL, FULL - 1],
+      [20, 40],
+    ] as const) {
+      const world = gateWorld();
+      // Both colonies armed at 50 %; the world holds 32+ fighters either way.
+      const enemy = armed(world, E, {
+        fighters: enemyF,
+        foodFp: half(world),
+        tick: 7000,
+        startId: 200,
+      });
+      const player = armed(world, P, {
+        fighters: playerF,
+        foodFp: half(world, P),
+        tick: 7000,
+        startId: 400,
+      });
+      advanceAIState(world, E);
+      advanceAIState(world, P);
+      const where = `enemy ${enemyF}, player ${playerF}`;
+      expect(enemy.state, where).toBe(enemyF >= FULL ? 'Invading' : 'WarFooting');
+      expect(player.state, where).toBe(playerF >= FULL ? 'Invading' : 'WarFooting');
+    }
   });
 });

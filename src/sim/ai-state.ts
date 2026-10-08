@@ -23,6 +23,7 @@ import {
   AI_WARFOOTING_FIGHTER_THRESHOLD,
   AI_WARFOOTING_FOOD_FRAC_PCT,
   AI_INVADING_FOOD_FRAC_PCT,
+  AI_INVADING_FOOD_GATE_BYPASS_FIGHTERS,
   AI_FRONTAGE_PLAYER_WORKERS_ABS,
   AI_FRONTAGE_PLAYER_WORKERS_RATIO_X100,
   AI_PROBE_INTERVAL_TICKS,
@@ -133,8 +134,8 @@ export function aiWorkerCount(world: WorldState, aiColonyId: ColonyId): number {
 /**
  * The AI colony's stored food and storage capacity, read through the food facade
  * (`colonyFoodTotal` / `colonyFoodCapacity`). A missing colony reads 0 food and
- * the base capacity. Feeds the WarFooting (50 %) and Invading (70 %) food-fraction
- * gates and the `ai_state_transition` trigger values.
+ * the base capacity. Feeds the WarFooting (50 %) and Invading (70 %, skipped at 32+
+ * fighters, #421) food-fraction gates and the `ai_state_transition` trigger values.
  */
 function aiFoodTotal(world: WorldState, aiColonyId: ColonyId): number {
   const colony = world.colonies[aiColonyId];
@@ -325,7 +326,15 @@ export function invasionFighterNeed(world: WorldState, aiState: AIStateRecord): 
   return aiState.invasionFloor;
 }
 
-/** Returns true if transition fired (to prevent probe check on same tick). */
+/**
+ * The launch gate (WarFooting → Invading): the colony's fighters meet its need
+ * (invasionFighterNeed), its stores hold AI_INVADING_FOOD_FRAC_PCT of their capacity,
+ * and the match is at least AI_INVADING_MIN_TICK old. #421 (V73): a colony with
+ * AI_INVADING_FOOD_GATE_BYPASS_FIGHTERS (the cohort cap) or more of its own fighters
+ * skips the food check only. The controller's raid hold (holdOperations,
+ * ai-controller.ts) defers the cohort, not this transition.
+ * Returns true if transition fired (to prevent probe check on same tick).
+ */
 function _checkWarFootingToInvading(
   world: WorldState,
   aiColonyId: ColonyId,
@@ -334,10 +343,12 @@ function _checkWarFootingToInvading(
   const fighters = aiFighterCount(world, aiColonyId);
   const foodStored = aiFoodTotal(world, aiColonyId);
   const foodCap = aiFoodCap(world, aiColonyId);
+  const fed = foodStored * 100 >= foodCap * AI_INVADING_FOOD_FRAC_PCT;
+  const fullArmy = fighters >= AI_INVADING_FOOD_GATE_BYPASS_FIGHTERS;
 
   if (
     fighters >= invasionFighterNeed(world, aiState) &&
-    foodStored * 100 >= foodCap * AI_INVADING_FOOD_FRAC_PCT &&
+    (fed || fullArmy) &&
     world.tick >= AI_INVADING_MIN_TICK
   ) {
     aiState.state = 'Invading';

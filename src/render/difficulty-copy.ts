@@ -25,8 +25,9 @@
 // same knob listed above.)
 //
 // The fighter counts are NECESSARY, not sufficient — WarFooting and Invading
-// also want a food-stock fraction and a minimum age (ai-state.ts) — so the line
-// says "needs N fighters to …", not "attacks at N".
+// also want a food-stock fraction (Invading skips it from a full army of 32, #421
+// V73) and a minimum age (ai-state.ts) — so the line says "needs N fighters to …",
+// not "attacks at N".
 //
 // Pure TypeScript, no Phaser: importable from Vitest.
 

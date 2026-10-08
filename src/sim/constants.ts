@@ -1291,6 +1291,8 @@ export const AI_WARFOOTING_FOOD_FRAC_PCT = 50 as const;
 /**
  * S2 — Food storage minimum for Invading entry (integer percent, ×100 safe).
  * Usage: `colonyFoodTotal * 100 >= colonyFoodCapacity * AI_INVADING_FOOD_FRAC_PCT` (ai-state.ts)
+ * From V73 (#421) a colony with AI_INVADING_FOOD_GATE_BYPASS_FIGHTERS or more fighters
+ * launches without this check.
  */
 export const AI_INVADING_FOOD_FRAC_PCT = 70 as const;
 
@@ -1314,6 +1316,21 @@ export const AI_FRONTAGE_PLAYER_WORKERS_RATIO_X100 = 130 as const;
  * `AIStateRecord.operationFighterIds` is always this length; unused slots are -1.
  */
 export const AI_MAX_OPERATION_FIGHTERS = 32 as const;
+
+/**
+ * #421 (V73) — an AI colony with at least this many of its own fighters launches its
+ * invasion without the food check (AI_INVADING_FOOD_FRAC_PCT). The fighter need
+ * (invasionFighterNeed) and AI_INVADING_MIN_TICK still apply. Set to the cohort cap,
+ * which is also the most any invasion floor asks for (AI_INVASION_FLOOR_MAX): an army
+ * this big has every fighter its need can ask for, and while it waits for food it eats
+ * faster than its foragers fill the stores (playtest 4, Hard against a defender: 29 →
+ * 87 fighters at home over 15 minutes, the stores falling from 54 % to 22–37 %, and no
+ * launch). It enters Invading as soon as the gate sees 32 or more; when the cohort
+ * commits, every fighter it has then answers the rally (the cohort is capped at 32). In
+ * playtest 4 a held army only grew, so the wave leaves sooner and smaller. Below it
+ * the gate is V72's. Bare balance value.
+ */
+export const AI_INVADING_FOOD_GATE_BYPASS_FIGHTERS = AI_MAX_OPERATION_FIGHTERS;
 
 /**
  * S2 — Fallback radius (tiles) for probe target selection when no marked food pile

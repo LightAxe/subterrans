@@ -1737,7 +1737,29 @@ export const SIM_VERSION_V71_HEALTH_MODEL = 71 as const;
  * Pre-1.0 policy: no version gate; MIN_ACCEPTED is raised to V72 with it.
  */
 export const SIM_VERSION_V72_AI_ESCALATION = 72 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V72_AI_ESCALATION;
+
+/**
+ * #421 (V73) — a full army launches without the food check. Up to V72 the launch gate
+ * (WarFooting → Invading) always needed the colony's stores at AI_INVADING_FOOD_FRAC_PCT
+ * (70 %) of their capacity. A large army eats faster than its foragers fill the stores,
+ * so against a defensive player (mostly on Hard) an AI could sit at home with 45–87
+ * fighters for 6–18 minutes, never launching (playtest 4). From V73 a colony with
+ * AI_INVADING_FOOD_GATE_BYPASS_FIGHTERS (= AI_MAX_OPERATION_FIGHTERS, 32) or more of
+ * its own fighters skips the food check. The fighter need (invasionFighterNeed, the
+ * #398 floor included), AI_INVADING_MIN_TICK, Recovery, the Peacetime → WarFooting
+ * check (50 % food) and the controller's raid hold are unchanged; the raid hold defers
+ * the cohort, not the launch, so a full army can now enter Invading during a raid
+ * whatever its food (at V72 only at 70 %). The colony enters Invading as soon as the
+ * gate sees 32 or more; when the cohort commits, every fighter it has then answers the
+ * rally (the committed cohort is still capped at 32); in playtest 4 a held army only grew, so the
+ * wave leaves sooner and smaller. Below 32 fighters the gate is V72's, so the launch
+ * of a wave mustered with fewer (in playtest 4, waves 1–3) is unchanged.
+ * Colony-agnostic (CLNY-08). No new field, no command, no world.rngState draw, no
+ * tick-order change. Pre-1.0 policy: no version gate; MIN_ACCEPTED is raised to V73
+ * with it.
+ */
+export const SIM_VERSION_V73_FULL_ARMY_LAUNCH = 73 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V73_FULL_ARMY_LAUNCH;
 
 /**
  * S2 — AI colony state machine states.
