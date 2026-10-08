@@ -237,6 +237,13 @@ import { checkAndTrigger, resetCaptions, type CaptionKey } from './onboarding-ca
 import { advanceQueenDanger, createQueenDangerState } from './queen-danger.js';
 import { advanceEnemyQueenWound, createEnemyQueenWoundState } from './enemy-queen-wound.js';
 import {
+  counterAttackCaptionOwed,
+  createCounterAttackCaptionState,
+  noteCounterAttackEvent,
+  noteCounterAttackTick,
+  offerCounterAttackCaption,
+} from './counter-attack-caption.js';
+import {
   advanceStorageHint,
   createStorageHintState,
   queenStoresNeedFp,
@@ -367,8 +374,8 @@ interface UIScenePhase9 {
     rect: { x: number; y: number; w: number; h: number };
   } | null;
   // #290 PR 6 / #350 — true while nothing is showing and nothing is pending, so
-  // recurring captions (raid news, the spider-rampage warning) may enter without
-  // taking the slot a one-shot caption would need.
+  // recurring captions (raid news, the spider-rampage warning, the counter-attack
+  // caption) may enter without taking the slot a one-shot caption would need.
   captionQueueIdle?(): boolean;
   /** #395 (Codex P2) — the round is over: drop the caption on screen and the one
    *  waiting, and admit none until the next round (UIScene.closeCaptions). */
@@ -377,9 +384,9 @@ interface UIScenePhase9 {
   withdrawPendingCaption?(key: CaptionKey): void;
   /** #395 — the one-shot key of the caption waiting in the pending slot, or null. */
   pendingCaptionKey?(): CaptionKey | null;
-  /** #372 — a long-hold caption (the army warning, the #395 storage hint)
-   *  shortens its hold so a caption waiting behind it is not held back
-   *  (UIScene.yieldLongCaption). */
+  /** #372 — a long-hold caption (the army warning, the #395 storage hint, the
+   *  counter-attack caption) shortens its hold so a caption waiting behind it is not
+   *  held back (UIScene.yieldLongCaption). */
   yieldLongCaption?(): void;
   /** #372 — Dev/E2E-only: each caption's final hold (ms) and whether it gave way. */
   captionHolds?(): { text: string; holdMs: number; yielded: boolean }[];
@@ -538,6 +545,14 @@ declare global {
       /** #397 — the tick of each spider-rampage warning the caption queue took
        *  this round, oldest first. Dev-build only. */
       getRampageWarningTicks?(): number[];
+      /** Playtest 4 — the counter-attack caption: the tick of the rout it is owed for
+       *  and has not shown yet (null: none owed), and each one the caption queue took
+       *  this round, oldest first (the tick of its rout, and the tick it was taken).
+       *  Dev-build only. */
+      getCounterAttackCaption?(): {
+        owedRoutTick: number | null;
+        shown: { routTick: number; tick: number }[];
+      };
       /** #397 — the spider's state now (null: no spider): which rampage it is on
        *  (the tick it started, the colony and entrance it camps) and its hunger,
        *  so a spec can tell a rampage restart from a new hungry spell. Read-only.
@@ -973,6 +988,10 @@ export class GameScene extends Phaser.Scene {
       getCaptionHolds: () => this.getUIScene()?.captionHolds?.() ?? [],
       getArmyWarningLog: (): ArmyWarningLogEntry[] => [...this.armyWarningLog],
       getRampageWarningTicks: (): number[] => [...this.rampageWarningTicks],
+      getCounterAttackCaption: () => ({
+        owedRoutTick: this.counterAttackCaption.owedRoutTick,
+        shown: this.counterAttackCaptionLog.map((e) => ({ ...e })),
+      }),
       getSpider: () => {
         const sp = this.world?.spider ?? null;
         if (sp === null) return null;
@@ -1212,6 +1231,11 @@ export class GameScene extends Phaser.Scene {
   // #397 — dev-only: the tick of each spider-rampage warning the caption queue
   // took this round (__phase9_test.getRampageWarningTicks).
   private rampageWarningTicks: number[] = [];
+  // Playtest 4 — the counter-attack caption: owed on each wave routed at the player's
+  // colony (counter-attack-caption.ts), and a dev-only log of the ones the caption
+  // queue took this round (__phase9_test.getCounterAttackCaption).
+  private counterAttackCaption = createCounterAttackCaptionState();
+  private counterAttackCaptionLog: { routTick: number; tick: number }[] = [];
   private renderFrame = 0; // frame counter for glow fade maps
   private readonly contestedGlowFrames: Map<number, number> = new Map(); // surface glow fade
   private readonly undergroundGlowFrames: Map<number, number> = new Map(); // underground glow fade
@@ -1934,6 +1958,8 @@ export class GameScene extends Phaser.Scene {
     resetCaptions();
     this.armyWarningLog = [];
     this.rampageWarningTicks = [];
+    this.counterAttackCaption = createCounterAttackCaptionState();
+    this.counterAttackCaptionLog = [];
     // Stage 3b (#3): reset the per-session first-world-input latch so the
     // proactive [Tab] nudge can re-evaluate on a fresh round (the cross-session
     // shown-flags persist in settings and are NOT cleared here).
@@ -1963,9 +1989,10 @@ export class GameScene extends Phaser.Scene {
 
   /**
    * Drain world.events from the last-seen index, dispatching each new event
-   * to render-side effects (the invasion screen flash) and to the army warning's
-   * invasion fallback (noteArmyWarningEvent). No event shows a caption here
-   * (#394, #397).
+   * to render-side effects (the invasion screen flash), to the army warning's
+   * invasion fallback (noteArmyWarningEvent) and (playtest 4) to the counter-attack
+   * caption's rout check (noteCounterAttackEvent). No event shows a caption here
+   * (#394, #397): checkQueenStatusForEffects shows what they owe.
    * Called once per render frame while Playing.
    */
   private consumeEventsForRender(): void {
@@ -2006,6 +2033,11 @@ export class GameScene extends Phaser.Scene {
       // #404 review — an invasion launched at the player is noted for the army
       // warning's fallback (enemy-gathering.ts nextArmyWarning).
       noteArmyWarningEvent(this.armyWarning, ev, PLAYER_COLONY_ID);
+      // Playtest 4 — a wave routed at the player owes the counter-attack caption,
+      // decided as of the event's own tick (counter-attack-caption.ts), so the frame
+      // batching does not change which routs owe it; checkQueenStatusForEffects
+      // shows it once the caption queue is idle.
+      noteCounterAttackEvent(this.counterAttackCaption, ev, this.world, PLAYER_COLONY_ID);
 
       if (ev.type === 'invasion_start') {
         // Screen-edge flash in the direction of the invasion entrance.
@@ -2166,6 +2198,35 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
+    // Playtest 4 — the counter-attack caption, owed on each fighter rout of a wave
+    // launched at the player's colony that leaves the attacker's army broken (decided
+    // per event tick in consumeEventsForRender), until it shows or goes stale
+    // (counter-attack-caption.ts). Offered after the threats to the colony (the army
+    // and rampage warnings), before raid news.
+    let counterAttackOwed = false;
+    if (uiScene) {
+      // The frame's own look for the follow-up (as beforeSimTick does before each tick).
+      noteCounterAttackTick(this.counterAttackCaption, this.world, PLAYER_COLONY_ID);
+      const routTick = this.counterAttackCaption.owedRoutTick;
+      // On the projected world: an Assault order the player has given, still queued
+      // (picked while paused, or not yet drained), already counts.
+      if (
+        offerCounterAttackCaption(
+          this.counterAttackCaption,
+          this.projection.get(this.world),
+          PLAYER_COLONY_ID,
+          uiScene,
+          this.layout.w / 2,
+          60,
+        ) &&
+        import.meta.env.DEV &&
+        routTick !== null
+      ) {
+        this.counterAttackCaptionLog.push({ routTick, tick: this.world.tick });
+      }
+      counterAttackOwed = counterAttackCaptionOwed(this.counterAttackCaption);
+    }
+
     // #290 PR 6 — raid captions (being raided / raiding / a haul home), driven by
     // the player colony's raid counters and throttled per caption (raid-captions.ts).
     // The cooldown starts only once the queue has taken the caption; until then it
@@ -2182,11 +2243,20 @@ export class GameScene extends Phaser.Scene {
       );
     if (raidTaken) markRaidCaptionShown(this.raidCaptions, this.world, raidCaption);
     // #372 — a recurring caption still owed behind a busy queue (the army warning,
-    // the rampage warning, or raid news not taken): a long-hold caption (the army
-    // warning, the #395 storage hint) gives way, keeping CAPTION_YIELD_FLOOR_MS to
-    // be read; and (#395) the storage hint waits (below).
+    // the rampage warning, the counter-attack caption, or raid news not taken): a
+    // long-hold caption (the army warning, the #395 storage hint, the counter-attack
+    // caption) gives way, keeping CAPTION_YIELD_FLOOR_MS to be read; and (#395) the
+    // storage hint waits (below).
+    // (Raid news cannot be taken while the counter-attack caption is still owed: that
+    // means the queue was busy, or closed, when it was offered just above.)
     const recurringOwed =
-      !raidTaken && recurringCaptionStillOwed(this.rampageCaption, raidCaption, armyWarningOwed);
+      !raidTaken &&
+      recurringCaptionStillOwed(
+        this.rampageCaption,
+        raidCaption,
+        armyWarningOwed,
+        counterAttackOwed,
+      );
     if (recurringOwed) uiScene?.yieldLongCaption?.();
 
     // #427 — "Their queen is wounded!": the enemy queen, in her nest, has dropped below
@@ -2480,19 +2550,17 @@ export class GameScene extends Phaser.Scene {
     this.gameLoop = createGameLoop(tick, this.world, {
       // AI controllers (commands enqueued before the drain), the #397 per-tick
       // rampage-threat check, the #416 per-tick look at the queen, the #427 one at
-      // the enemy queen, then the prevState snapshot for interpolation.
-      // (`this.queenDanger` and `this.enemyQueenWound` are read per call:
+      // the enemy queen, the counter-attack caption's follow-up look, then the
+      // prevState snapshot for interpolation. (`this.queenDanger`,
+      // `this.enemyQueenWound` and `this.counterAttackCaption` are read per call:
       // resetSessionState replaces them.)
       onBeforeTick: (w) =>
-        beforeSimTick(
-          w,
-          this.aiColonyIds,
-          this.rampageCaption,
-          PLAYER_COLONY_ID,
-          this.prevState,
-          this.queenDanger,
-          this.enemyQueenWound,
-        ),
+        beforeSimTick(w, this.aiColonyIds, PLAYER_COLONY_ID, this.prevState, {
+          rampage: this.rampageCaption,
+          queenDanger: this.queenDanger,
+          enemyQueenWound: this.enemyQueenWound,
+          counterAttack: this.counterAttackCaption,
+        }),
       onAfterDrain: (cmds) => {
         // SCEN-06 replay truth: never truncate — appendInputLog handles all commands
         appendInputLog(this.inputLog, cmds);

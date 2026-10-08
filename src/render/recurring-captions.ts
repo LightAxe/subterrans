@@ -31,9 +31,12 @@
 //     spider stays in its state and keeps fighting). Without a meal hungerTicks
 //     never decreases, so it falling below its value when the warning became
 //     owed means the spider has eaten by some path.
+//   - (playtest 4) the counter-attack caption after a fighter rout
+//     (counter-attack-caption.ts) stays owed for COUNTER_ATTACK_CAPTION_OWED_TICKS.
 //
 // GameScene offers the owed rampage warning before raid news each frame, so a
-// rampage outranks raid news when both wait on the same idle queue.
+// rampage outranks raid news when both wait on the same idle queue; the
+// counter-attack caption comes between them.
 //
 // Pure + Phaser-free: GameScene owns the state and passes its UIScene in.
 
@@ -84,14 +87,14 @@ export function offerRecurringCaption(
  * same window as owed raid news. The queue drains within about 3 s of wall-clock
  * time behind an active and a pending default caption, so this only runs out
  * at high game speed behind a busy queue. The long-hold captions (the #372/#394
- * army warning, the #395 storage hint) hold longer; while news (or, behind the
- * hint, an army warning) is owed they shorten to a 2 s readable floor (2.7 s in
- * all, UIScene.yieldLongCaption), so at 4x (a 2.5 s real-time window) news owed
- * from the same moment one began can still expire behind it, as can a march or
- * gathering warning behind the hint (its own window, GATHER_CAPTION_OWED_TICKS, is
- * also 200). So can news owed while an
- * invasion's launch warning (owed until shown, #404 review) waited out the same
- * busy queue, which it then enters first. That is a known cost of a once-per-spell
+ * army warning, the #395 storage hint, the playtest 4 counter-attack caption) hold
+ * longer; while news (or, behind the hint, an army warning) is owed they shorten to
+ * a 2 s readable floor (2.7 s in all, UIScene.yieldLongCaption), so at 4x (a 2.5 s
+ * real-time window) news owed from the same moment one began can still expire behind
+ * it, as can a march or gathering warning behind the hint (its own window,
+ * GATHER_CAPTION_OWED_TICKS, is also 200). So can news owed while an invasion's
+ * launch warning (owed until shown, #404 review) waited out the same busy queue,
+ * which it then enters first. That is a known cost of a once-per-spell
  * caption being readable, and of an army outranking news.
  */
 export const RAMPAGE_CAPTION_OWED_TICKS = 200;
@@ -247,11 +250,20 @@ export function offerOwedRampageCaption(
  * The warning being offered is never itself the caption showing: once shown it is
  * no longer owed. While this is true GameScene also holds the storage hint back,
  * and withdraws one waiting, so the owed caption comes next.
+ * `counterAttackOwed` (playtest 4): the counter-attack caption after a fighter rout
+ * (counter-attack-caption.ts counterAttackCaptionOwed), offered this frame and not
+ * taken, is owed the same way.
  */
 export function recurringCaptionStillOwed(
   rampage: RampageCaptionState,
   raidCaption: string | null,
   armyWarningOwed: boolean,
+  counterAttackOwed: boolean,
 ): boolean {
-  return armyWarningOwed || rampage.owedSinceTick !== -Infinity || raidCaption !== null;
+  return (
+    armyWarningOwed ||
+    counterAttackOwed ||
+    rampage.owedSinceTick !== -Infinity ||
+    raidCaption !== null
+  );
 }

@@ -19,6 +19,15 @@ import { runAIController } from './ai-controller.js';
 import { noteRampageThreat, type RampageCaptionState } from './recurring-captions.js';
 import { noteQueenDangerTick, type QueenDangerState } from './queen-danger.js';
 import { noteEnemyQueenWoundTick, type EnemyQueenWoundState } from './enemy-queen-wound.js';
+import { noteCounterAttackTick, type CounterAttackCaptionState } from './counter-attack-caption.js';
+
+/** The render-side caption states `beforeSimTick` advances on every sim tick. */
+export interface BeforeTickCaptions {
+  readonly rampage: RampageCaptionState;
+  readonly queenDanger: QueenDangerState;
+  readonly enemyQueenWound: EnemyQueenWoundState;
+  readonly counterAttack: CounterAttackCaptionState;
+}
 
 /**
  * Before each sim tick, in order:
@@ -36,20 +45,23 @@ import { noteEnemyQueenWoundTick, type EnemyQueenWoundState } from './enemy-quee
  *   4. #427 — the same per-tick look at the viewer's opponent's queen for "Their
  *      queen is wounded!" (noteEnemyQueenWoundTick): the caption and its re-arm are
  *      decided on each tick's own end state;
- *   5. the prevState snapshot for render interpolation.
+ *   5. (playtest 4) the counter-attack caption's follow-up look
+ *      (noteCounterAttackTick): after its "train more fighters" copy, the Assault copy
+ *      is owed the first tick the viewer's army is ready, decided on that tick's own
+ *      end state;
+ *   6. the prevState snapshot for render interpolation.
  */
 export function beforeSimTick(
   world: WorldState,
   aiColonyIds: readonly ColonyId[],
-  rampageCaption: RampageCaptionState,
   viewerColonyId: ColonyId,
   prevState: WorldState,
-  queenDanger: QueenDangerState,
-  enemyQueenWound: EnemyQueenWoundState,
+  captions: BeforeTickCaptions,
 ): void {
   for (const aiCid of aiColonyIds) runAIController(world, aiCid);
-  noteRampageThreat(rampageCaption, world, viewerColonyId, prevState);
-  noteQueenDangerTick(queenDanger, world, viewerColonyId);
-  noteEnemyQueenWoundTick(enemyQueenWound, world, viewerColonyId);
+  noteRampageThreat(captions.rampage, world, viewerColonyId, prevState);
+  noteQueenDangerTick(captions.queenDanger, world, viewerColonyId);
+  noteEnemyQueenWoundTick(captions.enemyQueenWound, world, viewerColonyId);
+  noteCounterAttackTick(captions.counterAttack, world, viewerColonyId);
   copyWorldState(world, prevState);
 }

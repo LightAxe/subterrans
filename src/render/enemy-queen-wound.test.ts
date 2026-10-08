@@ -16,6 +16,7 @@ import {
 } from './enemy-queen-wound.js';
 import { beforeSimTick } from './sim-tick-hook.js';
 import { createQueenDangerState } from './queen-danger.js';
+import { createCounterAttackCaptionState } from './counter-attack-caption.js';
 import { createRampageCaptionState } from './recurring-captions.js';
 import {
   captionKeyRetries,
@@ -338,7 +339,13 @@ describe('GameScene’s wiring on the real sim: the game loop, beforeSimTick, a 
       },
       world,
       {
-        onBeforeTick: (w) => beforeSimTick(w, [], rampage, PLAYER_COLONY_ID, prev, danger, s),
+        onBeforeTick: (w) =>
+          beforeSimTick(w, [], PLAYER_COLONY_ID, prev, {
+            rampage: rampage,
+            queenDanger: danger,
+            enemyQueenWound: s,
+            counterAttack: createCounterAttackCaptionState(),
+          }),
         onTickOutcome: (o) => {
           over = o;
         },
@@ -616,7 +623,13 @@ describe('batching invariance: every frame presents what the per-tick model deci
       {
         onBeforeTick:
           hook === 'beforeSimTick'
-            ? (w) => beforeSimTick(w, [], rampage, PLAYER_COLONY_ID, prev, danger, s)
+            ? (w) =>
+                beforeSimTick(w, [], PLAYER_COLONY_ID, prev, {
+                  rampage: rampage,
+                  queenDanger: danger,
+                  enemyQueenWound: s,
+                  counterAttack: createCounterAttackCaptionState(),
+                })
             : (w) => noteEnemyQueenWoundTick(s, w, PLAYER_COLONY_ID),
       },
     );
