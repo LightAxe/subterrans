@@ -417,7 +417,8 @@ _Avoid_: spider mode.
 **Rampage**:
 The spider's hungry surface hunt — it camps a colony entrance and eats ants.
 (Stored food only influences *which* colony it targets; it doesn't consume stored food.)
-A rampage gives up after `SPIDER_RAMPAGE_MAX_TICKS` without a kill (it **times out**).
+A rampage gives up after `SPIDER_RAMPAGE_MAX_TICKS` without a kill (it **times out**): 300 ticks
+since **#392 (simVersion V74)**, 1,200 before.
 Since **#337 (simVersion V54)** a timed-out spider moves on: its next rampage camps the
 next open entrance by `entranceId` (across both colonies, wrapping), and it keeps
 **rotating** that way until it kills an ant. If the entrance it left is the only open one
@@ -431,6 +432,12 @@ still hungry, until it has eaten. The **rampage warning** (the caption "The spid
 gone hungry and is hunting on the surface.") comes once per hungry spell, when the
 rampage first **threatens** the viewing colony (see Rampage shelter below — the moment
 its idle workers head in), not on each camp (#397).
+While the spider stands on the entrance it camps (the #165 spider blockade, not the
+raid type **Blockade**), no ant goes down past it, and since **#392 (simVersion V74)**
+no Idle worker or forager comes up onto it either: one climbing its shaft there
+shelters at the shaft top and comes out once the danger over the door has decayed.
+Fighters still climb out, to fight it. A camp the colony waits out times out with no
+meal after 300 ticks, and the spider leaves the door still hungry.
 _Avoid_: frenzy, attack.
 
 **Rampage shelter** (simVersion V68, #377):

@@ -12,7 +12,7 @@
 //   6. Version-gated: bumping SAVE_FORMAT_VERSION invalidates old saves (intentional for beta)
 
 import type { WorldState, EntityId, AIStateRecord, SpiderState } from '../sim/types.js';
-import { LATEST_SIM_VERSION, SIM_VERSION_V73_FULL_ARMY_LAUNCH } from '../sim/types.js';
+import { LATEST_SIM_VERSION, SIM_VERSION_V74_NO_ASCENT_ONTO_BLOCKADE } from '../sim/types.js';
 import {
   AI_INVASION_FLOOR_MAX,
   AI_MAX_OPERATION_FIGHTERS,
@@ -187,9 +187,12 @@ export class FutureSimVersionError extends Error {
  * `gameVersion` carries that build's git SHA, and scripts/analyze-snapshot.ts says
  * so instead of replaying.
  *
- * Why it is V73 today:
+ * Why it is V74 today:
+ *   - V74: #392, no civilian climbs out of its shaft onto the spider's blockade, and
+ *     the spider's camp leash is 300 ticks (was 1200).
+ *     Every pre-V74 save is rejected.
  *   - V73: #421, a full army (32 or more fighters) launches its invasion without
- *     the food check. Every pre-V73 save is rejected.
+ *     the food check. Every pre-V73 save was rejected.
  *   - V72: #398, the AI escalates after a repelled invasion (new
  *     `AIStateRecord.invasionFloor`). Every pre-V72 save was rejected.
  *   - V71: #400, the health model (max HP by territory, healing while fed and
@@ -203,7 +206,7 @@ export class FutureSimVersionError extends Error {
  *     on #290, 2026-09-25).
  *   - Before that: V30 (PR 6-sim's underground-embedding guards).
  */
-export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V73_FULL_ARMY_LAUNCH;
+export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V74_NO_ASCENT_ONTO_BLOCKADE;
 
 export class OldSimVersionError extends Error {
   // #229 — explicit field (see SaveVersionMismatchError): strip-only Node compat.

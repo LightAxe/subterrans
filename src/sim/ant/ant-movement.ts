@@ -1874,7 +1874,18 @@ export function tickAntMovement(
                   // C1 (V42) — an alarmed colony keeps its civilians in: shelter
                   // at the shaft instead of ascending. Policy lives in
                   // idle-reserve.ts with the rest of the alarm (#212 layering).
-                  if (holdAlarmedCivilianAtShaft(world, id, inOwnGrid)) break;
+                  // #392 (V74): so does the spider's blockade on this entrance.
+                  if (
+                    holdAlarmedCivilianAtShaft(
+                      world,
+                      id,
+                      inOwnGrid,
+                      entrance.surfaceTileX,
+                      entrance.surfaceTileY,
+                    )
+                  ) {
+                    break;
+                  }
                   // V44 (#325) — a tunnel defender stays below.
                   if (fighterDefendsTunnels(world, id)) break;
                   // V43 (#323) — a sentry sheltering from the spider stays below
@@ -1894,9 +1905,12 @@ export function tickAntMovement(
                   ants.posY[id] = entrance.surfaceTileY << FP_SHIFT;
                   // Restore the surface invariant. For ants in their own
                   // grid this is a no-op (already equal). For an invader
-                  // who eventually leaves via the enemy entrance after
-                  // being re-promoted out of Fighting (e.g. Idle), this
-                  // snaps the grid id back to their own colony.
+                  // who leaves via the enemy entrance (a recalled, hungry,
+                  // hauling or blockading fighter), this snaps the grid id
+                  // back to their own colony. (No path demotes an invader
+                  // out of Fighting inside a foreign nest today — see
+                  // releaseSurplusFightersBelowFloor — so a civilian never
+                  // ascends from one.)
                   ants.currentGridColonyId[id] = ants.colonyId[id]!;
                   break;
                 }
