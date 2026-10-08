@@ -240,6 +240,7 @@ import {
   counterAttackCaptionOwed,
   createCounterAttackCaptionState,
   noteCounterAttackEvent,
+  noteCounterAttackTick,
   offerCounterAttackCaption,
 } from './counter-attack-caption.js';
 import {
@@ -2204,6 +2205,8 @@ export class GameScene extends Phaser.Scene {
     // and rampage warnings), before raid news.
     let counterAttackOwed = false;
     if (uiScene) {
+      // The frame's own look for the follow-up (as beforeSimTick does before each tick).
+      noteCounterAttackTick(this.counterAttackCaption, this.world, PLAYER_COLONY_ID);
       const routTick = this.counterAttackCaption.owedRoutTick;
       // On the projected world: an Assault order the player has given, still queued
       // (picked while paused, or not yet drained), already counts.
@@ -2547,8 +2550,9 @@ export class GameScene extends Phaser.Scene {
     this.gameLoop = createGameLoop(tick, this.world, {
       // AI controllers (commands enqueued before the drain), the #397 per-tick
       // rampage-threat check, the #416 per-tick look at the queen, the #427 one at
-      // the enemy queen, then the prevState snapshot for interpolation.
-      // (`this.queenDanger` and `this.enemyQueenWound` are read per call:
+      // the enemy queen, the counter-attack caption's follow-up look, then the
+      // prevState snapshot for interpolation. (`this.queenDanger`,
+      // `this.enemyQueenWound` and `this.counterAttackCaption` are read per call:
       // resetSessionState replaces them.)
       onBeforeTick: (w) =>
         beforeSimTick(
@@ -2559,6 +2563,7 @@ export class GameScene extends Phaser.Scene {
           this.prevState,
           this.queenDanger,
           this.enemyQueenWound,
+          this.counterAttackCaption,
         ),
       onAfterDrain: (cmds) => {
         // SCEN-06 replay truth: never truncate — appendInputLog handles all commands

@@ -1,13 +1,16 @@
 // counter-attack-caption.spec.ts — playtest 4: once an invasion of the player's
 // colony ends in a fighter rout that leaves the attacker's army broken, "Their army
 // is broken — strike their nest now! …" reaches the player in a real browser, soon
-// after the rout, held long enough to read, and once.
+// after the rout, held long enough to read, and once. With an army too small to win
+// (the economy-captions army gate) it says "… train more fighters, then strike …"
+// instead.
 //
 // The trigger (a fighter_rout invasion_end and the same AI step's Invading → Recovery
 // transition with the army below the base invasion need; never a timeout, a
 // pre-cohort ending or a queen kill), the cooldown, the stale rules and the batching
 // invariance are pinned in src/render/counter-attack-caption.test.ts, through the
-// sim's own advanceAIState too. What only a browser proves is the GameScene wiring:
+// sim's own advanceAIState too; the army gate and its follow-up in
+// src/render/counter-attack-gate.test.ts. What only a browser proves is the GameScene wiring:
 // its event drain hands the rout to the caption, its per-frame step gets the caption
 // through UIScene's queue, a long caption on screen gives way to it (the
 // recurringOwed flag), and nothing shows it over the end screen.
@@ -18,11 +21,14 @@
 // three fighters committed. The rout comes from the sim's own path
 // (ai-state.ts _checkInvadingToRecovery: fewer than three of the cohort alive), with
 // no seam:
-//   - 'dead': one of the three has already died, so the save's first tick routs it;
+//   - 'dead': one of the three has already died, so the save's first tick routs it.
+//     The player has COUNTER_ATTACK_READY_FIGHTERS fighters at home, an army ready to
+//     strike, so the caption takes its Assault copy;
 //   - 'fight': the three are in the player's tunnels beside six player fighters, who
 //     kill one about 15 ticks in. GameScene notes the invasion under way as the save
 //     loads, so the army warning is on screen by then: the caption waits for it, and
-//     it gives way.
+//     it gives way. Six fighters are not an army ready to strike: the caption takes
+//     its build-up copy.
 // The save goes through the real save path (manualSave); a reload boots it through
 // Continue.
 //
@@ -33,8 +39,10 @@ import { activeOverlay, clickCanvasRect, settleToPlaying, waitForUiHook } from '
 import { SAVE_PROMPT_CONTINUE_RECT } from './helpers/geometry.js';
 import { CAPTION_FADE_IN_MS } from '../src/render/caption-queue.js';
 import {
+  COUNTER_ATTACK_BUILD_UP_TEXT,
   COUNTER_ATTACK_CAPTION_HOLD_MS,
   COUNTER_ATTACK_CAPTION_TEXT,
+  COUNTER_ATTACK_READY_FIGHTERS,
 } from '../src/render/counter-attack-caption.js';
 
 /** Every army warning (enemy-gathering.ts). */
@@ -109,64 +117,71 @@ async function holdOf(
  * three about to rout (see the header). Returns the save's tick.
  */
 async function seedRoutSave(page: Page, how: 'dead' | 'fight'): Promise<number> {
-  return await page.evaluate(async (how) => {
-    const utilsPath = '/src/sim/raid-test-utils.ts';
-    const savePath = '/src/platform/save.ts';
-    const constantsPath = '/src/sim/constants.ts';
-    const aiPath = '/src/sim/ai-state.ts';
-    const deathPath = '/src/sim/ant-death.ts';
-    type World = { tick: number; aiState: unknown[] };
-    const utils = (await import(/* @vite-ignore */ utilsPath)) as {
-      raidWorld: (fp: number) => { world: World; playerDoor: { x: number; y: number } };
-      addFighter: (w: unknown, c: number, x: number, y: number, g: number | null) => number;
-    };
-    const save = (await import(/* @vite-ignore */ savePath)) as {
-      manualSave: (seed: number, log: unknown[], w: unknown) => Promise<boolean>;
-    };
-    const k = (await import(/* @vite-ignore */ constantsPath)) as {
-      PLAYER_COLONY_ID: number;
-      ENEMY_COLONY_ID: number;
-    };
-    const ai = (await import(/* @vite-ignore */ aiPath)) as {
-      createDefaultAIStateRecord: (cid: number) => Record<string, unknown>;
-    };
-    const death = (await import(/* @vite-ignore */ deathPath)) as {
-      despawnAnt: (w: unknown, id: number, d: { cause: 'starvation' }) => void;
-    };
-    const r = utils.raidWorld(3000);
-    const t = r.world.tick;
-    const state = ai.createDefaultAIStateRecord(k.ENEMY_COLONY_ID);
-    state.state = 'Invading';
-    state.enteredTick = t;
-    state.invasionStartTick = t;
-    state.invasionRallyTileX = r.playerDoor.x;
-    state.invasionRallyTileY = r.playerDoor.y;
-    state.operationKind = 'Invasion';
-    state.operationStartTick = t;
-    state.operationTargetTileX = r.playerDoor.x;
-    state.operationTargetTileY = r.playerDoor.y;
-    const cohort = state.operationFighterIds as Int32Array;
-    for (let i = 0; i < 3; i++) {
-      cohort[i] =
-        how === 'dead'
-          ? // at home, by the enemy door (104, 64)
-            utils.addFighter(r.world, k.ENEMY_COLONY_ID, 100 + i, 58, null)
-          : // in the player's tunnel (row 6), beside its fighters
-            utils.addFighter(r.world, k.ENEMY_COLONY_ID, 20 + i, 6, k.PLAYER_COLONY_ID);
-    }
-    state.operationFighterCount = 3;
-    state.operationStartFighterCount = 3;
-    if (how === 'dead') {
-      death.despawnAnt(r.world, cohort[0]!, { cause: 'starvation' });
-    } else {
-      for (let i = 0; i < 6; i++) {
-        utils.addFighter(r.world, k.PLAYER_COLONY_ID, 17 + i, 6, k.PLAYER_COLONY_ID);
+  return await page.evaluate(
+    async ({ how, ready }) => {
+      const utilsPath = '/src/sim/raid-test-utils.ts';
+      const savePath = '/src/platform/save.ts';
+      const constantsPath = '/src/sim/constants.ts';
+      const aiPath = '/src/sim/ai-state.ts';
+      const deathPath = '/src/sim/ant-death.ts';
+      type World = { tick: number; aiState: unknown[] };
+      const utils = (await import(/* @vite-ignore */ utilsPath)) as {
+        raidWorld: (fp: number) => { world: World; playerDoor: { x: number; y: number } };
+        addFighter: (w: unknown, c: number, x: number, y: number, g: number | null) => number;
+      };
+      const save = (await import(/* @vite-ignore */ savePath)) as {
+        manualSave: (seed: number, log: unknown[], w: unknown) => Promise<boolean>;
+      };
+      const k = (await import(/* @vite-ignore */ constantsPath)) as {
+        PLAYER_COLONY_ID: number;
+        ENEMY_COLONY_ID: number;
+      };
+      const ai = (await import(/* @vite-ignore */ aiPath)) as {
+        createDefaultAIStateRecord: (cid: number) => Record<string, unknown>;
+      };
+      const death = (await import(/* @vite-ignore */ deathPath)) as {
+        despawnAnt: (w: unknown, id: number, d: { cause: 'starvation' }) => void;
+      };
+      const r = utils.raidWorld(3000);
+      const t = r.world.tick;
+      const state = ai.createDefaultAIStateRecord(k.ENEMY_COLONY_ID);
+      state.state = 'Invading';
+      state.enteredTick = t;
+      state.invasionStartTick = t;
+      state.invasionRallyTileX = r.playerDoor.x;
+      state.invasionRallyTileY = r.playerDoor.y;
+      state.operationKind = 'Invasion';
+      state.operationStartTick = t;
+      state.operationTargetTileX = r.playerDoor.x;
+      state.operationTargetTileY = r.playerDoor.y;
+      const cohort = state.operationFighterIds as Int32Array;
+      for (let i = 0; i < 3; i++) {
+        cohort[i] =
+          how === 'dead'
+            ? // at home, by the enemy door (104, 64)
+              utils.addFighter(r.world, k.ENEMY_COLONY_ID, 100 + i, 58, null)
+            : // in the player's tunnel (row 6), beside its fighters
+              utils.addFighter(r.world, k.ENEMY_COLONY_ID, 20 + i, 6, k.PLAYER_COLONY_ID);
       }
-    }
-    r.world.aiState.push(state);
-    if (!(await save.manualSave(7, [], r.world))) throw new Error('manualSave failed');
-    return t;
-  }, how);
+      state.operationFighterCount = 3;
+      state.operationStartFighterCount = 3;
+      if (how === 'dead') {
+        death.despawnAnt(r.world, cohort[0]!, { cause: 'starvation' });
+        // An army ready to strike, at home in the player's tunnel (row 6).
+        for (let i = 0; i < ready; i++) {
+          utils.addFighter(r.world, k.PLAYER_COLONY_ID, 17 + (i % 6), 6, k.PLAYER_COLONY_ID);
+        }
+      } else {
+        for (let i = 0; i < 6; i++) {
+          utils.addFighter(r.world, k.PLAYER_COLONY_ID, 17 + i, 6, k.PLAYER_COLONY_ID);
+        }
+      }
+      r.world.aiState.push(state);
+      if (!(await save.manualSave(7, [], r.world))) throw new Error('manualSave failed');
+      return t;
+    },
+    { how, ready: COUNTER_ATTACK_READY_FIGHTERS },
+  );
 }
 
 /** Seed the save, reload, and Continue into it. Returns the save's tick. */
@@ -232,18 +247,20 @@ test.describe('playtest 4 — the counter-attack caption after a fighter rout', 
     expect((await counter(page)).owedRoutTick).toBeNull();
   });
 
-  test('routed while the army warning is up: the warning gives way, and it comes next', async ({
+  test('routed while the army warning is up, with a small army: the warning gives way, and the build-up copy comes next', async ({
     page,
   }) => {
     test.setTimeout(90_000);
     const saveTick = await bootRoutSave(page, 'fight');
 
+    // Six fighters are no army to strike with: the caption takes its build-up copy.
     await expect
       .poll(async () => (await captionQueue(page)).active, { timeout: 20_000, intervals: [50] })
-      .toBe(COUNTER_ATTACK_CAPTION_TEXT);
+      .toBe(COUNTER_ATTACK_BUILD_UP_TEXT);
     // The army warning came first, then this caption, nothing between.
     const shown = await captions(page);
-    const at = shown.indexOf(COUNTER_ATTACK_CAPTION_TEXT);
+    expect(shown).not.toContain(COUNTER_ATTACK_CAPTION_TEXT);
+    const at = shown.indexOf(COUNTER_ATTACK_BUILD_UP_TEXT);
     expect(at).toBeGreaterThan(0);
     expect(shown[at - 1]!.startsWith(ARMY_WARNING_PREFIX)).toBe(true);
     // The warning gave way to it (the counter-attack caption owed behind it is a
@@ -284,6 +301,7 @@ test.describe('playtest 4 — the counter-attack caption after a fighter rout', 
     await advanceCaptionClock(page, 10_000);
     expect(await captionQueue(page)).toEqual({ active: null, pending: null });
     expect(await captions(page)).not.toContain(COUNTER_ATTACK_CAPTION_TEXT);
+    expect(await captions(page)).not.toContain(COUNTER_ATTACK_BUILD_UP_TEXT);
     expect((await counter(page)).shown).toEqual([]);
   });
 });

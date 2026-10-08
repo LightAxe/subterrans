@@ -14,6 +14,8 @@ import {
   COUNTER_ATTACK_CAPTION_HOLD_MS,
   COUNTER_ATTACK_CAPTION_OWED_TICKS,
   COUNTER_ATTACK_CAPTION_TEXT,
+  COUNTER_ATTACK_BUILD_UP_TEXT,
+  COUNTER_ATTACK_READY_FIGHTERS,
   armyBroken,
   counterAttackCaptionOwed,
   counterAttackCaptionStale,
@@ -171,10 +173,16 @@ function offerAt(
   return offerCounterAttackCaption(s, world, viewer, ui, 400, 60);
 }
 
-/** A fresh two-colony Normal match (both queens alive) at tick 2000. */
+/** A fresh two-colony Normal match (both queens alive) at tick 2000, the player's army
+ *  ready to strike (COUNTER_ATTACK_READY_FIGHTERS fighters, the enemy none), so the
+ *  caption takes its Assault copy. The army gate and its "train more fighters" copy are
+ *  in counter-attack-gate.test.ts. */
 function freshWorld(difficulty: 'Easy' | 'Normal' | 'Hard' = 'Normal'): WorldState {
   const w = createScenario(7, difficulty);
   setTick(w, 2000);
+  for (let i = 0; i < COUNTER_ATTACK_READY_FIGHTERS; i++) {
+    addFighter(w, PLAYER_COLONY_ID, 10, 10, null);
+  }
   return w;
 }
 
@@ -675,7 +683,8 @@ describe('through the sim: what advanceAIState reports for each way an invasion 
   it('a cohort routed (fewer than 3 alive): fighter_rout, and the caption shows', () => {
     const { events, shown } = playTick(invadingWorld(500, 400, 3, 1));
     expect(ends(events)).toEqual(['fighter_rout']);
-    expect(shown).toEqual([COUNTER_ATTACK_CAPTION_TEXT]);
+    // The raid world's player has no army: the caption takes its build-up copy.
+    expect(shown).toEqual([COUNTER_ATTACK_BUILD_UP_TEXT]);
   });
 
   it('a cohort routed with a big army at home (the #421 hold): no caption', () => {
@@ -791,11 +800,14 @@ function randomScript(seed: number, n: number): Map<number, SimEvent[]> {
 }
 
 /**
- * The independent model: the rout ticks that owe the caption. Over the whole event
- * sequence, an enemy fighter rout owes it iff the enemy's next AI event after it (its
- * next invasion_end or ai_state_transition) is an Invading → Recovery transition on
- * the same tick with fewer fighters than the base need, and the cooldown since the
- * last rout that owed it is up.
+ * A per-tick reference model: the rout ticks that owe the caption, read off the whole
+ * event sequence at once. It restates the rule, so it is not an independent check of
+ * the rule itself (the cases above pin that); comparing it with the frame-by-frame
+ * caption proves only that batching ticks into frames never changes which routs owe
+ * it. Over the whole event sequence, an enemy fighter rout owes it iff the enemy's next
+ * AI event after it (its next invasion_end or ai_state_transition) is an Invading →
+ * Recovery transition on the same tick with fewer fighters than the base need, and the
+ * cooldown since the last rout that owed it is up.
  */
 function oracle(script: Map<number, SimEvent[]>, n: number): Set<number> {
   const all: SimEvent[] = [];

@@ -30,6 +30,20 @@
 //     harness) routed at an enemy nest: the attacker's opponent must be the viewer
 //     (ai-state.ts opponentColonyId, the colony an AI invades), so any colony may be
 //     the viewer (CLNY-08).
+// WHAT it says depends on the viewer's own army (the army gate, from Fable's review and
+// the economy-captions measurement): the Assault copy only when the army can win
+// (counterAttackArmyReady: at least COUNTER_ATTACK_READY_FIGHTERS fighters and
+// COUNTER_ATTACK_READY_MARGIN more than the attacker's whole army). Pooled over the
+// caption-following novice's counter-attacks, an Assault with fewer than 8 fighters
+// won 1% (Easy) / 0% (Normal) of the time, and one past this gate 69% / 55%. An army
+// short of it gets COUNTER_ATTACK_BUILD_UP_TEXT ("… train more fighters, then strike
+// …") instead, and the Assault copy follows, once, the first tick the army is ready
+// (noteCounterAttackTick, per sim tick) within COUNTER_ATTACK_FOLLOW_UP_TICKS, unless
+// the attacker invades or probes again first or a queen dies. The copy is chosen as
+// the queue takes the caption, on the frame's projected world. (With more than two
+// colonies, a follow-up owed in the same frame as another attacker's fresh rout would
+// replace it; opponentColonyId assumes two colonies today.)
+//
 // Every such rout owes it again, so it repeats as the storage hint does, but not within
 // COUNTER_ATTACK_CAPTION_COOLDOWN_TICKS of the last rout it was owed for. The cooldown
 // runs from that rout, not from when the caption showed (raid news starts its cooldown
@@ -46,8 +60,11 @@
 // batched: by tick, not by index; an invasion_end or ai_state_transition is always
 // appended, even at the event cap, unless the buffer holds nothing but terminal
 // events). The army check and the cooldown use only the events, so which routs owe the
-// caption is the same for any batching. The frame step (offerCounterAttackCaption)
-// only presents what is owed.
+// caption is the same for any batching. The follow-up after the build-up copy is
+// decided per tick too (noteCounterAttackTick in beforeSimTick). The frame step
+// (offerCounterAttackCaption) presents what is owed; all it decides is which copy the
+// queue takes, from the army as it stands then, and (for the build-up copy) when the
+// follow-up's window opens.
 //
 // It is a RECURRING caption (recurring-captions.ts offerRecurringCaption): it enters
 // the caption queue only while the queue is fully idle, so it never takes the pending
@@ -71,7 +88,12 @@ import type { WorldState } from '../sim/types.js';
 import type { SimEvent } from '../sim/telemetry.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import { RaidType } from '../sim/enums.js';
-import { opponentColonyId, tierIndex } from '../sim/ai-state.js';
+import {
+  aiFighterCount,
+  getAIStateForColony,
+  opponentColonyId,
+  tierIndex,
+} from '../sim/ai-state.js';
 import { AI_INVADING_FIGHTER_THRESHOLD } from '../sim/constants.js';
 import { rallyEnemyEntrance } from '../sim/raid-order.js';
 import { offerRecurringCaption, type RecurringCaptionSink } from './recurring-captions.js';
@@ -113,10 +135,58 @@ export const COUNTER_ATTACK_CAPTION_OWED_TICKS = 400;
  */
 export const COUNTER_ATTACK_CAPTION_COOLDOWN_TICKS = 1200;
 
+/**
+ * The army gate: the Assault copy only when the viewer's army can win. Over the
+ * caption-following novice's counter-attacks (playtest 4's harness and its economy-
+ * captions copies, every same-sim run: 1,041 on Easy, 507 on Normal), an Assault won
+ * (Easy / Normal): with fewer than 8 fighters 1% / 0%; with 8-11, 13% / 5%; with at
+ * least max(8, their whole army) 51% / 42%; with at least
+ * COUNTER_ATTACK_READY_FIGHTERS and COUNTER_ATTACK_READY_MARGIN more than their whole
+ * army 69% / 55%.
+ */
+export const COUNTER_ATTACK_READY_FIGHTERS = 12;
+export const COUNTER_ATTACK_READY_MARGIN = 4;
+
+/** The caption when the viewer's army is not ready (counterAttackArmyReady false). It
+ *  says what to do but not how to strike: the Assault copy, which says how, follows
+ *  once the army is ready. If the follow-up lapses first (its window, a new wave), that
+ *  rout gets no Assault copy; the next rout does. By then their army may be rebuilding
+ *  ("broken" is about the rout), which the ready margin allows for. */
+export const COUNTER_ATTACK_BUILD_UP_TEXT =
+  'Their army is broken — train more fighters, then strike their nest while they recover.';
+
+/**
+ * After the build-up caption, how long (ticks, 4 min) the Assault caption may still
+ * follow once the viewer's army is ready, unless the attacker invades (or probes)
+ * again first. Waves come about 4.4 minutes apart on Normal (playtest 4).
+ */
+export const COUNTER_ATTACK_FOLLOW_UP_TICKS = 4800;
+
+/**
+ * `viewerColonyId`'s army can take on `attackerId`'s: at least
+ * COUNTER_ATTACK_READY_FIGHTERS alive fighters, and COUNTER_ATTACK_READY_MARGIN more
+ * than the attacker's whole army (aiFighterCount: every alive Fighting ant, wherever).
+ */
+export function counterAttackArmyReady(
+  world: WorldState,
+  viewerColonyId: ColonyId,
+  attackerId: ColonyId,
+): boolean {
+  const mine = aiFighterCount(world, viewerColonyId);
+  return (
+    mine >= COUNTER_ATTACK_READY_FIGHTERS &&
+    mine - aiFighterCount(world, attackerId) >= COUNTER_ATTACK_READY_MARGIN
+  );
+}
+
 export interface CounterAttackCaptionState {
   /** The tick of the rout (its invasion_end) the caption is owed for and has not shown
-   *  yet (null: none owed). */
+   *  yet, or, for the follow-up Assault copy, the tick the army became ready (null:
+   *  none owed). */
   owedRoutTick: number | null;
+  /** The owed caption is the follow-up: it takes the Assault copy whatever the army
+   *  reads when the queue takes it, so the build-up copy shows at most once per rout. */
+  owedFollowUp: boolean;
   /** The colony whose wave was routed then: the nest to strike (meaningful while owed). */
   owedAttackerId: ColonyId;
   /** The tick of the last rout the caption was owed for (null: none this round). The
@@ -128,16 +198,58 @@ export interface CounterAttackCaptionState {
   routSeenTick: number | null;
   /** The routed colony then (meaningful while routSeenTick is set). */
   routSeenAttackerId: ColonyId;
+  /** The tick the build-up caption showed (null: none pending): the Assault caption is
+   *  owed once the viewer's army is ready, within COUNTER_ATTACK_FOLLOW_UP_TICKS. */
+  buildUpTick: number | null;
+  /** The colony the build-up caption was about (meaningful while buildUpTick is set). */
+  buildUpAttackerId: ColonyId;
 }
 
 export function createCounterAttackCaptionState(): CounterAttackCaptionState {
   return {
     owedRoutTick: null,
+    owedFollowUp: false,
     owedAttackerId: -1,
     lastRoutTick: null,
     routSeenTick: null,
     routSeenAttackerId: -1,
+    buildUpTick: null,
+    buildUpAttackerId: -1,
   };
+}
+
+/**
+ * Economy captions — once per sim tick (sim-tick-hook.ts beforeSimTick, and GameScene
+ * for the frame's last tick): after the build-up caption, owe the Assault caption the
+ * first tick the viewer's army is ready (counterAttackArmyReady). The follow-up lapses
+ * after COUNTER_ATTACK_FOLLOW_UP_TICKS, once the attacker invades or probes again, or
+ * once either queen is dead. Read-only on the world.
+ */
+export function noteCounterAttackTick(
+  state: CounterAttackCaptionState,
+  world: WorldState,
+  viewerColonyId: ColonyId,
+): void {
+  const since = state.buildUpTick;
+  if (since === null) return;
+  const attacker = state.buildUpAttackerId;
+  const aiState = getAIStateForColony(world, attacker)?.state;
+  if (
+    world.tick < since ||
+    world.tick - since > COUNTER_ATTACK_FOLLOW_UP_TICKS ||
+    aiState === 'Invading' ||
+    aiState === 'Probing' ||
+    !queenAlive(world, viewerColonyId) ||
+    !queenAlive(world, attacker)
+  ) {
+    state.buildUpTick = null;
+    return;
+  }
+  if (!counterAttackArmyReady(world, viewerColonyId, attacker)) return;
+  state.buildUpTick = null;
+  state.owedRoutTick = world.tick;
+  state.owedFollowUp = true;
+  state.owedAttackerId = attacker;
 }
 
 /**
@@ -230,6 +342,7 @@ function oweIfBroken(
   }
   state.lastRoutTick = routTick;
   state.owedRoutTick = routTick;
+  state.owedFollowUp = false;
   state.owedAttackerId = attackerId;
 }
 
@@ -295,10 +408,14 @@ export function offerCounterAttackCaption(
     state.owedRoutTick = null;
     return false;
   }
+  // Economy captions: the Assault copy only when the army can win; otherwise the
+  // build-up copy, and the Assault copy follows once it can (noteCounterAttackTick).
+  const attacker = state.owedAttackerId;
+  const ready = state.owedFollowUp || counterAttackArmyReady(world, viewerColonyId, attacker);
   if (
     !offerRecurringCaption(
       ui,
-      COUNTER_ATTACK_CAPTION_TEXT,
+      ready ? COUNTER_ATTACK_CAPTION_TEXT : COUNTER_ATTACK_BUILD_UP_TEXT,
       screenX,
       screenY,
       COUNTER_ATTACK_CAPTION_HOLD_MS,
@@ -307,6 +424,8 @@ export function offerCounterAttackCaption(
     return false;
   }
   state.owedRoutTick = null;
+  state.buildUpTick = ready ? null : world.tick;
+  state.buildUpAttackerId = attacker;
   return true;
 }
 

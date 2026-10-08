@@ -655,6 +655,12 @@ while the attacker's whole army is then below its tier's base invasion need
 `COUNTER_ATTACK_CAPTION_COOLDOWN_TICKS` of the last rout that owed it.
 Decided per sim tick from the AI's `invasion_end` and Invading → Recovery
 `ai_state_transition` events; a recurring caption, so it waits for an idle queue.
+It says "strike" only when the player's **army is ready** (at least
+`COUNTER_ATTACK_READY_FIGHTERS` fighters and `COUNTER_ATTACK_READY_MARGIN` more than
+the attacker's whole army); otherwise it says "Their army is broken — train more
+fighters, then strike their nest while they recover.", and the strike copy follows
+once the army is ready (within 4 minutes, unless the attacker invades or probes again
+first, or a queen dies).
 _Avoid_: "victory caption"; "rout caption" (a rout is the AI's, the caption the
 player's).
 
