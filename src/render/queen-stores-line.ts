@@ -40,12 +40,22 @@ export function resetQueenStoresLineState(state: QueenStoresLineState): void {
  * ends it keeps the last waiting numbers (or the live ones if waiting resumes).
  * Amber (`capped`) is held the same long after the live `capped` clears; grey to
  * amber is immediate. Null once both have run out.
+ *
+ * `roundOver` (her queen is dead, or an end screen is up: the game-over overlay, the
+ * survey, or a restart's new-game screen) clears the hold and hides the line at once:
+ * the game-over pause stops world.tick, so a hold would otherwise never run out and
+ * the line would stay frozen under that screen.
  */
 export function holdQueenStoresLine(
   state: QueenStoresLineState,
   tick: number,
   live: QueenStoresWait | null,
+  roundOver = false,
 ): QueenStoresWait | null {
+  if (roundOver) {
+    resetQueenStoresLineState(state);
+    return null;
+  }
   if (tick < state.lastTick) resetQueenStoresLineState(state);
   state.lastTick = tick;
   if (live) {

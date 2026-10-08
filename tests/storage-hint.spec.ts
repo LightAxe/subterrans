@@ -98,6 +98,7 @@ interface TestHook {
   isPaused?: () => boolean;
   placePlayerChamberAt?: (chamberType: number, tileX: number, tileY: number) => boolean;
   offerCaption?: (text: string) => boolean;
+  forceGameOver?: (outcome?: 'Victory' | 'Defeat' | 'MutualDestruction') => void;
   getQueenStoresLine?: () => {
     text: string;
     color: string;
@@ -587,8 +588,8 @@ async function playerStores(page: Page): Promise<{
   });
 }
 
-async function bootStorageSave(page: Page, variant: Variant | 'stall'): Promise<number> {
-  await page.goto('/');
+async function bootStorageSave(page: Page, variant: Variant | 'stall', url = '/'): Promise<number> {
+  await page.goto(url);
   await waitForUiHook(page);
   await page.evaluate(() => localStorage.clear());
   let savedAt = 0;
@@ -895,6 +896,42 @@ test.describe('#413 — storage is the population cap: the stall is taught', () 
     expect((await captions(page)).filter((c) => c === HINT)).toHaveLength(1);
     expect((await storesLine(page))?.color).toBe(STORES_CAPPED_CSS);
   });
+
+  test('the line is gone once the queen dies and the end screen is up (#425 hold)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await bootStorageSave(page, 'starve');
+    // Storage blocks her on every tick before she starves, so the line is up.
+    await expect.poll(() => storesLine(page), { timeout: 10_000 }).not.toBeNull();
+    // She starves at tick 300 through the sim's own Defeat path; the game-over pause
+    // then stops the tick, so a hold timed in ticks would never run out on its own.
+    await expect.poll(() => activeOverlay(page), { timeout: 40_000 }).toBe('game-over');
+    await expect.poll(() => storesLineDrawn(page), { timeout: 5_000 }).toBeNull();
+  });
+
+  // A Victory leaves her queen alive and still waiting, so only the end screen itself
+  // can clear the line: the game-over overlay here, and the survey that replaces it
+  // in the deployed builds (playtraces on).
+  for (const [screen, url] of [
+    ['game-over', '/'],
+    ['survey', '/tests/fixtures/playtrace-on.html'],
+  ] as const) {
+    test(`on a Victory the line is gone under the ${screen} screen (#425 hold)`, async ({
+      page,
+    }) => {
+      test.setTimeout(90_000);
+      await bootStorageSave(page, 'room', url);
+      await expect.poll(() => storesLine(page), { timeout: 10_000 }).not.toBeNull();
+      await page.evaluate(() =>
+        (window as unknown as { __phase9_test?: TestHook }).__phase9_test?.forceGameOver?.(
+          'Victory',
+        ),
+      );
+      await expect.poll(() => activeOverlay(page), { timeout: 5_000 }).toBe(screen);
+      await expect.poll(() => storesLineDrawn(page), { timeout: 5_000 }).toBeNull();
+    });
+  }
 
   test('a larder with room: the queen waits for food, the line is no warning, and no hint', async ({
     page,

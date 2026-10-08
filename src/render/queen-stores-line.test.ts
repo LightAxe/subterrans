@@ -111,6 +111,22 @@ describe('#425 — holdQueenStoresLine', () => {
     expect(holdQueenStoresLine(s, 10, null)).toBeNull();
   });
 
+  it('roundOver hides it at once and clears the hold (the end-screen pause stops the tick)', () => {
+    const s = createQueenStoresLineState();
+    holdQueenStoresLine(s, 300, amber());
+    // The queen dies at 301: the live wait is gone and the tick then stops for good.
+    expect(holdQueenStoresLine(s, 301, null, true)).toBeNull();
+    for (let frame = 0; frame < 100; frame++) {
+      expect(holdQueenStoresLine(s, 301, null, true)).toBeNull();
+    }
+    // Nothing is left held for a later look at the same tick.
+    expect(holdQueenStoresLine(s, 301, null)).toBeNull();
+    // A live wait passed alongside roundOver is not shown either.
+    expect(holdQueenStoresLine(s, 302, grey(), true)).toBeNull();
+    // It leaves a clean slate: the next round's first wait shows as usual.
+    expect(holdQueenStoresLine(s, 0, amber())).toEqual(amber());
+  });
+
   it('non-null across a blip sequence', () => {
     // UIScene draws, and masks input with, exactly the returned result (wiring covered
     // by tests/storage-hint.spec.ts).

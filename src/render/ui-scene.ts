@@ -1726,11 +1726,21 @@ export class UIScene extends Phaser.Scene {
     // the warning colour once that is more than storage can hold. Hidden while the
     // ant-activity popup, which opens over the same spot, is up.
     // #425 — held through laying blips (queen-stores-line.ts); the strip's input mask
-    // follows this displayed result.
+    // follows this displayed result. Once the round is over (her queen dead, or an end
+    // screen up: the game-over overlay, or the survey that replaces it when playtraces
+    // are on, or the new-game screen a restart opens over the old world) the hold is
+    // cleared, so the line can't linger frozen under it.
+    const roundOver =
+      this.gameOverGroup.length > 0 ||
+      this.surveyGroup.length > 0 ||
+      this.difficultySelectGroup.length > 0 ||
+      !colony ||
+      world.ants.alive[colony.queenEntityId] !== 1;
     const heldWait = holdQueenStoresLine(
       this.queenStoresLineState,
       world.tick,
       colony ? queenStoresWait(world, PLAYER_COLONY_ID) : null,
+      roundOver,
     );
     const storesWait = antActivityPanelState.visible ? null : heldWait;
     if (storesWait) {
