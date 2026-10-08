@@ -39,6 +39,7 @@ interface TestHook {
   getCaptionHolds?: () => { text: string; holdMs: number; yielded: boolean }[];
   getCaptionQueue?: () => { active: string | null; pending: string | null };
   getTick?: () => number;
+  isPaused?: () => boolean;
   freezeCaptionClock?: (frozen: boolean) => void;
   advanceCaptionClock?: (ms: number) => void;
   offerCaption?: (text: string) => boolean;
@@ -61,6 +62,26 @@ async function hold(page: Page): Promise<{ holdMs: number; yielded: boolean } | 
   const holds = await page.evaluate(() => (window as Win).__phase9_test?.getCaptionHolds?.() ?? []);
   const h = holds.find((c) => c.text === STORES_FILLING_CAPTION_TEXT);
   return h === undefined ? null : { holdMs: h.holdMs, yielded: h.yielded };
+}
+
+/** Hold or release the sim with the Space key, and wait for the pause to land. While it
+ *  is held no tick runs, so what the spec reads and does is not racing the sim clock. */
+async function setPaused(page: Page, on: boolean): Promise<void> {
+  const isPaused = () => page.evaluate(() => (window as Win).__phase9_test?.isPaused?.() ?? null);
+  if ((await isPaused()) !== on) await page.keyboard.press('Space');
+  await expect.poll(isPaused).toBe(on);
+}
+
+/** Run the sim until it reaches `tick`, then hold it. The wait is checked every frame
+ *  (not on a wall-clock interval), so the sim stops within a frame or two of the tick. */
+async function runUntilTick(page: Page, tick: number): Promise<void> {
+  await setPaused(page, false);
+  await page.waitForFunction(
+    (t: number) => ((window as Win).__phase9_test?.getTick?.() ?? -1) >= t,
+    tick,
+    { polling: 'raf', timeout: 40_000 },
+  );
+  await setPaused(page, true);
 }
 
 async function freezeCaptionClock(page: Page, frozen: boolean): Promise<void> {
@@ -152,25 +173,27 @@ test.describe('economy captions — the stores-filling caption', () => {
   }) => {
     test.setTimeout(90_000);
     await bootFullStoresSave(page);
+    // Hold the sim from the first moment: from here no tick runs unless the spec runs it.
+    await setPaused(page, true);
+    expect(await simTick(page)).toBeLessThan(STORES_FILLING_DWELL_TICKS);
     // Hold the queue (caption clock stopped) before the caption comes due.
     await expect
       .poll(() => captionQueue(page), { timeout: 10_000 })
       .toEqual({ active: null, pending: null });
     await freezeCaptionClock(page, true);
-    expect(await simTick(page)).toBeLessThan(STORES_FILLING_DWELL_TICKS);
     const held = await page.evaluate(
       (t: string) => (window as Win).__phase9_test?.offerCaption?.(t) ?? false,
       HOLDER,
     );
     expect(held).toBe(true);
     // Let it come due behind the holder (a recurring caption waits for an idle queue,
-    // and stays owed for STORES_FILLING_OWED_TICKS).
-    await expect
-      .poll(() => simTick(page), { timeout: 40_000 })
-      .toBeGreaterThan(STORES_FILLING_DWELL_TICKS + 20);
+    // and stays owed for STORES_FILLING_OWED_TICKS), then hold the sim again.
+    await runUntilTick(page, STORES_FILLING_DWELL_TICKS + 20);
     expect(await captionQueue(page)).toEqual({ active: HOLDER, pending: null });
     // Designate a Food Storage chamber (just below the row-6 tunnel) through the real
-    // enqueue, then free the queue while the caption would still be owed.
+    // enqueue, then free the queue while the caption would still be owed. The sim is
+    // held, so the designation cannot miss the owed window; the command is drained by
+    // the first tick after the release.
     const placed = await page.evaluate(
       (t: number) => (window as Win).__phase9_test?.placePlayerChamberAt?.(t, 28, 7) ?? false,
       FOOD_STORAGE,
@@ -180,6 +203,7 @@ test.describe('economy captions — the stores-filling caption', () => {
       STORES_FILLING_DWELL_TICKS + STORES_FILLING_OWED_TICKS,
     );
     await freezeCaptionClock(page, false);
+    await setPaused(page, false);
     const t0 = await simTick(page);
     await expect
       .poll(() => simTick(page), { timeout: 40_000 })
