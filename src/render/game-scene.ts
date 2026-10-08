@@ -237,6 +237,11 @@ import { checkAndTrigger, resetCaptions, type CaptionKey } from './onboarding-ca
 import { advanceQueenDanger, createQueenDangerState } from './queen-danger.js';
 import { advanceEnemyQueenWound, createEnemyQueenWoundState } from './enemy-queen-wound.js';
 import {
+  createStoresFillingCaptionState,
+  noteStoresFillingTick,
+  offerStoresFillingCaption,
+} from './stores-filling-caption.js';
+import {
   counterAttackCaptionOwed,
   createCounterAttackCaptionState,
   noteCounterAttackEvent,
@@ -1216,6 +1221,9 @@ export class GameScene extends Phaser.Scene {
   // #395/#413 — the Food Storage hint: build the first larder, or (stores full) another
   // (storage-hint.ts).
   private storageHint = createStorageHintState();
+  // Economy captions — "Your stores are nearly full — build another Food Storage …":
+  // decided per sim tick (stores-filling-caption.ts).
+  private storesFilling = createStoresFillingCaptionState();
   // #290 PR 6 — raid captions: last-seen player raid counters + per-caption
   // throttle. Re-baselined in finishBoot (fresh or loaded world).
   private readonly raidCaptions = createRaidCaptionState();
@@ -1953,6 +1961,7 @@ export class GameScene extends Phaser.Scene {
     this.lastEnemyQueenHpBar = null;
     this.queenStarvationTriggered = false;
     this.storageHint = createStorageHintState();
+    this.storesFilling = createStoresFillingCaptionState();
     this.contestedGlowFrames.clear();
     this.undergroundGlowFrames.clear();
     resetCaptions();
@@ -2280,6 +2289,32 @@ export class GameScene extends Phaser.Scene {
       uiScene.withdrawPendingCaption?.('enemyQueenWounded');
     }
 
+    // Economy captions — "Your stores are nearly full — build another Food Storage …":
+    // the stores three-quarters full, no Food Storage designated, for the dwell (decided
+    // per sim tick: beforeSimTick, and here for the frame's last tick). Advice, not a
+    // threat: a recurring caption offered after every other caption, so it takes only an
+    // idle queue, and an owed one makes no long caption give way. On the projected
+    // world, so a Food Storage the player has ordered, still queued, drops it. It is not
+    // owed within its cooldown of the storage hint's last offer (the same advice); the
+    // hint, which says why when storage then holds the queen back, is not held back by
+    // it.
+    if (uiScene) {
+      noteStoresFillingTick(
+        this.storesFilling,
+        this.world,
+        PLAYER_COLONY_ID,
+        this.storageHint.lastOfferedTick,
+      );
+      offerStoresFillingCaption(
+        this.storesFilling,
+        this.projection.get(this.world),
+        PLAYER_COLONY_ID,
+        uiScene,
+        this.layout.w / 2,
+        60,
+      );
+    }
+
     // #395 (V70) — the queen lays only while stores cover the egg reserve, which the
     // entrance pool alone never can, and (#413) one larder only up to about 3 brood:
     // tell the player when storage capacity is what stops her
@@ -2550,16 +2585,18 @@ export class GameScene extends Phaser.Scene {
     this.gameLoop = createGameLoop(tick, this.world, {
       // AI controllers (commands enqueued before the drain), the #397 per-tick
       // rampage-threat check, the #416 per-tick look at the queen, the #427 one at
-      // the enemy queen, the counter-attack caption's follow-up look, then the
-      // prevState snapshot for interpolation. (`this.queenDanger`,
-      // `this.enemyQueenWound` and `this.counterAttackCaption` are read per call:
-      // resetSessionState replaces them.)
+      // the enemy queen, the counter-attack caption's follow-up look, the
+      // stores-filling caption's look at the stores, then the prevState snapshot for
+      // interpolation. (The caption states are read per call: resetSessionState
+      // replaces them.)
       onBeforeTick: (w) =>
         beforeSimTick(w, this.aiColonyIds, PLAYER_COLONY_ID, this.prevState, {
           rampage: this.rampageCaption,
           queenDanger: this.queenDanger,
           enemyQueenWound: this.enemyQueenWound,
           counterAttack: this.counterAttackCaption,
+          storesFilling: this.storesFilling,
+          storageHint: this.storageHint,
         }),
       onAfterDrain: (cmds) => {
         // SCEN-06 replay truth: never truncate — appendInputLog handles all commands

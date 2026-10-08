@@ -20,6 +20,8 @@ import { noteRampageThreat, type RampageCaptionState } from './recurring-caption
 import { noteQueenDangerTick, type QueenDangerState } from './queen-danger.js';
 import { noteEnemyQueenWoundTick, type EnemyQueenWoundState } from './enemy-queen-wound.js';
 import { noteCounterAttackTick, type CounterAttackCaptionState } from './counter-attack-caption.js';
+import { noteStoresFillingTick, type StoresFillingCaptionState } from './stores-filling-caption.js';
+import type { StorageHintState } from './storage-hint.js';
 
 /** The render-side caption states `beforeSimTick` advances on every sim tick. */
 export interface BeforeTickCaptions {
@@ -27,6 +29,9 @@ export interface BeforeTickCaptions {
   readonly queenDanger: QueenDangerState;
   readonly enemyQueenWound: EnemyQueenWoundState;
   readonly counterAttack: CounterAttackCaptionState;
+  readonly storesFilling: StoresFillingCaptionState;
+  /** Read for the storage hint's last offer, which the stores-filling caption follows. */
+  readonly storageHint: StorageHintState;
 }
 
 /**
@@ -49,7 +54,11 @@ export interface BeforeTickCaptions {
  *      (noteCounterAttackTick): after its "train more fighters" copy, the Assault copy
  *      is owed the first tick the viewer's army is ready, decided on that tick's own
  *      end state;
- *   6. the prevState snapshot for render interpolation.
+ *   6. (economy captions) the stores-filling caption's look at the viewer's colony
+ *      (noteStoresFillingTick), so its dwell and cooldown run on world ticks; with the
+ *      storage hint's last offer (`captions.storageHint`), which it does not follow
+ *      within its cooldown;
+ *   7. the prevState snapshot for render interpolation.
  */
 export function beforeSimTick(
   world: WorldState,
@@ -63,5 +72,11 @@ export function beforeSimTick(
   noteQueenDangerTick(captions.queenDanger, world, viewerColonyId);
   noteEnemyQueenWoundTick(captions.enemyQueenWound, world, viewerColonyId);
   noteCounterAttackTick(captions.counterAttack, world, viewerColonyId);
+  noteStoresFillingTick(
+    captions.storesFilling,
+    world,
+    viewerColonyId,
+    captions.storageHint.lastOfferedTick,
+  );
   copyWorldState(world, prevState);
 }

@@ -679,6 +679,16 @@ first, or a queen dies).
 _Avoid_: "victory caption"; "rout caption" (a rout is the AI's, the caption the
 player's).
 
+**Stores-filling caption** (economy captions, render-only):
+The caption that tells the player to build the next Food Storage chamber before the
+stores fill: "Your stores are nearly full — build another Food Storage so your
+foragers have room." Owed when the colony has a completed Food Storage chamber, its
+stores read at least three-quarters of capacity, none is designated, and storage is
+not already holding the queen back (that is the storage hint's to say), for a 10 s
+dwell; not again within 60 s of that or of the storage hint. Decided per sim tick; a
+recurring caption, so it waits for an idle queue.
+_Avoid_: "storage hint" (the #395/#413 caption about a queen held back by storage).
+
 **Difficulty**:
 The tier chosen at boot — `Easy` / `Normal` / `Hard` — which tunes AI rates,
 spider hunger, and the egg interval.
