@@ -30,6 +30,7 @@ import type { WorldState } from '../sim/types.js';
 import { createScenario } from '../sim/scenario.js';
 import { createDefaultAIStateRecord, getAIStateForColony } from '../sim/ai-state.js';
 import { addFighter } from '../sim/raid-test-utils.js';
+import { despawnAnt } from '../sim/ant-death.js';
 import { ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
 
 const P = PLAYER_COLONY_ID;
@@ -142,7 +143,7 @@ describe('the gated counter-attack caption', () => {
     noteCounterAttackTick(s, w, P);
     expect(s.owedRoutTick).toBe(2100);
     // a busy queue, then the army falls below the gate before the queue is idle
-    for (const id of added) w.ants.alive[id] = 0;
+    for (const id of added) despawnAnt(w, id, { cause: 'starvation' });
     setTick(w, 2110);
     expect(offerCounterAttackCaption(s, w, P, ui, 0, 0)).toBe(true);
     expect(ui.shown).toEqual([COUNTER_ATTACK_BUILD_UP_TEXT, COUNTER_ATTACK_CAPTION_TEXT]);
@@ -219,11 +220,34 @@ describe('the gated counter-attack caption', () => {
       const s = createCounterAttackCaptionState();
       rout(s, w, 2000);
       offerCounterAttackCaption(s, w, P, sink(), 0, 0);
-      w.ants.alive[w.colonies[cid]!.queenEntityId] = 0;
+      despawnAnt(w, w.colonies[cid]!.queenEntityId, { cause: 'starvation' });
       for (let i = 0; i < 20; i++) addFighter(w, P, 5, 5, null);
       setTick(w, 2100);
       noteCounterAttackTick(s, w, P);
       expect(s.owedRoutTick).toBeNull();
+    }
+  });
+
+  it('an owed follow-up behind a busy queue lapses once the attacker probes or invades', () => {
+    for (const next of ['Probing', 'Invading'] as const) {
+      const w = world(5, 6);
+      const s = createCounterAttackCaptionState();
+      rout(s, w, 2000);
+      offerCounterAttackCaption(s, w, P, sink(), 0, 0); // the build-up copy
+      for (let i = 0; i < READY + 6; i++) addFighter(w, P, 5, 5, null);
+      setTick(w, 2100);
+      noteCounterAttackTick(s, w, P);
+      expect(s.owedFollowUp, next).toBe(true);
+      const busy = { ...sink(), captionQueueIdle: () => false };
+      expect(offerCounterAttackCaption(s, w, P, busy, 0, 0), next).toBe(false);
+      expect(s.owedRoutTick, next).toBe(2100); // still owed behind the busy queue
+      getAIStateForColony(w, E)!.state = next;
+      setTick(w, 2101);
+      noteCounterAttackTick(s, w, P);
+      expect(s.owedRoutTick, next).toBeNull();
+      const idle = sink();
+      expect(offerCounterAttackCaption(s, w, P, idle, 0, 0), next).toBe(false);
+      expect(idle.shown, next).toEqual([]);
     }
   });
 
@@ -243,16 +267,22 @@ describe('the gated counter-attack caption', () => {
 describe('the follow-up is decided per sim tick, however the ticks are batched', () => {
   // The army is ready from tick N (fighters added by the sim tick that ends there),
   // and the attacker probes from N + 2: the look before each sim tick owes the Assault
-  // copy at N, whether those ticks run as one render frame or one per frame; a look
-  // only at each frame's end would see the probe first and lapse it.
+  // copy at N, whether those ticks run as one render frame or one per frame (a look
+  // only at each frame's end would see the probe first and lapse it); the owed copy,
+  // not yet shown, is then dropped once the probe is seen.
   const N = 2003;
-  function play(frames: readonly number[]): { s: CounterAttackCaptionState; w: WorldState } {
+  function play(frames: readonly number[]): {
+    s: CounterAttackCaptionState;
+    w: WorldState;
+    owedSeen: number | null;
+  } {
     const w = world(5, 6);
     const prev = createScenario(7, 'Normal');
     const s = createCounterAttackCaptionState();
     rout(s, w, 2000);
     offerCounterAttackCaption(s, w, P, sink(), 0, 0);
     expect(s.buildUpTick).toBe(2000);
+    let owedSeen: number | null = null;
     const loop = createGameLoop(
       (wd) => {
         const next = wd.tick + 1;
@@ -263,17 +293,15 @@ describe('the follow-up is decided per sim tick, however the ticks are batched',
       },
       w,
       {
-        onBeforeTick: (wd) =>
-          beforeSimTick(
-            wd,
-            [],
-            createRampageCaptionState(),
-            P,
-            prev,
-            createQueenDangerState(),
-            createEnemyQueenWoundState(),
-            s,
-          ),
+        onBeforeTick: (wd) => {
+          beforeSimTick(wd, [], P, prev, {
+            rampage: createRampageCaptionState(),
+            queenDanger: createQueenDangerState(),
+            enemyQueenWound: createEnemyQueenWoundState(),
+            counterAttack: s,
+          });
+          if (s.owedFollowUp && owedSeen === null) owedSeen = s.owedRoutTick;
+        },
       },
     );
     for (const n of frames) {
@@ -281,14 +309,16 @@ describe('the follow-up is decided per sim tick, however the ticks are batched',
       noteCounterAttackTick(s, w, P); // GameScene's own look, for the frame's last tick
     }
     expect(w.tick).toBe(2000 + frames.reduce((a, b) => a + b, 0));
-    return { s, w };
+    return { s, w, owedSeen };
   }
 
   it('one frame of five ticks, or five of one: owed at N either way', () => {
     for (const frames of [[5], [1, 1, 1, 1, 1], [2, 3]]) {
-      const { s } = play(frames);
-      expect(s.owedRoutTick).toBe(N);
-      expect(s.owedFollowUp).toBe(true);
+      const { s, owedSeen } = play(frames);
+      expect(owedSeen).toBe(N);
+      // ...and the probe from N + 2 then drops it unshown.
+      expect(s.owedRoutTick).toBeNull();
+      expect(s.owedFollowUp).toBe(false);
       expect(s.buildUpTick).toBeNull();
     }
   });

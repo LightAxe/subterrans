@@ -21,6 +21,14 @@ import { noteQueenDangerTick, type QueenDangerState } from './queen-danger.js';
 import { noteEnemyQueenWoundTick, type EnemyQueenWoundState } from './enemy-queen-wound.js';
 import { noteCounterAttackTick, type CounterAttackCaptionState } from './counter-attack-caption.js';
 
+/** The render-side caption states `beforeSimTick` advances on every sim tick. */
+export interface BeforeTickCaptions {
+  readonly rampage: RampageCaptionState;
+  readonly queenDanger: QueenDangerState;
+  readonly enemyQueenWound: EnemyQueenWoundState;
+  readonly counterAttack: CounterAttackCaptionState;
+}
+
 /**
  * Before each sim tick, in order:
  *   1. every AI colony's controller (its commands are enqueued before the drain);
@@ -46,17 +54,14 @@ import { noteCounterAttackTick, type CounterAttackCaptionState } from './counter
 export function beforeSimTick(
   world: WorldState,
   aiColonyIds: readonly ColonyId[],
-  rampageCaption: RampageCaptionState,
   viewerColonyId: ColonyId,
   prevState: WorldState,
-  queenDanger: QueenDangerState,
-  enemyQueenWound: EnemyQueenWoundState,
-  counterAttack: CounterAttackCaptionState,
+  captions: BeforeTickCaptions,
 ): void {
   for (const aiCid of aiColonyIds) runAIController(world, aiCid);
-  noteRampageThreat(rampageCaption, world, viewerColonyId, prevState);
-  noteQueenDangerTick(queenDanger, world, viewerColonyId);
-  noteEnemyQueenWoundTick(enemyQueenWound, world, viewerColonyId);
-  noteCounterAttackTick(counterAttack, world, viewerColonyId);
+  noteRampageThreat(captions.rampage, world, viewerColonyId, prevState);
+  noteQueenDangerTick(captions.queenDanger, world, viewerColonyId);
+  noteEnemyQueenWoundTick(captions.enemyQueenWound, world, viewerColonyId);
+  noteCounterAttackTick(captions.counterAttack, world, viewerColonyId);
   copyWorldState(world, prevState);
 }

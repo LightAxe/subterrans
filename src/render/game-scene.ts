@@ -2555,16 +2555,12 @@ export class GameScene extends Phaser.Scene {
       // `this.enemyQueenWound` and `this.counterAttackCaption` are read per call:
       // resetSessionState replaces them.)
       onBeforeTick: (w) =>
-        beforeSimTick(
-          w,
-          this.aiColonyIds,
-          this.rampageCaption,
-          PLAYER_COLONY_ID,
-          this.prevState,
-          this.queenDanger,
-          this.enemyQueenWound,
-          this.counterAttackCaption,
-        ),
+        beforeSimTick(w, this.aiColonyIds, PLAYER_COLONY_ID, this.prevState, {
+          rampage: this.rampageCaption,
+          queenDanger: this.queenDanger,
+          enemyQueenWound: this.enemyQueenWound,
+          counterAttack: this.counterAttackCaption,
+        }),
       onAfterDrain: (cmds) => {
         // SCEN-06 replay truth: never truncate — appendInputLog handles all commands
         appendInputLog(this.inputLog, cmds);

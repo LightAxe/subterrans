@@ -1,88 +1,49 @@
 // counter-attack-caption.ts — playtest 4: after an invasion of the player's colony
 // ends in a fighter rout, tell the player to strike back while the enemy's army is
-// broken.
+// broken. (Rationale: CONTEXT.md §Counter-attack caption; measurements: the
+// constants' doc comments below.)
 //
-// Playtest 4 found that the captions teach only defence: a novice who follows every
-// one of them (more fighters, a rally on each army warning) routs most waves but
-// never attacks, so it wins no game, even on Easy. The window to win is right after a
-// rout: the AI then spends AI_RECOVERY_DURATION_TICKS in Recovery and its home army
-// stays depleted until it musters the next wave. This caption names that window.
+// TRIGGER. An invasion launched at the viewing colony ends in a FIGHTER ROUT
+// (invasion_end, outcome 'fighter_rout'; the attacker's opponentColonyId is the
+// viewer), AND the attacker's whole army is broken: the same-tick Invading → Recovery
+// ai_state_transition carries triggerValues.aiFighterCount, which must be below the
+// tier's AI_INVADING_FIGHTER_THRESHOLD (the rout counts only the committed cohort, so
+// a big army kept at home must not read as broken). Not owed for a timeout, a
+// pre-cohort timeout (no invasion_end), a queen kill, or a wave of the viewer's own
+// colony. Every such rout owes it again, but not within
+// COUNTER_ATTACK_CAPTION_COOLDOWN_TICKS of the last rout it was owed for (the cooldown
+// runs from that rout, not from when the caption showed).
 //
-// The trigger: an invasion launched at the viewing colony ends in a FIGHTER ROUT
-// (ai-state.ts _checkInvadingToRecovery: fewer than 3 of its committed cohort alive;
-// _endInvasion emits the invasion_end, whose `outcome` says how it ended), AND the
-// attacker's whole army is broken then: fewer fighters than the tier's base invasion
-// need (AI_INVADING_FIGHTER_THRESHOLD), so it could not launch again. The rout counts
-// only the committed cohort, which is capped at AI_MAX_OPERATION_FIGHTERS: an AI that
-// held a big army at home (#421's food-gate holds: up to 87 fighters) may rout a wave
-// of 32 and keep 50 at home, and "their army is broken" would send the player into a
-// slaughter. The whole army is read from the ai_state_transition (Invading → Recovery)
-// the same AI step emits right after the invasion_end, on the same tick
-// (triggerValues.aiFighterCount), so it is the army at the rout. In the novice games
-// measured for this caption (playtest 4's harness, seeds 0-39 Easy and 0-19 Normal) the
-// AI's army just after a rout never reached the base need (at most 13 on Easy, 12 on
-// Normal), so this holds back only the big-army case. Nothing else owes it:
-//   - not the timeout (outcome 'timeout'): the invaders are still alive, out there;
-//   - not a pre-cohort timeout (no cohort was committed, so no army was beaten):
-//     the AI goes to Recovery without an invasion_end (only ai_state_transition);
-//   - not a queen kill ('queen_kill'): the match is over;
-//   - not a wave of the viewer's own colony (a player-colony AI, the --both-ai
-//     harness) routed at an enemy nest: the attacker's opponent must be the viewer
-//     (ai-state.ts opponentColonyId, the colony an AI invades), so any colony may be
-//     the viewer (CLNY-08).
-// WHAT it says depends on the viewer's own army (the army gate, from Fable's review and
-// the economy-captions measurement): the Assault copy only when the army can win
-// (counterAttackArmyReady: at least COUNTER_ATTACK_READY_FIGHTERS fighters and
-// COUNTER_ATTACK_READY_MARGIN more than the attacker's whole army). Pooled over the
-// caption-following novice's counter-attacks, an Assault with fewer than 8 fighters
-// won 1% (Easy) / 0% (Normal) of the time, and one past this gate 69% / 55%. An army
-// short of it gets COUNTER_ATTACK_BUILD_UP_TEXT ("… train more fighters, then strike
-// …") instead, and the Assault copy follows, once, the first tick the army is ready
-// (noteCounterAttackTick, per sim tick) within COUNTER_ATTACK_FOLLOW_UP_TICKS, unless
-// the attacker invades or probes again first or a queen dies. The copy is chosen as
-// the queue takes the caption, on the frame's projected world. (With more than two
-// colonies, a follow-up owed in the same frame as another attacker's fresh rout would
-// replace it; opponentColonyId assumes two colonies today.)
+// THE ARMY GATE. The Assault copy is used only when counterAttackArmyReady: at least
+// COUNTER_ATTACK_READY_FIGHTERS fighters and COUNTER_ATTACK_READY_MARGIN more than the
+// attacker's whole army. Otherwise COUNTER_ATTACK_BUILD_UP_TEXT is shown, and the
+// Assault copy follows once, the first tick the army is ready, within
+// COUNTER_ATTACK_FOLLOW_UP_TICKS, unless the attacker invades or probes again or a
+// queen dies. The copy is chosen as the queue takes the caption, on the projected
+// world. The gate (counterAttackArmyReady) is read in two places, the frame step's copy
+// choice and the follow-up's per-tick check (noteCounterAttackTick), and decides the
+// same way in both.
 //
-// Every such rout owes it again, so it repeats as the storage hint does, but not within
-// COUNTER_ATTACK_CAPTION_COOLDOWN_TICKS of the last rout it was owed for. The cooldown
-// runs from that rout, not from when the caption showed (raid news starts its cooldown
-// when the queue takes it): which routs owe it must not depend on the frame it showed
-// in. With two colonies this never holds a wave back (see the constant); with more, a
-// caption that went stale unshown still holds back another attacker's rout for 60 s.
+// DECIDES PER SIM TICK, PRESENTS PER RENDER FRAME (#416 review, queen-danger.ts), so
+// the outcome does not depend on how ticks are batched into frames. Each rout is
+// judged on its own events, in tick order, dated by the events' tick: GameScene passes
+// every new event to noteCounterAttackEvent (consumeEventsForRender), and the
+// follow-up is decided by noteCounterAttackTick in beforeSimTick. The frame step
+// (offerCounterAttackCaption) presents what is owed and picks the copy.
 //
-// It DECIDES per sim tick and PRESENTS per render frame (#416 review, queen-danger.ts).
-// The game loop runs up to MAX_CATCHUP_TICKS ticks in one frame, so a rule judged on
-// the world a frame leaves would depend on how the ticks were batched. Each rout is
-// therefore judged on its own events, in tick order, dated by the events' tick:
-// GameScene passes every new event to noteCounterAttackEvent (consumeEventsForRender,
-// which reads the events of every tick run while Playing once, however the ticks were
-// batched: by tick, not by index; an invasion_end or ai_state_transition is always
-// appended, even at the event cap, unless the buffer holds nothing but terminal
-// events). The army check and the cooldown use only the events, so which routs owe the
-// caption is the same for any batching. The follow-up after the build-up copy is
-// decided per tick too (noteCounterAttackTick in beforeSimTick). The frame step
-// (offerCounterAttackCaption) presents what is owed; all it decides is which copy the
-// queue takes, from the army as it stands then, and (for the build-up copy) when the
-// follow-up's window opens.
+// PRESENTATION. A RECURRING caption (recurring-captions.ts offerRecurringCaption): it
+// enters the queue only while the queue is fully idle and stays owed, offered every
+// frame, for COUNTER_ATTACK_CAPTION_OWED_TICKS; while owed, a long caption gives way
+// and the storage hint waits (recurringCaptionStillOwed). GameScene offers it after
+// the army and rampage warnings and before raid news.
 //
-// It is a RECURRING caption (recurring-captions.ts offerRecurringCaption): it enters
-// the caption queue only while the queue is fully idle, so it never takes the pending
-// slot a one-shot caption would need, and it stays owed, offered again every frame,
-// for COUNTER_ATTACK_CAPTION_OWED_TICKS. While it is owed, a long caption on screen
-// gives way and the storage hint waits (recurringCaptionStillOwed), so it comes next.
-// GameScene offers it after the army warning and the rampage warning (threats to the
-// colony come first) and before raid news. Raid news owed behind it (an invasion
-// raids the player's larder) shortens its own 4 s hold to the 2 s readable floor, as
-// it does the army warning's: the accepted cost of a long caption being readable.
-// Owed, it goes stale once that window has passed; once either queen is dead (the
-// match is over; GameScene stops offering captions at game over anyway, and UIScene
-// closes the queue); or once the player is already doing what it says (an Assault
-// order on that colony's entrance), judged on the frame.
+// STALENESS. Owed, it is dropped unshown once the owed window has passed, once either
+// queen is dead, or once the player is already doing what it says (an Assault order on
+// that colony's entrance, judged on the frame's projected world).
 //
 // Render-side session state only: reads world state and events, writes nothing, saves
-// nothing (a loaded save starts with none owed: saves keep no events). Pure and
-// Phaser-free; GameScene owns the state.
+// nothing (a loaded save starts with none owed). Pure and Phaser-free; GameScene owns
+// the state.
 
 import type { WorldState } from '../sim/types.js';
 import type { SimEvent } from '../sim/telemetry.js';
@@ -222,14 +183,24 @@ export function createCounterAttackCaptionState(): CounterAttackCaptionState {
  * Economy captions — once per sim tick (sim-tick-hook.ts beforeSimTick, and GameScene
  * for the frame's last tick): after the build-up caption, owe the Assault caption the
  * first tick the viewer's army is ready (counterAttackArmyReady). The follow-up lapses
- * after COUNTER_ATTACK_FOLLOW_UP_TICKS, once the attacker invades or probes again, or
- * once either queen is dead. Read-only on the world.
+ * after COUNTER_ATTACK_FOLLOW_UP_TICKS, once the attacker invades or probes again (also
+ * when already owed behind a busy queue), or once either queen is dead. Read-only on the world.
  */
 export function noteCounterAttackTick(
   state: CounterAttackCaptionState,
   world: WorldState,
   viewerColonyId: ColonyId,
 ): void {
+  // An owed follow-up the queue has not taken yet lapses the tick the attacker invades
+  // or probes again, as a pending one does below (it is no longer a broken army to
+  // strike): dropped unshown, however long the queue stays busy.
+  if (state.owedFollowUp && state.owedRoutTick !== null) {
+    const owedAi = getAIStateForColony(world, state.owedAttackerId)?.state;
+    if (owedAi === 'Invading' || owedAi === 'Probing') {
+      state.owedRoutTick = null;
+      state.owedFollowUp = false;
+    }
+  }
   const since = state.buildUpTick;
   if (since === null) return;
   const attacker = state.buildUpAttackerId;
@@ -323,7 +294,9 @@ export function noteCounterAttackEvent(
 }
 
 /** The rout of `attackerId` on `routTick`, its army then `fighters`, owes the caption
- *  if that army is broken and the cooldown since the last rout that owed it is up. */
+ *  if that army is broken and the cooldown since the last rout that owed it is up.
+ *  A rout owes it afresh even if a follow-up is still owed unshown (two colonies
+ *  today: with more, another attacker's rout would replace it). */
 function oweIfBroken(
   state: CounterAttackCaptionState,
   world: WorldState,

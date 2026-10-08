@@ -340,16 +340,12 @@ describe('GameScene’s wiring on the real sim: the game loop, beforeSimTick, a 
       world,
       {
         onBeforeTick: (w) =>
-          beforeSimTick(
-            w,
-            [],
-            rampage,
-            PLAYER_COLONY_ID,
-            prev,
-            danger,
-            s,
-            createCounterAttackCaptionState(),
-          ),
+          beforeSimTick(w, [], PLAYER_COLONY_ID, prev, {
+            rampage: rampage,
+            queenDanger: danger,
+            enemyQueenWound: s,
+            counterAttack: createCounterAttackCaptionState(),
+          }),
         onTickOutcome: (o) => {
           over = o;
         },
@@ -628,16 +624,12 @@ describe('batching invariance: every frame presents what the per-tick model deci
         onBeforeTick:
           hook === 'beforeSimTick'
             ? (w) =>
-                beforeSimTick(
-                  w,
-                  [],
-                  rampage,
-                  PLAYER_COLONY_ID,
-                  prev,
-                  danger,
-                  s,
-                  createCounterAttackCaptionState(),
-                )
+                beforeSimTick(w, [], PLAYER_COLONY_ID, prev, {
+                  rampage: rampage,
+                  queenDanger: danger,
+                  enemyQueenWound: s,
+                  counterAttack: createCounterAttackCaptionState(),
+                })
             : (w) => noteEnemyQueenWoundTick(s, w, PLAYER_COLONY_ID),
       },
     );

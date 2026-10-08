@@ -560,16 +560,12 @@ describe('#416 review: harm inside a frame or a tick (seen before every sim tick
       world,
       {
         onBeforeTick: (w) =>
-          beforeSimTick(
-            w,
-            [],
-            rampage,
-            PLAYER_COLONY_ID,
-            prev,
-            s,
-            createEnemyQueenWoundState(),
-            createCounterAttackCaptionState(),
-          ),
+          beforeSimTick(w, [], PLAYER_COLONY_ID, prev, {
+            rampage: rampage,
+            queenDanger: s,
+            enemyQueenWound: createEnemyQueenWoundState(),
+            counterAttack: createCounterAttackCaptionState(),
+          }),
       },
     );
     const shown: number[] = [];
@@ -982,16 +978,12 @@ describe('#416 review: the outcome of every tick is the same however the ticks a
         onBeforeTick:
           hook === 'beforeSimTick'
             ? (w) =>
-                beforeSimTick(
-                  w,
-                  [],
-                  rampage,
-                  PLAYER_COLONY_ID,
-                  prev,
-                  s,
-                  createEnemyQueenWoundState(),
-                  createCounterAttackCaptionState(),
-                )
+                beforeSimTick(w, [], PLAYER_COLONY_ID, prev, {
+                  rampage: rampage,
+                  queenDanger: s,
+                  enemyQueenWound: createEnemyQueenWoundState(),
+                  counterAttack: createCounterAttackCaptionState(),
+                })
             : (w) => noteQueenDangerTick(s, w, PLAYER_COLONY_ID),
       },
     );
