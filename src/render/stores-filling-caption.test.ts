@@ -46,10 +46,10 @@ function setTick(w: WorldState, t: number): void {
   w.tick = t;
 }
 
-function scenario(larders = 1): { world: WorldState; colony: ColonyRecord } {
+function scenario(foodStorageChambers = 1): { world: WorldState; colony: ColonyRecord } {
   const world = createScenario(7, 'Normal');
   const colony = world.colonies[P]!;
-  for (let i = 0; i < larders; i++) {
+  for (let i = 0; i < foodStorageChambers; i++) {
     addChamberForTest(world, colony, {
       chamberId: nextChamberId++,
       chamberType: ChamberType.FoodStorage,
@@ -62,7 +62,7 @@ function scenario(larders = 1): { world: WorldState; colony: ColonyRecord } {
   return { world, colony };
 }
 
-/** Fill the stores to `num/den` of capacity (the pool full first, then the larders). */
+/** Fill the stores to `num/den` of capacity (the pool full first, then the Food Storage chambers). */
 function fillTo(world: WorldState, colony: ColonyRecord, num: number, den: number): void {
   const want = Math.ceil((colonyFoodCapacity(colony) * num) / den);
   const pool = Math.min(want, BASE_FOOD_STORAGE_CAPACITY);
@@ -118,7 +118,7 @@ function sink(idle = true): RecurringCaptionSink & { shown: string[] } {
 }
 
 describe('storesFillingCondition', () => {
-  it('holds at three-quarters full with a larder and none designated', () => {
+  it('holds at three-quarters full with a Food Storage chamber and none designated', () => {
     const { world, colony } = scenario(2);
     fillTo(world, colony, 3, 4);
     expect(storesFillingCondition(world, P)).toBe(true);

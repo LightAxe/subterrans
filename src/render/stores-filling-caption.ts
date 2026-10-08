@@ -1,14 +1,14 @@
 // stores-filling-caption.ts — economy captions (playtest 4 follow-up): tell the player
 // to build the next Food Storage chamber BEFORE the stores fill.
 //
-// Playtest 4's novice, who builds a larder only when the #413 storage hint asks for
+// Playtest 4's novice, who builds a Food Storage chamber only when the #413 storage hint asks for
 // one, loses 18 of 20 Easy games. The hint fires only once storage is already
 // holding the queen back; by then the stores have been full for a while and the
 // colony's foragers have had nowhere to put food (forage backpressure,
 // food-api.ts colonyForageBackpressure: they are sent idle). Measured over the
-// first 12 minutes (Easy, seeds 0-19), that novice builds 3-4 larders, spends
+// first 12 minutes (Easy, seeds 0-19), that novice builds 3-4 Food Storage chambers, spends
 // 4.5 minutes in backpressure and brings in 448 food; the scripted "human", who
-// builds a larder whenever the Food count reads three-quarters full, builds 8 by
+// builds a Food Storage chamber whenever the Food count reads three-quarters full, builds 8 by
 // minute 5, spends 0.2 minutes in backpressure and brings in 595. Grafting only that
 // one decision onto the novice lifts it from 2 to 17 Easy wins in 20 (8 of 20 on
 // Normal, against 1). This caption teaches it.

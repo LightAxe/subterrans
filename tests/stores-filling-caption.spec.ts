@@ -14,7 +14,7 @@
 // Setup, without touching a running sim: the page builds the raid world
 // (raid-test-utils.ts: the player has a completed Queen chamber with the queen in it and
 // a completed Food Storage chamber, no workers, spider and AI off) and fills the
-// entrance pool and the larder. No Nursery, so the queen is not ready to lay and storage
+// entrance pool and the Food Storage chamber. No Nursery, so the queen is not ready to lay and storage
 // cannot hold her back (that is the storage hint's case). Only the queen eats, so the
 // stores stay above three-quarters for the length of a test. The save goes through the
 // real save path (manualSave); a reload boots it through Continue.
@@ -71,7 +71,7 @@ async function freezeCaptionClock(page: Page, frozen: boolean): Promise<void> {
   }, frozen);
 }
 
-/** Seed the save: the raid world with the player's pool and larder full. */
+/** Seed the save: the raid world with the player's pool and Food Storage chamber full. */
 async function seedFullStoresSave(page: Page): Promise<void> {
   await page.evaluate(async () => {
     const utilsPath = '/src/sim/raid-test-utils.ts';
