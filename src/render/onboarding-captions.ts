@@ -124,7 +124,7 @@ export function checkAndTrigger(key: CaptionKey, textOverride?: string): string 
 // rampage). It reads its text with captionText.
 //
 // #394 — the one-shot invasion caption ('The enemy is attacking your hive.', on
-// the first invasion_start only) is gone: the army warning (enemy-gathering.ts)
+// the first invasion_start only) is gone: the army warning (army-warning.ts)
 // announces every invasion wave instead, naming the threatened entrance — read
 // from world state, with the AI's invasion_start only as its fallback.
 //

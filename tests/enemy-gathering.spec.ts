@@ -23,7 +23,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { clickCanvasRect, settleToPlaying, waitForUiHook } from './helpers/boot.js';
 import { MINIMAP_RECT, SAVE_PROMPT_CONTINUE_RECT } from './helpers/geometry.js';
 import { CAPTION_YIELD_FLOOR_MS } from '../src/render/caption-queue.js';
-import { GATHER_CAPTION_HOLD_MS } from '../src/render/enemy-gathering.js';
+import { ARMY_CAPTION_HOLD_MS } from '../src/render/army-warning.js';
 
 const RALLY_TEXT = 'Fighters will converge here.';
 const WARNING =
@@ -193,12 +193,12 @@ test.describe('#372 — enemy army gathering', () => {
     });
 
     // It holds long enough to read: the full-opacity hold UIScene scheduled for
-    // it is GATHER_CAPTION_HOLD_MS (a default caption holds 800 ms), and nothing
+    // it is ARMY_CAPTION_HOLD_MS (a default caption holds 800 ms), and nothing
     // queued behind it here made it give way. Read from the hold log UIScene
     // records as the caption's fade-out is scheduled — not timed.
     await expect
       .poll(() => warningHold(page), { timeout: 10_000 })
-      .toEqual({ holdMs: GATHER_CAPTION_HOLD_MS, yielded: false });
+      .toEqual({ holdMs: ARMY_CAPTION_HOLD_MS, yielded: false });
 
     // The army's dots are on the minimap where it stands: bright red pixels
     // within 3 px of its rally tile. The ring is centred on the army's bounding
@@ -267,7 +267,7 @@ test.describe('#372 — enemy army gathering', () => {
         ) ?? false,
     );
     expect(accepted).toBe(true);
-    // The warning gives way: its recorded hold is cut from GATHER_CAPTION_HOLD_MS
+    // The warning gives way: its recorded hold is cut from ARMY_CAPTION_HOLD_MS
     // to the readable floor — exactly the floor if it gave way within its first
     // CAPTION_YIELD_FLOOR_MS at full opacity, or what it had already held if
     // later (a slow runner): either way below the full hold. Read from the hold
@@ -276,7 +276,7 @@ test.describe('#372 — enemy army gathering', () => {
     const hold = (await warningHold(page))!;
     expect(hold.yielded).toBe(true);
     expect(hold.holdMs).toBeGreaterThanOrEqual(CAPTION_YIELD_FLOOR_MS);
-    expect(hold.holdMs).toBeLessThan(GATHER_CAPTION_HOLD_MS);
+    expect(hold.holdMs).toBeLessThan(ARMY_CAPTION_HOLD_MS);
     // And the rally caption is the next to show.
     await expect.poll(() => captions(page), { timeout: 10_000 }).toContain(RALLY_TEXT);
     const shown = await captions(page);

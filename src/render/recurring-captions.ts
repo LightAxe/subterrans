@@ -96,7 +96,7 @@ export function offerRecurringCaption(
  * a 2 s readable floor (2.7 s in all, UIScene.yieldLongCaption), so at 4x (a 2.5 s
  * real-time window) news owed from the same moment one began can still expire behind
  * it, as can a march or gathering warning behind the hint (its own window,
- * GATHER_CAPTION_OWED_TICKS, is also 200). So can news owed while an invasion's
+ * ARMY_CAPTION_OWED_TICKS, is also 200). So can news owed while an invasion's
  * launch warning (owed until shown, #404 review) waited out the same busy queue,
  * which it then enters first. That is a known cost of a once-per-spell
  * caption being readable, and of an army outranking news.
@@ -248,7 +248,7 @@ export function offerOwedRampageCaption(
  * asks a long-hold caption to give way (UIScene.yieldLongCaption).
  * `armyWarningOwed` (#395): the storage hint is a long-hold caption too, and an
  * army warning owed behind it would otherwise wait its full 4 s; a march or
- * gathering warning would, at 4x, go stale (GATHER_CAPTION_OWED_TICKS) unshown (an
+ * gathering warning would, at 4x, go stale (ARMY_CAPTION_OWED_TICKS) unshown (an
  * invasion's launch warning is owed until shown). Giving way narrows that to a
  * warning owed in the hint's first ~0.2 s at 4x (see RAMPAGE_CAPTION_OWED_TICKS).
  * The warning being offered is never itself the caption showing: once shown it is
