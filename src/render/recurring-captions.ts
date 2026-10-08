@@ -32,11 +32,15 @@
 //     never decreases, so it falling below its value when the warning became
 //     owed means the spider has eaten by some path.
 //   - (playtest 4) the counter-attack caption after a fighter rout
-//     (counter-attack-caption.ts) stays owed for COUNTER_ATTACK_CAPTION_OWED_TICKS.
+//     (counter-attack-caption.ts) stays owed for COUNTER_ATTACK_CAPTION_OWED_TICKS;
+//   - (economy captions) the stores-filling caption (stores-filling-caption.ts)
+//     stays owed for STORES_FILLING_OWED_TICKS.
 //
 // GameScene offers the owed rampage warning before raid news each frame, so a
 // rampage outranks raid news when both wait on the same idle queue; the
-// counter-attack caption comes between them.
+// counter-attack caption comes between them. The stores-filling caption is advice:
+// offered after every other caption but the storage hint, and, owed, it makes no long
+// caption give way (it is not part of recurringCaptionStillOwed).
 //
 // Pure + Phaser-free: GameScene owns the state and passes its UIScene in.
 

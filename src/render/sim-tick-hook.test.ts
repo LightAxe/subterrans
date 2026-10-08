@@ -21,6 +21,8 @@ import {
   SPIDER_HUNGER_THRESHOLD_TICKS,
 } from '../sim/constants.js';
 import { beforeSimTick } from './sim-tick-hook.js';
+import { createStoresFillingCaptionState } from './stores-filling-caption.js';
+import { createStorageHintState } from './storage-hint.js';
 import { createQueenDangerState } from './queen-danger.js';
 import { createCounterAttackCaptionState } from './counter-attack-caption.js';
 import { createEnemyQueenWoundState } from './enemy-queen-wound.js';
@@ -150,6 +152,8 @@ describe('beforeSimTick — the rampage threat is checked every tick (#397)', ()
           queenDanger: createQueenDangerState(),
           enemyQueenWound: createEnemyQueenWoundState(),
           counterAttack: createCounterAttackCaptionState(),
+          storesFilling: createStoresFillingCaptionState(),
+          storageHint: createStorageHintState(),
         }),
     });
     frame(loop, world, s, ui, MS_PER_TICK * MAX_CATCHUP_TICKS, prev);
@@ -174,6 +178,8 @@ describe('beforeSimTick — the rampage threat is checked every tick (#397)', ()
           queenDanger: createQueenDangerState(),
           enemyQueenWound: createEnemyQueenWoundState(),
           counterAttack: createCounterAttackCaptionState(),
+          storesFilling: createStoresFillingCaptionState(),
+          storageHint: createStorageHintState(),
         }),
     });
     loop.update(MS_PER_TICK * 3);
@@ -203,6 +209,8 @@ describe('beforeSimTick — the rampage threat is checked every tick (#397)', ()
           queenDanger: createQueenDangerState(),
           enemyQueenWound: createEnemyQueenWoundState(),
           counterAttack: createCounterAttackCaptionState(),
+          storesFilling: createStoresFillingCaptionState(),
+          storageHint: createStorageHintState(),
         }),
     });
     for (let f = 0; f < 4; f++) frame(loop, world, s, ui, MS_PER_TICK, prev);
@@ -219,6 +227,8 @@ describe('beforeSimTick — the rampage threat is checked every tick (#397)', ()
       queenDanger: createQueenDangerState(),
       enemyQueenWound: createEnemyQueenWoundState(),
       counterAttack: createCounterAttackCaptionState(),
+      storesFilling: createStoresFillingCaptionState(),
+      storageHint: createStorageHintState(),
     });
     // The enemy AI's opening commands are queued for this tick's drain...
     expect(world.commandQueue.length).toBeGreaterThan(0);
@@ -246,6 +256,8 @@ describe('beforeSimTick — the rampage threat is checked every tick (#397)', ()
             queenDanger: createQueenDangerState(),
             enemyQueenWound: createEnemyQueenWoundState(),
             counterAttack: createCounterAttackCaptionState(),
+            storesFilling: createStoresFillingCaptionState(),
+            storageHint: createStorageHintState(),
           }),
       });
       frame(loop, world, s, ui, MS_PER_TICK * ticksPerFrame, prev);
@@ -290,14 +302,14 @@ describe('beforeSimTick — the rampage threat is checked every tick (#397)', ()
     expect(rampageThreatenedViewerLastTick(prev, world, P)).toBe(false);
   });
 
-  it('GameScene runs it as the game loop’s onBeforeTick, with its own caption, queen-danger, enemy-queen-wound and counter-attack state', () => {
+  it('GameScene runs it as the game loop’s onBeforeTick, with its own caption, queen-danger, enemy-queen-wound, counter-attack and stores-filling state', () => {
     // Source-text check (as ai-controller.test.ts does for CLNY-08): no unit test
     // boots the Phaser scene, and no e2e can force a one-tick threat inside a
     // multi-tick frame.
     const here = dirname(fileURLToPath(import.meta.url));
     const src = readFileSync(join(here, 'game-scene.ts'), 'utf8');
     expect(src).toMatch(
-      /onBeforeTick:\s*\(w\)\s*=>\s*beforeSimTick\(\s*w,\s*this\.aiColonyIds,\s*PLAYER_COLONY_ID,\s*this\.prevState,\s*\{\s*rampage:\s*this\.rampageCaption,\s*queenDanger:\s*this\.queenDanger,\s*enemyQueenWound:\s*this\.enemyQueenWound,\s*counterAttack:\s*this\.counterAttackCaption,?\s*\},?\s*\)/,
+      /onBeforeTick:\s*\(w\)\s*=>\s*beforeSimTick\(\s*w,\s*this\.aiColonyIds,\s*PLAYER_COLONY_ID,\s*this\.prevState,\s*\{\s*rampage:\s*this\.rampageCaption,\s*queenDanger:\s*this\.queenDanger,\s*enemyQueenWound:\s*this\.enemyQueenWound,\s*counterAttack:\s*this\.counterAttackCaption,\s*storesFilling:\s*this\.storesFilling,\s*storageHint:\s*this\.storageHint,?\s*\},?\s*\)/,
     );
     // ...and the per-frame check passes the same snapshot, for the frame's last tick.
     expect(src).toMatch(
@@ -306,6 +318,10 @@ describe('beforeSimTick — the rampage threat is checked every tick (#397)', ()
     // ...and looks for the counter-attack caption's follow-up on the frame's last tick.
     expect(src).toMatch(
       /noteCounterAttackTick\(\s*this\.counterAttackCaption,\s*this\.world,\s*PLAYER_COLONY_ID,?\s*\)/,
+    );
+    // ...and at the stores for the stores-filling caption, with the storage hint's clock.
+    expect(src).toMatch(
+      /noteStoresFillingTick\(\s*this\.storesFilling,\s*this\.world,\s*PLAYER_COLONY_ID,\s*this\.storageHint\.lastOfferedTick,?\s*\)/,
     );
   });
 });
