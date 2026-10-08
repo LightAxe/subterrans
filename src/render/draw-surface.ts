@@ -64,6 +64,7 @@ import {
 } from './camera-adapter.js';
 import { SPIDER_SPRITE_HEIGHT, SPIDER_SPRITE_WIDTH } from './ant-sprite-layer.js';
 import { activeRaidOrder, drawRaidOrderBadge, raidBadgeWorldRect } from './raid-order-view.js';
+import { createHpBarDrawn, drawHpBar, hpRatio, type HpBarDrawn } from './hp-bar.js';
 import { SPIDER_HUNGER_THRESHOLD_TICKS, SPIDER_HP_FULL } from '../sim/constants.js';
 import {
   pileAmountFp,
@@ -105,6 +106,9 @@ const scratchAntOpts: AntSpriteDrawOptions = {
   scale: 1,
   carrying: false,
 };
+
+// #427 render-scratch: the spider HP bar's record (drawHpBar overwrites every field).
+const scratchSpiderHpBar: HpBarDrawn = createHpBarDrawn();
 
 // ---------------------------------------------------------------------------
 // GfxLike — minimal Graphics interface (Phaser.GameObjects.Graphics satisfies this)
@@ -588,25 +592,17 @@ export function drawSurfaceEntities(
       }
 
       // Health bar (issue #148): render-only HP indicator above the sprite, drawn on
-      // overlayGfx so it renders above the spider sprite.
-      const hpRatio = Math.max(0, Math.min(1, curr.spider.hp / SPIDER_HP_FULL));
-      if (hpRatio < 1) {
-        const barW = 24;
-        const barH = 4;
-        const barX = Math.round(spiderWorldX - barW / 2);
-        const barY = Math.round(spiderWorldY - SPIDER_SPRITE_HEIGHT / 2 - barH - 4);
-        const fillColor =
-          hpRatio > 0.5
-            ? lerpColor(0xffcc00, 0x33cc33, (hpRatio - 0.5) / 0.5)
-            : lerpColor(0xcc2020, 0xffcc00, hpRatio / 0.5);
-        const fillW =
-          hpRatio <= 0 ? 0 : Math.max(1, Math.min(barW - 1, Math.round(barW * hpRatio)));
-        overlayGfx.fillStyle(0x000000, 0.7);
-        overlayGfx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
-        overlayGfx.fillStyle(0x333333, 0.85);
-        overlayGfx.fillRect(barX, barY, barW, barH);
-        overlayGfx.fillStyle(fillColor, 1);
-        overlayGfx.fillRect(barX, barY, fillW, barH);
+      // overlayGfx so it renders above the spider sprite. Shown once it is hurt. #427:
+      // drawn by the shared hp-bar.ts, as the enemy queen's is underground.
+      const spiderHpRatio = hpRatio(curr.spider.hp, SPIDER_HP_FULL);
+      if (spiderHpRatio < 1) {
+        drawHpBar(
+          overlayGfx,
+          spiderWorldX,
+          spiderWorldY - SPIDER_SPRITE_HEIGHT / 2,
+          spiderHpRatio,
+          scratchSpiderHpBar,
+        );
       }
     }
   }

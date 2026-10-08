@@ -343,6 +343,17 @@ her max where she stands. Up to V70 the home-ground +4 was a hidden buffer inste
 _Avoid_: **regen** (say heal), **armour**, **shield**; **home** alone for home ground
 (at home, for meals, includes the ground near the colony's own entrances).
 
+**Wound spell / "Their queen is wounded!"** (#427, render-only):
+The enemy-nest view (the X toggle) draws the enemy queen's **HP bar** over her, as
+the spider's is drawn over it: her HP out of her max where she stands, full or
+wounded. It is drawn with her sprite and only when her sprite is: it reveals a stat of
+an entity the player can already inspect at any time (there is no fog of war
+underground), and only where she can be seen. A **wound spell** starts
+when she drops below half her max HP and ends once she has healed back to three
+quarters; the caption "Their queen is wounded!" comes once per spell
+(`src/render/enemy-queen-wound.ts`).
+_Avoid_: "injured", "low health" for the caption's condition.
+
 **Spider priority** (the spider order; `MarkSpiderPriority`):
 The player's order sending the colony's surface fighters at the spider, wherever it
 goes; enough of them on its tile at once (`SPIDER_SWARM_FIGHTER_THRESHOLD`) each strike

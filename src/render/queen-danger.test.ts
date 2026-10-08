@@ -13,6 +13,7 @@ import {
   type QueenDangerState,
 } from './queen-danger.js';
 import { beforeSimTick } from './sim-tick-hook.js';
+import { createEnemyQueenWoundState } from './enemy-queen-wound.js';
 import { createRampageCaptionState } from './recurring-captions.js';
 import { createGameLoop, MAX_CATCHUP_TICKS, MS_PER_TICK } from '../platform/game-loop.js';
 import { checkAndTrigger, resetCaptions, untrigger } from './onboarding-captions.js';
@@ -556,7 +557,10 @@ describe('#416 review: harm inside a frame or a tick (seen before every sim tick
         return outcome;
       },
       world,
-      { onBeforeTick: (w) => beforeSimTick(w, [], rampage, PLAYER_COLONY_ID, prev, s) },
+      {
+        onBeforeTick: (w) =>
+          beforeSimTick(w, [], rampage, PLAYER_COLONY_ID, prev, s, createEnemyQueenWoundState()),
+      },
     );
     const shown: number[] = [];
     let pulses = 0;
@@ -967,7 +971,16 @@ describe('#416 review: the outcome of every tick is the same however the ticks a
       {
         onBeforeTick:
           hook === 'beforeSimTick'
-            ? (w) => beforeSimTick(w, [], rampage, PLAYER_COLONY_ID, prev, s)
+            ? (w) =>
+                beforeSimTick(
+                  w,
+                  [],
+                  rampage,
+                  PLAYER_COLONY_ID,
+                  prev,
+                  s,
+                  createEnemyQueenWoundState(),
+                )
             : (w) => noteQueenDangerTick(s, w, PLAYER_COLONY_ID),
       },
     );

@@ -76,6 +76,8 @@ import {
   ANT_DOT_SCREEN_PX,
 } from './camera-adapter.js';
 import { visibleTileRange } from './draw-surface.js';
+import { createHpBarDrawn, drawHpBar, hpRatio, type HpBarDrawn } from './hp-bar.js';
+import { antMaxHp } from '../sim/health.js';
 
 // Guard: the glow key `((colonyId << 24) | (ty << 16) | tx)` (packed ~L565,
 // decoded ~L587) packs tx in bits 0..7 and ty in bits 16..23 — one byte each,
@@ -143,6 +145,65 @@ const scratchStaticOptsUg: StaticSpriteDrawOptions = {
   y: 0,
   tint: undefined,
 };
+
+// ---------------------------------------------------------------------------
+// #427 — the enemy queen's HP bar
+//
+// Up to #427 only the spider showed its HP, so a player who wounded the enemy queen
+// could not see it: she heals at the ant rate since #415 (1 HP per 40 ticks, about
+// 1½ minutes to full), which only pays off if the player knows to press on.
+//
+// VISIBILITY. The game has no fog of war underground: the X toggle shows the enemy's
+// nest at any time, with every ant, chamber and brood in it, the queen included. Her
+// HP is new information, but it is a stat of an entity the player can already
+// inspect at any time, and it is shown only where she can be seen: the bar is drawn
+// with her sprite, in the same pass, only when that sprite is drawn — she is alive,
+// underground in the grid being viewed (her own nest), and not culled out of view —
+// and only when the nest being viewed is not the viewer's own (the player's queen has
+// the HUD's bar). It is always shown there, full or wounded, so the player learns
+// what a healthy queen's bar looks like before it drops. On the surface (a queen
+// before she founds her nest) no bar is drawn.
+//
+// SCALE. Her HP fraction is against her max HP where she stands (health.ts antMaxHp:
+// QUEEN_HP_HOME, 50, in her nest; COMBAT_HP_QUEEN, 46, away), so a full queen always
+// reads full.
+// ---------------------------------------------------------------------------
+
+/** What drawUndergroundEntities drew for the enemy queen's HP bar (world px). */
+export interface EnemyQueenHpBar extends HpBarDrawn {
+  /** Her entity id. */
+  queenId: number;
+  /** Her HP and her max HP where she stands (antMaxHp), as drawn. */
+  hp: number;
+  maxHp: number;
+}
+
+/**
+ * Half the queen sprite's diagonal (world px): the farthest any corner of it reaches
+ * from her centre however she is turned. The bar sits this far above her centre (plus
+ * HP_BAR_GAP), so it clears her sprite at any rotation.
+ */
+export const QUEEN_HP_BAR_LIFT_PX = Math.hypot(QUEEN_SPRITE_WIDTH, QUEEN_SPRITE_HEIGHT) / 2;
+
+// #427 render-scratch: the queen bar's record (every field overwritten each draw).
+const scratchQueenHpBar: EnemyQueenHpBar = { ...createHpBarDrawn(), queenId: -1, hp: 0, maxHp: 0 };
+
+/** Draw queen `q`'s HP bar above (`cx`, `cy`) on `gfx`; returns the reused record. */
+function drawQueenHpBar(
+  gfx: GfxLike,
+  world: WorldState,
+  q: number,
+  cx: number,
+  cy: number,
+): EnemyQueenHpBar {
+  const hp = world.ants.hp[q] ?? 0;
+  const maxHp = antMaxHp(world, q);
+  drawHpBar(gfx, cx, cy - QUEEN_HP_BAR_LIFT_PX, hpRatio(hp, maxHp), scratchQueenHpBar);
+  scratchQueenHpBar.queenId = q;
+  scratchQueenHpBar.hp = hp;
+  scratchQueenHpBar.maxHp = maxHp;
+  return scratchQueenHpBar;
+}
 
 // ---------------------------------------------------------------------------
 // drawOutlineSegment — draw a thick line segment between two arbitrary points
@@ -391,6 +452,10 @@ export function restampUndergroundTiles(
  *   grid the player is viewing. Drives chamber / queen / brood rendering and
  *   the ant grid-occupancy filter. Defaults to PLAYER_COLONY_ID for backward
  *   compat with existing test fixtures.
+ * @param overlayGfx - #427. The Graphics layer above the sprites, for the enemy
+ *   queen's HP bar (see "the enemy queen's HP bar" above). Without it no bar is drawn.
+ * @returns #427 — the enemy queen's HP bar as drawn this call (a record reused across
+ *   calls: read it before the next one), or null when none was drawn.
  */
 export function drawUndergroundEntities(
   gfx: GfxLike,
@@ -406,11 +471,16 @@ export function drawUndergroundEntities(
   // Stage 2 §C13: strategic LOD — ants render as screen-constant dots; the ant-derived
   // contested-glow + brood detail are skipped (allocation-free strategic frame).
   dotMode: boolean = false,
-): void {
+  overlayGfx?: GfxLike,
+): EnemyQueenHpBar | null {
   const colony = curr.colonies[activeUndergroundColonyId];
-  if (colony === undefined) return;
+  if (colony === undefined) return null;
   // PR 6-render (#128 class-iii) — the grid for sprite-containment scale clamping.
   const ugGrid = curr.undergroundGrids[activeUndergroundColonyId];
+  // #427 — the enemy queen's bar goes on the overlay, in another colony's nest only.
+  const queenBarGfx =
+    overlayGfx !== undefined && activeUndergroundColonyId !== PLAYER_COLONY_ID ? overlayGfx : null;
+  let queenBar: EnemyQueenHpBar | null = null;
 
   const rect = visibleWorldRect(cam);
 
@@ -698,6 +768,13 @@ export function drawUndergroundEntities(
     // Trivial world-rect cull.
     if (!tileInView(baseX, baseY, rect, TILE_SIZE_PX)) continue;
 
+    // Queen identity: the only queen who legitimately occupies this grid is
+    // the grid-owner's queen (queens never invade per 09.1 design). isQueen
+    // by-id comparison against the VIEWED colony's queenEntityId is correct
+    // regardless of which colony we're viewing. A player Fighter wearing the
+    // enemy queen's id would be impossible — world-global nextEntityId.
+    const isQueen = id === colony.queenEntityId;
+
     // Strategic LOD (§C13): a screen-constant colony-colored dot instead of the detailed
     // sprite — allocation-free (no facing/containment/sprite-pool work).
     if (dotMode) {
@@ -706,6 +783,11 @@ export function drawUndergroundEntities(
       const ds = ANT_DOT_SCREEN_PX / cam.zoom;
       gfx.fillStyle(dotColor, 1);
       gfx.fillRect(baseX - ds / 2, baseY - ds / 2, ds, ds);
+      // #427 — the enemy queen's bar labels her dot too, as the spider's labels it at
+      // any zoom.
+      if (isQueen && queenBarGfx !== null) {
+        queenBar = drawQueenHpBar(queenBarGfx, curr, id, baseX, baseY);
+      }
       continue;
     }
 
@@ -722,13 +804,6 @@ export function drawUndergroundEntities(
     const dx = currPxX - prevPxX;
     const dy = currPxY - prevPxY;
     const rotation = computeAntRotation(facing, id, curr.ants.zone[id]!, dx, dy, useInterp);
-
-    // Queen identity: the only queen who legitimately occupies this grid is
-    // the grid-owner's queen (queens never invade per 09.1 design). isQueen
-    // by-id comparison against the VIEWED colony's queenEntityId is correct
-    // regardless of which colony we're viewing. A player Fighter wearing the
-    // enemy queen's id would be impossible — world-global nextEntityId.
-    const isQueen = id === colony.queenEntityId;
 
     // Tint by OWNING colony (colonyId) not by grid-of-occupancy. A player
     // Fighter invading the enemy nest (Chunk 3) must still render in the
@@ -783,6 +858,11 @@ export function drawUndergroundEntities(
     // #290 PR 6: a laden ant (forager or raid hauler alike) carries a food crumb.
     scratchAntOptsUg.carrying = curr.ants.foodCarrying[id]! > 0;
     sprites.drawAnt(scratchAntOptsUg);
+    // #427 — the enemy queen's HP bar, over the sprite just drawn (see the header of
+    // "the enemy queen's HP bar").
+    if (isQueen && queenBarGfx !== null) {
+      queenBar = drawQueenHpBar(queenBarGfx, curr, id, drawX, drawY);
+    }
   }
 
   // Eggs + larvae (nursery brood). Route through the sprite layer so both
@@ -795,6 +875,7 @@ export function drawUndergroundEntities(
     drawBrood(sprites, curr, colony.eggs, 'egg', rect, activeUndergroundColonyId);
     drawBrood(sprites, curr, colony.larvae, 'larva', rect, activeUndergroundColonyId);
   }
+  return queenBar;
 }
 
 /**
