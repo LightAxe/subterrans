@@ -287,6 +287,53 @@ describe('offerStoresFillingCaption', () => {
   });
 });
 
+describe('an owed caption is dropped when any tick invalidates its trigger (#431 review)', () => {
+  /** Owe the caption behind a busy queue, then run the ticks after it in frames of
+   *  `batch` ticks: the stores fall below three-quarters on the first tick and are back
+   *  on the second, and each frame ends with the frame step on an idle queue. */
+  function run(batch: number): { owedTicks: number[]; shownAt: number[]; flipAt: number } {
+    const { world, colony } = scenario(1);
+    fillTo(world, colony, 1, 1);
+    const st = createStoresFillingCaptionState();
+    lookThrough(st, world, world.tick + STORES_FILLING_DWELL_TICKS);
+    const owedAt = st.owedTick!;
+    expect(owedAt).toBe(world.tick);
+    const flipAt = owedAt + 2; // the first tick the stores are back
+    const end = flipAt + STORES_FILLING_DWELL_TICKS + 2 * batch;
+    const ui = sink();
+    const owedTicks: number[] = [];
+    const shownAt: number[] = [];
+    while (world.tick < end) {
+      for (let i = 0; i < batch && world.tick < end; i++) {
+        const t = world.tick + 1;
+        setTick(world, t);
+        fillTo(world, colony, 1, t === owedAt + 1 ? 2 : 1);
+        const before = st.owedTick;
+        noteStoresFillingTick(st, world, P, null);
+        if (st.owedTick !== null && st.owedTick !== before) owedTicks.push(t);
+      }
+      // The frame step, on the world the frame leaves, an idle queue.
+      if (offerStoresFillingCaption(st, world, P, ui, 0, 0)) shownAt.push(world.tick);
+    }
+    return { owedTicks, shownAt, flipAt };
+  }
+
+  it('a false-then-true flip inside one frame needs a fresh dwell, however the ticks are batched', () => {
+    for (const batch of [1, 2, 3, 5]) {
+      const { owedTicks, shownAt, flipAt } = run(batch);
+      // Owed again only after a full fresh dwell from the first tick the trigger held
+      // again, never on the old owed state: nothing shows at the flip's frame...
+      expect(owedTicks, `batch ${batch}`).toEqual([flipAt + STORES_FILLING_DWELL_TICKS]);
+      // ...and it shows at the first frame end that is past that fresh dwell.
+      expect(shownAt.length, `batch ${batch}`).toBe(1);
+      expect(shownAt[0]! >= flipAt + STORES_FILLING_DWELL_TICKS, `batch ${batch}`).toBe(true);
+      expect(shownAt[0]! - (flipAt + STORES_FILLING_DWELL_TICKS), `batch ${batch}`).toBeLessThan(
+        batch,
+      );
+    }
+  });
+});
+
 describe('beforeSimTick looks at the stores before every sim tick', () => {
   it('owes the caption on the dwell tick, and passes the storage hint clock', () => {
     const { world, colony } = scenario(1);

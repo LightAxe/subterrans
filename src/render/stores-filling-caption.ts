@@ -140,6 +140,14 @@ export function noteStoresFillingTick(
   if (state.lastOwedTick !== null && state.lastOwedTick > tick) state.lastOwedTick = null;
   if (!storesFillingCondition(world, colonyId)) {
     state.sinceTick = null;
+    // An owed caption the queue has not taken yet is dropped unshown by any tick that
+    // invalidates its trigger, as the frame step drops a stale one (and frees the
+    // cooldown the same way): a false-then-true flip inside one catch-up frame must
+    // not leave it to be shown without a fresh dwell.
+    if (state.owedTick !== null) {
+      state.owedTick = null;
+      state.lastOwedTick = null;
+    }
     return;
   }
   if (state.sinceTick === null || state.sinceTick > tick) state.sinceTick = tick;
