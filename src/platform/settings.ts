@@ -86,9 +86,10 @@ export const SURVEY_EMAIL_MAX = 254;
  *  cross-checks this literal against the render-layer original so the two
  *  cannot drift apart silently. */
 const DEFAULT_JEV_ORDERS =
-  'Spend the early game entirely on food and growth with fighters at home. Once our colony ' +
-  'is large and stores are high, switch to mostly fighters and assault the opponent ' +
-  'entrance until their queen is dead.';
+  'Grow first: mostly foragers to about 25 workers, adding storage when stores pass ' +
+  'three quarters. Then train mostly fighters, gather them at home and attack all at ' +
+  'once: sooner if we outnumber them, later if they outnumber us. If it stalls or ' +
+  'stores run low, come home and forage. Ignore the spider.';
 
 export const DEFAULT_SETTINGS: Readonly<Settings> = {
   pheromoneOverlay: false,

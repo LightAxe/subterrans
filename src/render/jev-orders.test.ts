@@ -59,7 +59,7 @@ describe('normalizeOrders', () => {
 
 describe('ordersTextForPreset', () => {
   it('returns the preset text for a known id', () => {
-    expect(ordersTextForPreset('aggressive')).toContain('assault their entrance');
+    expect(ordersTextForPreset('aggressive')).toContain('attack early and often');
   });
 
   it("returns balanced's own tuned (non-empty) text for 'balanced'", () => {

@@ -29,42 +29,57 @@ export interface JevOrdersPreset {
 }
 
 export const JEV_ORDERS_PRESETS: readonly JevOrdersPreset[] = [
+  // Playtest 5 (2026-10-09, V74; plan/playtest-5/RESULTS.md "For Jev", B1/B6) rewrote
+  // all four for what wins at V74: grow first and add a Food Storage when the stores
+  // pass three quarters; mass the army at home and attack all at once; come home when
+  // an attack stalls or the stores run low (a stalled raid on a military ratio starved
+  // Jev in 6 of 30 stand-in games without that clause); ignore the spider (a camp
+  // ends by itself within seconds). The client musters the army for the `assault`
+  // posture (jev-enemy-controller.ts), so "gather them at home" is also enforced in
+  // code. The older tuning notes (the 2026-09-19 Jev-vs-Jev round-robin, Economy's
+  // survival sweep) predate V72/V73 and no longer describe these texts.
   {
     id: 'balanced',
     label: 'Balanced',
-    // Tuned default. Jev-vs-Jev round-robin (2026-09-19, 8 texts × 6 seeds × both seats,
-    // 336 matches): 75.0% win rate (Wilson 64.8–83.0), no losing matchup, 40% of its wins
-    // by queen kill — a long build followed by a decisive assault.
+    // The tested one: a stand-in reading it literally (with fine buckets, the Assault
+    // raid type, the muster and the ¾ storage question) won 6/8/6 of 10 against the
+    // scripted human, the Normal novice and the Easy novice, and half its assaults
+    // killed the queen (playtest 5, B5 `balanced3`).
     text:
-      'Spend the early game entirely on food and growth with fighters at home. Once our colony ' +
-      'is large and stores are high, switch to mostly fighters and assault the opponent ' +
-      'entrance until their queen is dead.',
+      'Grow first: mostly foragers to about 25 workers, adding storage when stores pass ' +
+      'three quarters. Then train mostly fighters, gather them at home and attack all at ' +
+      'once: sooner if we outnumber them, later if they outnumber us. If it stalls or ' +
+      'stores run low, come home and forage. Ignore the spider.',
   },
   {
     id: 'aggressive',
     label: 'Aggressive',
-    // Tournament #2 (63.1%): assaults in ~70% of matches — constant pressure. The old
-    // 'strike early, accept losses' text finished last (28.6%, zero queen kills): it starved.
+    // Same rules as Balanced, earlier and more often. Not stand-in tested.
     text:
-      'Build a strong economy and a small guard. Watch the opponent: whenever they are weaker ' +
-      'than us or their fighters are away, assault their entrance with everything; otherwise ' +
-      'stay home and grow.',
+      'Grow to about 20 workers, adding food storage whenever stores pass three quarters. ' +
+      'Then attack early and often: mostly fighters, gathered at home, all at once. Strike ' +
+      'at once when we clearly outnumber them. If an attack stalls or stores run low, come ' +
+      'home, regrow and go again. Ignore the spider.',
   },
   {
     id: 'turtle',
     label: 'Turtle',
+    // Attacks only when clearly ahead, with a mid-game timer so it cannot wait forever
+    // (B1 rule 4a: a Jev that only attacks when ahead stalls). Not stand-in tested.
     text:
-      'Never leave the nest undefended. Keep fighters at home and fight only with overwhelming ' +
-      'force. Grow steadily; only assault when we clearly outnumber the opponent.',
+      'Never leave the nest undefended. Grow steadily, adding food storage whenever stores ' +
+      'pass three quarters, with a strong guard at home. Assault only when we clearly ' +
+      'outnumber them, all at once, and come home if it stalls; if neither side has attacked ' +
+      'by mid-game, attack anyway. Ignore the spider.',
   },
   {
     id: 'economy',
     label: 'Economy',
-    // Survival-sweep winner (10/20 vs the rule-based AI, median 9,128 ticks); never assaults.
+    // Never attacks. Not stand-in tested.
     text:
-      'Survival first: keep our food stores rising. Keep most workers foraging the nearest ' +
-      'pile, keep a small guard on our entrance, dig only when stores are high, and never send ' +
-      'fighters away from home.',
+      'Survival first: keep food coming in. Keep most workers foraging the nearest pile, add ' +
+      'a food storage chamber whenever stores pass three quarters, keep a small guard on our ' +
+      'entrance, and never send fighters away from home. Ignore the spider.',
   },
 ];
 
