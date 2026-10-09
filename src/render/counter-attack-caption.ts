@@ -277,7 +277,11 @@ function noteRallyAssaults(
     }
     if (rec === undefined) continue;
     state.rallyOnViewer = state.rallyOnViewer.filter((r) => r !== rec);
-    if (army * 100 <= rec.peakArmy * COUNTER_ATTACK_RALLY_ROUT_PCT) {
+    // A rally that never had a fighter behind it was no assault. (The count is of the
+    // Fighting task, as the rout path's is: fighters a ratio change re-tasked while
+    // the rally was still on the door count as lost. Jev's ratio and posture usually
+    // land in the same decision, so the rally has left before any re-tasking.)
+    if (rec.peakArmy > 0 && army * 100 <= rec.peakArmy * COUNTER_ATTACK_RALLY_ROUT_PCT) {
       oweIfBroken(state, world, world.tick, attacker, army);
     }
   }

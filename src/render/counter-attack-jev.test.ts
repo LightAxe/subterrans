@@ -193,6 +193,16 @@ describe('Jev opponent: a routed assault by rally owes the counter-attack captio
     expect(counterAttackCaptionOwed(s2)).toBe(true);
   });
 
+  it('a rally with no fighter behind it at any look was no assault: nothing owed', () => {
+    const w = world(COUNTER_ATTACK_READY_FIGHTERS, 0);
+    const s = jevState();
+    rallyOnPlayerDoor(w);
+    lookAt(s, w, 2000);
+    w.colonies[E]!.rallyPoint = null;
+    lookAt(s, w, 2001);
+    expect(counterAttackCaptionOwed(s)).toBe(false);
+  });
+
   it('the peak counts fighters drafted while the rally is on the door', () => {
     const w = world(COUNTER_ATTACK_READY_FIGHTERS, 6);
     const s = jevState();
