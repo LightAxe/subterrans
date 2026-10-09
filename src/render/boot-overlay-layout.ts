@@ -116,6 +116,10 @@ export interface NewGameScreenOptions {
   /** Height the opponent section needs, in canvas pixels. 0 / omitted (this
    *  build) leaves the slot out of the stack entirely — no phantom gap. */
   opponentSectionH?: number;
+  /** Jev opponent beta: true leaves the difficulty section (caption and rows) out
+   *  of the stack — a Jev match is always played at Normal, so there is no tier
+   *  to choose. Omitted / false: drawn, as on main. */
+  difficultyHidden?: boolean;
 }
 
 /** Every rect / anchor the new-game screen draws. */
@@ -128,8 +132,13 @@ export interface NewGameScreenLayout {
   subtitle: BootOverlayPoint;
   /** "Difficulty" caption. Origin (0, 0), at the column's left edge. */
   difficultyCaption: BootOverlayPoint;
-  /** The three radio-style tier rows, keyed by tier. Each spans the column. */
+  /** The three radio-style tier rows, keyed by tier. Each spans the column.
+   *  While `difficultyVisible` is false they are zero-size rects at the point the
+   *  section would start: there is nothing to draw or click. */
   difficultyRows: Record<Difficulty, BootOverlayRect>;
+  /** Jev opponent beta: false while the difficulty section is hidden
+   *  (`difficultyHidden`). */
+  difficultyVisible: boolean;
   /** The opponent slot. `h` is exactly `opponentSectionH` (0 on this build);
    *  x/w span the column, y is where the section's content starts — which, for
    *  an empty slot, is where the Start section starts instead. */
@@ -221,10 +230,11 @@ export function newGameScreenLayout(
   const columnX = (layout.w - columnW) / 2;
   const centerX = layout.w / 2;
   const opponentH = Math.max(0, opts.opponentSectionH ?? 0);
+  const difficultyVisible = opts.difficultyHidden !== true;
 
   const sections: ReadonlyArray<{ id: NewGameSectionId; h: number }> = [
     { id: 'title', h: NEW_GAME_TITLE_H + NEW_GAME_SUBTITLE_H },
-    { id: 'difficulty', h: difficultySectionH() },
+    { id: 'difficulty', h: difficultyVisible ? difficultySectionH() : 0 },
     { id: 'opponent', h: opponentH },
     { id: 'start', h: NEW_GAME_START_H + NEW_GAME_START_HINT_H },
   ];
@@ -233,12 +243,14 @@ export function newGameScreenLayout(
   const rowsTop = y.difficulty + NEW_GAME_CAPTION_H;
   const difficultyRows = {} as Record<Difficulty, BootOverlayRect>;
   DIFFICULTY_TIERS.forEach((tier, i) => {
-    difficultyRows[tier] = {
-      x: columnX,
-      y: rowsTop + i * (DIFFICULTY_ROW_H + DIFFICULTY_ROW_GAP),
-      w: columnW,
-      h: DIFFICULTY_ROW_H,
-    };
+    difficultyRows[tier] = difficultyVisible
+      ? {
+          x: columnX,
+          y: rowsTop + i * (DIFFICULTY_ROW_H + DIFFICULTY_ROW_GAP),
+          w: columnW,
+          h: DIFFICULTY_ROW_H,
+        }
+      : { x: columnX, y: y.difficulty, w: 0, h: 0 };
   });
 
   const startW = Math.min(NEW_GAME_START_W, columnW);
@@ -248,6 +260,7 @@ export function newGameScreenLayout(
     subtitle: { x: centerX, y: y.title + NEW_GAME_TITLE_H + NEW_GAME_SUBTITLE_H / 2 },
     difficultyCaption: { x: columnX, y: y.difficulty },
     difficultyRows,
+    difficultyVisible,
     opponentSlot: { x: columnX, y: y.opponent, w: columnW, h: opponentH },
     startButton: { x: centerX - startW / 2, y: y.start, w: startW, h: NEW_GAME_START_H },
     startHint: { x: centerX, y: y.start + NEW_GAME_START_H + NEW_GAME_START_HINT_H / 2 },
@@ -268,6 +281,9 @@ export function newGameScreenLayout(
 //             instructions for Jev, your opponent", with the n/300 counter
 //             right after it), the standing-orders preset buttons spanning the
 //             column, and the free-text rect a DOM <textarea> is positioned over.
+//
+// While the Jev row is selected the DIFFICULTY section above is left out of the
+// stack (difficultyHiddenFor): a Jev match is played at Normal.
 //
 // The section's height therefore depends on the picker's state. A caller asks
 // `opponentSectionH` for it, passes that as `opponentSectionH` to
@@ -432,6 +448,19 @@ export function newGameScreenWithOpponent(
   layout: LayoutContext,
   opts: OpponentSectionOptions,
 ): { screen: NewGameScreenLayout; opponent: OpponentSectionLayout | null } {
-  const screen = newGameScreenLayout(layout, { opponentSectionH: opponentSectionH(opts) });
+  const screen = newGameScreenLayout(layout, {
+    opponentSectionH: opponentSectionH(opts),
+    difficultyHidden: difficultyHiddenFor(opts),
+  });
   return { screen, opponent: opponentSectionLayout(screen.opponentSlot, opts) };
+}
+
+/**
+ * Rob's decision (2026-10-09, playtest 5): with Jev selected the difficulty section
+ * is hidden — a Jev match is always Normal (opponent-config.ts matchDifficulty) and
+ * the standing-orders presets are Jev's strength setting. The player's tier choice
+ * is kept, unseen, and comes back with the Standard AI row.
+ */
+export function difficultyHiddenFor(opts: OpponentSectionOptions): boolean {
+  return opts.jevAvailable && opts.jevSelected;
 }

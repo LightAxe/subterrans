@@ -15,31 +15,41 @@
 // started here has its readiness probe 404, the controller falls back to the
 // rule-based AI, and no request leaves the machine.
 //
-// What this pins (the issue's acceptance list, items 3–5):
-//   - the opponent row defaults to Standard AI, and the Jev options (the preset
-//     buttons and the free-text box) are hidden until Jev is selected
+// What this pins (the issue's acceptance list, items 3–5, and Rob's 2026-10-09
+// decisions on the default opponent and difficulty under Jev):
+//   - the beta build's screen opens on Jev with the Balanced preset (its
+//     default), the free-text box up and pre-filled; the Standard AI stays
+//     selectable, and a choice made earlier in the session (restart, the next
+//     New Game) is kept, while a new visit opens on the default again
+//   - with Jev selected the difficulty rows are hidden and the match is played
+//     at Normal; the Standard AI row brings them back with the player's tier,
+//     which a Jev round does not overwrite
+//   - a build WITHOUT a Jev endpoint (the :5173 server) defaults to the
+//     Standard AI and never shows Jev, even with a Jev preference stored
 //   - the free-text box is captioned "Custom instructions for Jev, your
 //     opponent" (asserted through the box's accessible name, which is the same
 //     string — the drawn caption is canvas text)
 //   - nothing above Start starts: opponent rows, presets and the box only move
 //     the selection; Start (button or Enter) begins the round, on the selected
 //     tier AND opponent; Enter typed INSIDE the box does not
-//   - the choice persists across a reload (opponent + orders), and a round
-//     against the Standard AI keeps the remembered orders
 //   - the DOM <textarea> is torn down when the Jev row is left and on Start (a
 //     leaked element would sit over the running game and swallow clicks — the
 //     failure mode only a browser can observe)
 //
 // Geometry comes from tests/helpers/geometry.ts: the Jev-capable screen has TWO
-// rect sets (Standard AI selected / Jev selected) because the section grows and
-// the stack re-centres, so the difficulty rows and Start move between them.
+// rect sets (Standard AI selected / Jev selected) because the opponent section
+// grows, the difficulty rows come and go, and the stack re-centres, so Start
+// moves between them.
 
 import { test, expect, type Page } from '@playwright/test';
 import {
+  DIFFICULTY_ROW_RECTS,
   GAME_OVER_RESTART_RECT,
   JEV_BUILD_JEV_SELECTED as JEV,
   JEV_BUILD_RULES_SELECTED as RULES,
   JEV_ORDERS_PRESETS,
+  NEW_GAME_START_RECT,
+  type Difficulty,
   type OpponentKind,
   type Rect,
 } from './helpers/geometry.js';
@@ -47,6 +57,7 @@ import {
   activeOverlay,
   bootScreen,
   clickCanvasRect,
+  difficultyRowsVisible,
   selectedDifficulty,
   selectedOpponent,
 } from './helpers/boot.js';
@@ -55,17 +66,29 @@ import { JEV_ORDERS_CAPTION } from '../src/render/opponent-copy.js';
 
 const SAVE_KEY = 'subterrans:save:v3';
 
+/** The :5173 dev server (playwright.config.ts `webServer[0]`): the same game with
+ *  NO Jev endpoint — what every non-beta build is. Both servers run for every
+ *  project, so this spec can visit it for the no-endpoint case. */
+const NO_ENDPOINT_URL = 'http://localhost:5173/';
+
 /** Fresh boot onto the new-game screen with no save and (unless `keepSettings`)
- *  no settings blob, so the defaults are what's under test. */
-async function bootToNewGameScreen(page: Page, opts?: { keepSettings?: boolean }): Promise<void> {
-  await page.goto('/');
+ *  no settings blob, so the defaults are what's under test. `url` defaults to this
+ *  project's server (the Jev endpoint configured). */
+async function bootToNewGameScreen(
+  page: Page,
+  opts?: { keepSettings?: boolean; url?: string; settings?: Record<string, unknown> },
+): Promise<void> {
+  await page.goto(opts?.url ?? '/');
   await page.locator('canvas').first().waitFor({ state: 'attached' });
   await page.evaluate(
-    ([saveKey, settingsKey, keepSettings]) => {
+    ([saveKey, settingsKey, keepSettings, settings]) => {
       localStorage.removeItem(saveKey as string);
       if (keepSettings !== true) localStorage.removeItem(settingsKey as string);
+      if (settings !== null) {
+        localStorage.setItem(settingsKey as string, JSON.stringify({ version: 1, settings }));
+      }
     },
-    [SAVE_KEY, SETTINGS_KEY, opts?.keepSettings === true] as const,
+    [SAVE_KEY, SETTINGS_KEY, opts?.keepSettings === true, opts?.settings ?? null] as const,
   );
   await page.reload();
   await page.locator('canvas').first().waitFor({ state: 'attached' });
@@ -90,6 +113,25 @@ async function selectOpponent(
       { timeout: 10_000 },
     )
     .toBe(kind);
+}
+
+/** Poll-click a difficulty row (at `rects`, the Standard AI set: with Jev selected
+ *  there are none) until the screen reports it selected. */
+async function selectTier(
+  page: Page,
+  tier: Difficulty,
+  rects: Readonly<Record<Difficulty, Rect>>,
+): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        if ((await selectedDifficulty(page)) === tier) return tier;
+        await clickCanvasRect(page, rects[tier]);
+        return selectedDifficulty(page);
+      },
+      { timeout: 10_000 },
+    )
+    .toBe(tier);
 }
 
 /** Poll-click Start (at `startRect`) until the round is Playing. */
@@ -126,7 +168,9 @@ async function roundDifficulty(page: Page): Promise<string | undefined> {
   });
 }
 
-function storedSettings(page: Page): Promise<{ opponent?: unknown; jevOrders?: unknown }> {
+function storedSettings(
+  page: Page,
+): Promise<{ opponent?: unknown; jevOrders?: unknown; difficulty?: unknown }> {
   return page.evaluate((key) => {
     const raw = localStorage.getItem(key);
     if (raw === null) return {};
@@ -191,23 +235,21 @@ function captionsShown(page: Page): Promise<string[]> {
 }
 
 test.describe('Jev opponent beta — the opponent section of the new-game screen', () => {
-  test('defaults to Standard AI with the Jev options hidden; Jev reveals them; Start boots the selected tier + opponent', async ({
+  test('the beta opens on Jev with Balanced and no difficulty rows; Standard AI brings them back; a Jev match is Normal', async ({
     page,
   }) => {
     await bootToNewGameScreen(page);
     const textarea = page.locator('textarea');
+    const balanced = JEV_ORDERS_PRESETS.find((p) => p.id === 'balanced')!.text;
 
-    // Defaults: Normal + Standard AI, and no Jev options (the free-text box is
-    // the DOM-observable part of them; the presets live on the canvas).
-    await expect.poll(() => selectedOpponent(page), { timeout: 5_000 }).toBe('rules');
-    expect(await selectedDifficulty(page)).toBe('Normal');
-    await expect(textarea).toHaveCount(0);
-
-    // Selecting Jev moves the selection and reveals the options — and does NOT
-    // start the round.
-    await selectOpponent(page, 'jev', RULES);
-    await expectStillOnScreen(page);
+    // The beta's default: Jev, the Balanced preset's text in the box, and the
+    // difficulty rows hidden (a Jev match is Normal).
+    await expect.poll(() => selectedOpponent(page), { timeout: 5_000 }).toBe('jev');
     await expect(textarea).toHaveCount(1);
+    await expect(textarea).toHaveValue(balanced);
+    expect(await difficultyRowsVisible(page)).toBe(false);
+    expect(await selectedDifficulty(page)).toBe('Normal');
+    expect(JEV.difficultyRows).toBeNull();
     await expect(textarea).toHaveJSProperty('maxLength', 300);
 
     // The free-text box is captioned "Custom instructions for Jev, your
@@ -235,34 +277,45 @@ test.describe('Jev opponent beta — the opponent section of the new-game screen
     await expect(textarea).toHaveValue(JEV_ORDERS_PRESETS[aggressive]!.text);
     await expectStillOnScreen(page);
 
-    // The difficulty rows moved with the re-centred stack: the Jev-state rect
-    // for Hard selects Hard, and still does not start.
-    await expect
-      .poll(
-        async () => {
-          await clickCanvasRect(page, JEV.difficultyRows.Hard);
-          return selectedDifficulty(page);
-        },
-        { timeout: 10_000 },
-      )
-      .toBe('Hard');
-    await expectStillOnScreen(page);
-
-    // Back to Standard AI hides the options (the box is removed, not merely
-    // hidden — a leaked element would sit over the canvas and swallow clicks)...
+    // The Standard AI row hides the Jev options (the box is removed, not merely
+    // hidden — a leaked element would sit over the canvas and swallow clicks)
+    // and brings the difficulty rows back...
     await selectOpponent(page, 'rules', JEV);
     await expect(textarea).toHaveCount(0);
+    await expect.poll(() => difficultyRowsVisible(page)).toBe(true);
     await expectStillOnScreen(page);
-    // ...and Jev again re-mounts it.
+    // ...where a row click selects a tier, and does not start.
+    await selectTier(page, 'Hard', RULES.difficultyRows!);
+    await expectStillOnScreen(page);
+
+    // Jev again: the box re-mounts and the rows go; the tier is kept, unseen...
     await selectOpponent(page, 'jev', RULES);
     await expect(textarea).toHaveCount(1);
+    await expect.poll(() => difficultyRowsVisible(page)).toBe(false);
+    expect(await selectedDifficulty(page)).toBe('Hard');
+    // ...and comes back with the Standard AI row.
+    await selectOpponent(page, 'rules', JEV);
+    await expect.poll(() => difficultyRowsVisible(page)).toBe(true);
+    expect(await selectedDifficulty(page)).toBe('Hard');
 
-    // Start (its Jev-state rect) boots Hard + Jev, and tears the box down.
+    // Start with Jev selected: a Jev round at Normal, the box torn down — and the
+    // player's own tier (Hard) is still the one remembered for the next screen.
+    await selectOpponent(page, 'jev', RULES);
     await startRound(page, JEV.startButton);
     expect(await bootScreen(page)).toBe('none');
-    expect(await roundDifficulty(page)).toBe('Hard');
     expect(await roundOpponent(page)).toBe('jev');
+    expect(await roundDifficulty(page)).toBe('Normal');
     await expect(textarea).toHaveCount(0);
+    expect((await storedSettings(page)).difficulty).toBe('Hard');
+  });
+
+  test('a Standard AI round plays the tier chosen for it', async ({ page }) => {
+    await bootToNewGameScreen(page);
+    await selectOpponent(page, 'rules', JEV);
+    await selectTier(page, 'Easy', RULES.difficultyRows!);
+    await startRound(page, RULES.startButton);
+    expect(await roundOpponent(page)).toBe('rules');
+    expect(await roundDifficulty(page)).toBe('Easy');
   });
 
   test('Enter typed inside the instructions box does not start; Enter on the screen does', async ({
@@ -313,16 +366,18 @@ test.describe('Jev opponent beta — the opponent section of the new-game screen
     const textarea = page.locator('textarea');
     await expect(textarea).toHaveCount(1);
 
-    // A fresh player sees the `balanced` preset's tuned text pre-filled
-    // (settings.ts's default), not an empty box.
+    // A fresh visit opens on Jev with the `balanced` preset's text pre-filled
+    // (the beta's default, defaultScreenOpponent), not an empty box.
     const balanced = JEV_ORDERS_PRESETS.find((p) => p.id === 'balanced')!.text;
     await expect(textarea).toHaveValue(balanced);
 
     // Picking a preset overwrites the field with that preset's shipped text.
-    const aggressiveIndex = JEV_ORDERS_PRESETS.findIndex((p) => p.id === 'aggressive');
-    await clickCanvasRect(page, JEV.jev!.presetButtons[aggressiveIndex]!);
-    const aggressive = JEV_ORDERS_PRESETS[aggressiveIndex]!.text;
-    await expect(textarea).toHaveValue(aggressive);
+    // (Economy: the shortest, so the typed suffix below stays under the 300 cap.)
+    const economyIndex = JEV_ORDERS_PRESETS.findIndex((p) => p.id === 'economy');
+    await clickCanvasRect(page, JEV.jev!.presetButtons[economyIndex]!);
+    const economy = JEV_ORDERS_PRESETS[economyIndex]!.text;
+    await expect(textarea).toHaveValue(economy);
+    expect(economy.length + ' Dig fast.'.length).toBeLessThanOrEqual(300);
 
     // Typing appends; the screen re-renders (preset -> custom) WITHOUT destroying
     // the element or losing focus, so the appended text survives. The caret is
@@ -334,56 +389,89 @@ test.describe('Jev opponent beta — the opponent section of the new-game screen
     });
     await expect(textarea).toBeFocused();
     await page.keyboard.type(' Dig fast.');
-    await expect(textarea).toHaveValue(`${aggressive} Dig fast.`);
+    await expect(textarea).toHaveValue(`${economy} Dig fast.`);
 
     // Start commits the normalized orders and persists them.
     await startRound(page, JEV.startButton);
     expect(await roundOpponent(page)).toBe('jev');
     const settings = await storedSettings(page);
-    expect(settings.opponent).toEqual({ kind: 'jev', orders: `${aggressive} Dig fast.` });
-    expect(settings.jevOrders).toBe(`${aggressive} Dig fast.`);
+    expect(settings.opponent).toEqual({ kind: 'jev', orders: `${economy} Dig fast.` });
+    expect(settings.jevOrders).toBe(`${economy} Dig fast.`);
   });
 
-  test('the choice persists across a reload, and a Standard AI round keeps the remembered orders', async ({
+  test('a choice is kept for the session (Restart), and a new visit opens on the default again', async ({
     page,
   }) => {
-    await bootToNewGameScreen(page);
-    await selectOpponent(page, 'jev', RULES);
+    const balanced = JEV_ORDERS_PRESETS.find((p) => p.id === 'balanced')!.text;
     const textarea = page.locator('textarea');
-    // The box is pre-filled with the `balanced` text, so `fill` (clear + set,
-    // dispatching a real `input` event) replaces it wholesale.
-    await textarea.fill('Hold the line.');
-    await startRound(page, JEV.startButton);
-    await expect
-      .poll(() => storedSettings(page).then((s) => s.jevOrders), { timeout: 15_000 })
-      .toBe('Hold the line.');
 
-    // Reload with the save cleared but the settings kept: the screen comes back
-    // with Jev selected, its options up and the remembered text in the box.
-    await bootToNewGameScreen(page, { keepSettings: true });
-    await expect.poll(() => selectedOpponent(page), { timeout: 5_000 }).toBe('jev');
-    await expect(textarea).toHaveCount(1);
-    await expect(textarea).toHaveValue('Hold the line.');
-
-    // Pick the Standard AI and start. The opponent flips to `rules` but the
-    // text must survive — `{ kind: 'rules' }` has nowhere to carry it, which is
-    // exactly why settings.jevOrders exists.
+    // The Standard AI on Hard...
+    await bootToNewGameScreen(page);
     await selectOpponent(page, 'rules', JEV);
-    await expect(textarea).toHaveCount(0);
+    await selectTier(page, 'Hard', RULES.difficultyRows!);
     await startRound(page, RULES.startButton);
     expect(await roundOpponent(page)).toBe('rules');
+    expect(await roundDifficulty(page)).toBe('Hard');
+
+    // ...is what Restart reopens on: not reset to the beta's Jev default.
+    await forceGameOver(page, 'Defeat');
+    await expect.poll(() => activeOverlay(page), { timeout: 5_000 }).toBe('game-over');
+    await clickCanvasRect(page, GAME_OVER_RESTART_RECT);
+    await expect.poll(() => bootScreen(page), { timeout: 10_000 }).toBe('difficulty-select');
+    expect(await selectedOpponent(page)).toBe('rules');
+    expect(await difficultyRowsVisible(page)).toBe(true);
+    expect(await selectedDifficulty(page)).toBe('Hard');
+    await expect(textarea).toHaveCount(0);
+
+    // Jev with the player's own text, and Restart keeps that too. The box is
+    // pre-filled with the Balanced text, so `fill` (clear + set, dispatching a
+    // real `input` event) replaces it wholesale.
+    await selectOpponent(page, 'jev', RULES);
+    await textarea.fill('Hold the line.');
+    await startRound(page, JEV.startButton);
+    expect(await roundOpponent(page)).toBe('jev');
+    expect(await roundDifficulty(page)).toBe('Normal');
+    await forceGameOver(page, 'Defeat');
+    await expect.poll(() => activeOverlay(page), { timeout: 5_000 }).toBe('game-over');
+    await clickCanvasRect(page, GAME_OVER_RESTART_RECT);
+    await expect.poll(() => bootScreen(page), { timeout: 10_000 }).toBe('difficulty-select');
+    expect(await selectedOpponent(page)).toBe('jev');
+    await expect(textarea).toHaveValue('Hold the line.');
+    // The choice is still written down (the save-recovery fallbacks read it).
     const settings = await storedSettings(page);
-    expect(settings.opponent).toEqual({ kind: 'rules' });
+    expect(settings.opponent).toEqual({ kind: 'jev', orders: 'Hold the line.' });
     expect(settings.jevOrders).toBe('Hold the line.');
 
-    // And the next screen opens on Standard AI (persisted), with the text still
-    // waiting behind the Jev row.
+    // A new visit (a reload, the settings kept) opens on the default again: Jev
+    // with the Balanced preset, the rows hidden.
     await bootToNewGameScreen(page, { keepSettings: true });
-    await expect.poll(() => selectedOpponent(page), { timeout: 5_000 }).toBe('rules');
-    await expect(textarea).toHaveCount(0);
-    await selectOpponent(page, 'jev', RULES);
-    await expect(textarea).toHaveValue('Hold the line.');
+    await expect.poll(() => selectedOpponent(page), { timeout: 5_000 }).toBe('jev');
+    await expect(textarea).toHaveValue(balanced);
+    expect(await difficultyRowsVisible(page)).toBe(false);
+    // ...and the Standard AI row shows the tier the player last chose.
+    await selectOpponent(page, 'rules', JEV);
+    expect(await selectedDifficulty(page)).toBe('Hard');
   });
+
+  test('a build with no Jev endpoint defaults to the Standard AI and never shows Jev', async ({
+    page,
+  }) => {
+    // Even with a Jev preference stored on that origin.
+    await bootToNewGameScreen(page, {
+      url: NO_ENDPOINT_URL,
+      settings: { opponent: { kind: 'jev', orders: 'Hold the line.' }, jevOrders: 'Hold.' },
+    });
+    await expect.poll(() => selectedOpponent(page), { timeout: 5_000 }).toBe('rules');
+    expect(await difficultyRowsVisible(page)).toBe(true);
+    await expect(page.locator('textarea')).toHaveCount(0);
+    // The plain screen's rects (no opponent section): the tier and Start are where
+    // main puts them.
+    await selectTier(page, 'Hard', DIFFICULTY_ROW_RECTS);
+    await startRound(page, NEW_GAME_START_RECT);
+    expect(await roundOpponent(page)).toBe('rules');
+    expect(await roundDifficulty(page)).toBe('Hard');
+  });
+
   test('a Jev round that fell back: the end screen names how it ended, and Restart reopens the screen on Jev', async ({
     page,
   }) => {

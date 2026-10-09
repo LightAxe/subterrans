@@ -4,12 +4,14 @@
 import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_OPPONENT,
+  defaultScreenOpponent,
   formatOpponentStatusLabel,
   isOpponentConfig,
   jevOpponent,
+  matchDifficulty,
   type OpponentConfig,
 } from './opponent-config.js';
-import { JEV_ORDERS_MAX_LENGTH } from './jev-orders.js';
+import { DEFAULT_ORDERS_TEXT, JEV_ORDERS_MAX_LENGTH, ordersTextForPreset } from './jev-orders.js';
 
 describe('DEFAULT_OPPONENT', () => {
   it('is the rule-based AI — the opponent every pre-feature save implies', () => {
@@ -157,5 +159,32 @@ describe('formatOpponentStatusLabel', () => {
     expect(formatOpponentStatusLabel({ ...base, status: 'jev', beats: 3, probe: 'failed' })).toBe(
       'Opponent: Jev · beat 3 · 130 ms',
     );
+  });
+});
+
+// Rob, 2026-10-09: the beta defaults to Jev + Balanced; a Jev match is Normal.
+describe('defaultScreenOpponent', () => {
+  it('is Jev with the Balanced preset on a build with a Jev endpoint', () => {
+    expect(defaultScreenOpponent(true)).toEqual({ kind: 'jev', orders: DEFAULT_ORDERS_TEXT });
+    expect(DEFAULT_ORDERS_TEXT).toBe(ordersTextForPreset('balanced'));
+  });
+
+  it('is the Standard AI on a build without one', () => {
+    expect(defaultScreenOpponent(false)).toEqual(DEFAULT_OPPONENT);
+  });
+});
+
+describe('matchDifficulty', () => {
+  it('a Jev match is Normal whatever tier was asked for', () => {
+    for (const d of ['Easy', 'Normal', 'Hard'] as const) {
+      expect(matchDifficulty(d, jevOpponent('Hold.'))).toBe('Normal');
+      expect(matchDifficulty(d, jevOpponent(''))).toBe('Normal');
+    }
+  });
+
+  it('the Standard AI plays the tier asked for', () => {
+    for (const d of ['Easy', 'Normal', 'Hard'] as const) {
+      expect(matchDifficulty(d, DEFAULT_OPPONENT)).toBe(d);
+    }
   });
 });

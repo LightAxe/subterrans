@@ -99,6 +99,9 @@ declare global {
       // new-game screen ('rules' | 'jev'), published the same way, so a spec can
       // assert that the choice moved WITHOUT starting and reopens as persisted.
       selectedOpponent?: OpponentKind;
+      // Jev opponent (beta) — whether the new-game screen draws its difficulty
+      // rows (hidden while Jev is selected: a Jev match is Normal).
+      difficultyRowsVisible?: boolean;
     };
   }
 }
@@ -117,11 +120,12 @@ export interface DifficultySelectCallbacks {
    *  choice to the rule-based AI. GameScene passes `isJevAvailable()` — i.e.
    *  whether a proxy endpoint is configured. */
   jevAvailable?: boolean;
-  /** The player's persisted opponent preference (settings.opponent), used to
-   *  pre-select the opponent row, the preset highlight and the free text.
-   *  Defaults to the rule-based AI. */
+  /** The opponent to pre-select (the opponent row, the preset highlight and the
+   *  free text): GameScene passes this session's choice, else the build's default
+   *  (defaultScreenOpponent: Jev + Balanced on the beta build). Defaults to the
+   *  rule-based AI. */
   initialOpponent?: OpponentConfig;
-  /** The player's last standing-orders text (settings.jevOrders), used only when
+  /** The standing-orders text behind the Jev row, used only when
    *  `initialOpponent` is `rules` — that arm cannot carry the text itself, so
    *  without this a round against the Standard AI would blank the box. */
   initialOrders?: string;
@@ -160,6 +164,8 @@ function publishPhase9(patch: Partial<NonNullable<Window['__phase9_ui']>>): void
   if (chip !== undefined) next.spiderOrderChip = chip;
   const opponent = patch.selectedOpponent ?? prev?.selectedOpponent;
   if (opponent !== undefined) next.selectedOpponent = opponent;
+  const rowsVisible = patch.difficultyRowsVisible ?? prev?.difficultyRowsVisible;
+  if (rowsVisible !== undefined) next.difficultyRowsVisible = rowsVisible;
   window.__phase9_ui = next;
 }
 
@@ -201,6 +207,12 @@ function setBootScreen(next: BootScreen): void {
  *  can tell "selected" from "started". Preserves the other published fields. */
 function setSelectedDifficulty(next: Difficulty): void {
   publishPhase9({ selectedDifficulty: next });
+}
+
+/** Publishes whether the new-game screen draws its difficulty rows (Jev opponent
+ *  beta: hidden while Jev is selected). Preserves the other published fields. */
+function setDifficultyRowsVisible(next: boolean): void {
+  publishPhase9({ difficultyRowsVisible: next });
 }
 
 /** Publishes the new-game screen's selected opponent row (Jev opponent beta)
@@ -3303,10 +3315,10 @@ export class UIScene extends Phaser.Scene {
     this.difficultySelectCallbacks = callbacks;
     this.selectedDifficulty = callbacks.initialDifficulty ?? 'Normal';
     setSelectedDifficulty(this.selectedDifficulty);
-    // Seed the opponent picker from the player's persisted preference. A `jev`
-    // preference on a build with no proxy endpoint is downgraded here, mirroring
-    // GameScene's boot-time effectiveOpponent downgrade, so the screen never
-    // offers what can't run.
+    // Seed the opponent picker from GameScene's choice (this session's, else the
+    // build's default). A `jev` choice on a build with no proxy endpoint is
+    // downgraded here, mirroring GameScene's boot-time effectiveOpponent downgrade,
+    // so the screen never offers what can't run.
     this.opponentPicker = createOpponentPickerState({
       saved: callbacks.initialOpponent ?? DEFAULT_OPPONENT,
       savedOrders: callbacks.initialOrders,
@@ -3374,7 +3386,8 @@ export class UIScene extends Phaser.Scene {
       this.commitNewGame();
       return;
     }
-    for (const tier of DIFFICULTY_TIERS) {
+    // Jev opponent beta: hidden (Jev selected) means not clickable either.
+    for (const tier of geo.difficultyVisible ? DIFFICULTY_TIERS : []) {
       if (this.isInsideRect(px, py, geo.difficultyRows[tier])) {
         this.selectDifficulty(tier);
         return;
@@ -3441,17 +3454,22 @@ export class UIScene extends Phaser.Scene {
     subtitle.setDepth(21);
     group.push(subtitle);
 
-    const caption = this.add.text(
-      geo.difficultyCaption.x,
-      geo.difficultyCaption.y,
-      NEW_GAME_DIFFICULTY_CAPTION,
-      { fontSize: '13px', fontFamily: 'monospace', color: '#8a8a8a' },
-    );
-    caption.setOrigin(0, 0);
-    caption.setDepth(21);
-    group.push(caption);
+    // Jev opponent beta: with Jev selected the difficulty section is left out (a
+    // Jev match is Normal); the selected tier is kept for the Standard AI row.
+    setDifficultyRowsVisible(geo.difficultyVisible);
+    if (geo.difficultyVisible) {
+      const caption = this.add.text(
+        geo.difficultyCaption.x,
+        geo.difficultyCaption.y,
+        NEW_GAME_DIFFICULTY_CAPTION,
+        { fontSize: '13px', fontFamily: 'monospace', color: '#8a8a8a' },
+      );
+      caption.setOrigin(0, 0);
+      caption.setDepth(21);
+      group.push(caption);
 
-    for (const tier of DIFFICULTY_TIERS) this.addDifficultyRow(tier, geo.difficultyRows[tier]);
+      for (const tier of DIFFICULTY_TIERS) this.addDifficultyRow(tier, geo.difficultyRows[tier]);
+    }
 
     // Jev opponent (beta) — the opponent section, between Difficulty and Start.
     // Absent entirely on a build with no endpoint (Standard AI is implied).

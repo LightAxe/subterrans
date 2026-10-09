@@ -9,7 +9,8 @@
 // Lives in render/ because it describes a render-layer policy choice. `save.ts`
 // imports the type only (no runtime dependency from platform/ on render/).
 
-import { normalizeOrders } from './jev-orders.js';
+import type { WorldState } from '../sim/types.js';
+import { DEFAULT_ORDERS_TEXT, normalizeOrders } from './jev-orders.js';
 
 export type OpponentConfig =
   | { readonly kind: 'rules' }
@@ -25,6 +26,32 @@ export const DEFAULT_OPPONENT: OpponentConfig = { kind: 'rules' };
 /** Build a `jev` config with its orders normalized (trimmed / collapsed / capped). */
 export function jevOpponent(orders: string): OpponentConfig {
   return { kind: 'jev', orders: normalizeOrders(orders) };
+}
+
+/**
+ * What the new-game screen pre-selects when the player has not chosen an opponent
+ * yet this session (Rob, 2026-10-09): on a build with a Jev endpoint (the beta),
+ * Jev with the Balanced preset; on any other build, the Standard AI — such a build
+ * never shows Jev at all. A choice made earlier in the session (a restart, a retry,
+ * the next New Game) is the caller's to prefer over this.
+ */
+export function defaultScreenOpponent(jevAvailable: boolean): OpponentConfig {
+  return jevAvailable ? jevOpponent(DEFAULT_ORDERS_TEXT) : DEFAULT_OPPONENT;
+}
+
+/**
+ * The tier a match against `opponent` is played at (Rob, 2026-10-09): a Jev match is
+ * always Normal — difficulty barely reached Jev (only the queen's egg interval and the
+ * spider's hunger), and the standing-orders presets are its strength setting — so the
+ * new-game screen hides the difficulty rows while Jev is selected. The Standard AI
+ * plays the tier asked for. `opponent` is the EFFECTIVE one (a Jev request on a build
+ * with no endpoint has already become the Standard AI, and keeps its tier).
+ */
+export function matchDifficulty(
+  requested: WorldState['difficulty'],
+  opponent: OpponentConfig,
+): WorldState['difficulty'] {
+  return opponent.kind === 'jev' ? 'Normal' : requested;
 }
 
 /**
