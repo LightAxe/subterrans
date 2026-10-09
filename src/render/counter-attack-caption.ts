@@ -41,6 +41,18 @@
 // queen is dead, or once the player is already doing what it says (an Assault order on
 // that colony's entrance, judged on the frame's projected world).
 //
+// JEV OPPONENT (beta branch). A Jev-driven colony never invades through the AI
+// machinery: it attacks with a rally on the viewer's entrance, and the AI state
+// machine it leaves running never ends an invasion it did not start (so no
+// invasion_end, and its `Invading` state means nothing). For the colonies GameScene
+// lists as RALLY ATTACKERS (setRallyAttackers: the seats Jev is driving), the trigger
+// is instead the rally leaving the viewer's entrance (the assault is over: called
+// home, retargeted elsewhere or cleared), judged per tick by noteCounterAttackTick,
+// with the same broken-army test (its whole army, aiFighterCount, below the tier's
+// base need), cooldown, copy and army gate; and "invades again" (which lapses a
+// follow-up) is the rally back on the viewer's entrance. (Playtest 5, #436: the
+// caption fired 0 times in 30 games against a Jev stand-in.)
+//
 // Render-side session state only: reads world state and events, writes nothing, saves
 // nothing (a loaded save starts with none owed). Pure and Phaser-free; GameScene owns
 // the state.
@@ -164,6 +176,12 @@ export interface CounterAttackCaptionState {
   buildUpTick: number | null;
   /** The colony the build-up caption was about (meaningful while buildUpTick is set). */
   buildUpAttackerId: ColonyId;
+  /** Jev opponent: the colonies whose attacks are rallies on the viewer's entrance
+   *  (setRallyAttackers). Empty: every attacker is the rules AI. */
+  rallyAttackers: ColonyId[];
+  /** Of `rallyAttackers`, those whose rally was on one of the viewer's entrances at the
+   *  last look (noteCounterAttackTick). */
+  rallyOnViewer: ColonyId[];
 }
 
 export function createCounterAttackCaptionState(): CounterAttackCaptionState {
@@ -176,7 +194,73 @@ export function createCounterAttackCaptionState(): CounterAttackCaptionState {
     routSeenAttackerId: -1,
     buildUpTick: null,
     buildUpAttackerId: -1,
+    rallyAttackers: [],
+    rallyOnViewer: [],
   };
+}
+
+/**
+ * Jev opponent: name the colonies whose attacks are rallies (GameScene: the seats Jev
+ * is driving; a seat that falls back to the rules AI leaves the list). A colony that
+ * leaves it is forgotten mid-assault: its rally ending owes nothing.
+ */
+export function setRallyAttackers(
+  state: CounterAttackCaptionState,
+  colonyIds: readonly ColonyId[],
+): void {
+  state.rallyAttackers = [...colonyIds];
+  state.rallyOnViewer = state.rallyOnViewer.filter((c) => colonyIds.includes(c));
+}
+
+/** `attackerId`'s rally is on one of `viewerColonyId`'s entrances (open or closed). */
+function rallyOnViewerEntrance(
+  world: WorldState,
+  attackerId: ColonyId,
+  viewerColonyId: ColonyId,
+): boolean {
+  const attacker = world.colonies[attackerId];
+  if (attacker === undefined) return false;
+  const target = rallyEnemyEntrance(world, attacker);
+  return target !== null && (world.colonies[viewerColonyId]?.entrances.includes(target) ?? false);
+}
+
+/** `attackerId` is attacking `viewerColonyId` (again): a rally attacker's rally is on
+ *  the viewer's entrance; the rules AI is Invading or Probing. */
+function attacking(
+  state: CounterAttackCaptionState,
+  world: WorldState,
+  attackerId: ColonyId,
+  viewerColonyId: ColonyId,
+): boolean {
+  if (state.rallyAttackers.includes(attackerId)) {
+    return rallyOnViewerEntrance(world, attackerId, viewerColonyId);
+  }
+  const ai = getAIStateForColony(world, attackerId)?.state;
+  return ai === 'Invading' || ai === 'Probing';
+}
+
+/**
+ * Jev opponent: each rally attacker whose rally has left the viewer's entrance since
+ * the last look ended an assault on this tick; it owes the caption if its whole army
+ * is broken now (oweIfBroken, the rout path's test and cooldown). Idempotent for one
+ * world state (GameScene's frame step and the next beforeSimTick both look at the
+ * frame's last tick).
+ */
+function noteRallyAssaults(
+  state: CounterAttackCaptionState,
+  world: WorldState,
+  viewerColonyId: ColonyId,
+): void {
+  for (const attacker of state.rallyAttackers) {
+    const on = rallyOnViewerEntrance(world, attacker, viewerColonyId);
+    if (on === state.rallyOnViewer.includes(attacker)) continue;
+    if (on) {
+      state.rallyOnViewer.push(attacker);
+      continue;
+    }
+    state.rallyOnViewer = state.rallyOnViewer.filter((c) => c !== attacker);
+    oweIfBroken(state, world, world.tick, attacker, aiFighterCount(world, attacker));
+  }
 }
 
 /**
@@ -184,32 +268,36 @@ export function createCounterAttackCaptionState(): CounterAttackCaptionState {
  * for the frame's last tick): after the build-up caption, owe the Assault caption the
  * first tick the viewer's army is ready (counterAttackArmyReady). The follow-up lapses
  * after COUNTER_ATTACK_FOLLOW_UP_TICKS, once the attacker invades or probes again (also
- * when already owed behind a busy queue), or once either queen is dead. Read-only on the world.
+ * when already owed behind a busy queue), or once either queen is dead. Jev opponent:
+ * first, a rally attacker's assault that ended since the last look owes the caption
+ * (noteRallyAssaults), and for a rally attacker "invades again" is its rally back on
+ * the viewer's entrance. Read-only on the world.
  */
 export function noteCounterAttackTick(
   state: CounterAttackCaptionState,
   world: WorldState,
   viewerColonyId: ColonyId,
 ): void {
+  // Jev opponent: an assault by rally that ended since the last look owes it here.
+  noteRallyAssaults(state, world, viewerColonyId);
   // An owed follow-up the queue has not taken yet lapses the tick the attacker invades
   // or probes again, as a pending one does below (it is no longer a broken army to
   // strike): dropped unshown, however long the queue stays busy.
-  if (state.owedFollowUp && state.owedRoutTick !== null) {
-    const owedAi = getAIStateForColony(world, state.owedAttackerId)?.state;
-    if (owedAi === 'Invading' || owedAi === 'Probing') {
-      state.owedRoutTick = null;
-      state.owedFollowUp = false;
-    }
+  if (
+    state.owedFollowUp &&
+    state.owedRoutTick !== null &&
+    attacking(state, world, state.owedAttackerId, viewerColonyId)
+  ) {
+    state.owedRoutTick = null;
+    state.owedFollowUp = false;
   }
   const since = state.buildUpTick;
   if (since === null) return;
   const attacker = state.buildUpAttackerId;
-  const aiState = getAIStateForColony(world, attacker)?.state;
   if (
     world.tick < since ||
     world.tick - since > COUNTER_ATTACK_FOLLOW_UP_TICKS ||
-    aiState === 'Invading' ||
-    aiState === 'Probing' ||
+    attacking(state, world, attacker, viewerColonyId) ||
     !queenAlive(world, viewerColonyId) ||
     !queenAlive(world, attacker)
   ) {

@@ -249,6 +249,7 @@ import {
   noteCounterAttackEvent,
   noteCounterAttackTick,
   offerCounterAttackCaption,
+  setRallyAttackers,
 } from './counter-attack-caption.js';
 import {
   advanceStorageHint,
@@ -2662,10 +2663,24 @@ export class GameScene extends Phaser.Scene {
           // — each other's.
           client: createJevClient({ base: this.jevEndpoint }),
           orders: opponent.orders,
-          onFallback: () => this.notifyJevFallback(),
+          onFallback: () => {
+            this.notifyJevFallback();
+            // The rules AI drives this seat now: its attacks are invasions again,
+            // which the counter-attack caption reads from their events.
+            setRallyAttackers(
+              this.counterAttackCaption,
+              this.counterAttackCaption.rallyAttackers.filter((c) => c !== aiCid),
+            );
+          },
+          // Playtest 5: beats are paced by game speed (200 ticks at 4×) so the proxy's
+          // 2 s floor between beats is never hit.
+          speed: () => this.speedMultiplier,
         }),
       );
     }
+    // Playtest 5 (#436): Jev attacks with rallies, not AI invasions, so the
+    // counter-attack caption watches these seats' rallies instead of their events.
+    setRallyAttackers(this.counterAttackCaption, [...this.jevControllers.keys()]);
   }
 
   /** Caption shown once when the Jev opponent gives up and the rule-based AI takes over. */
