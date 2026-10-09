@@ -1422,7 +1422,8 @@ describe('JevEnemyController — a stalled assault comes home', () => {
     // Not engaged there: no recall, however long.
     expect(runTo(world, ctl, T0 + 1000 + JEV_ASSAULT_STALL_TICKS + 500)).toEqual([]);
     expect(ctl.assaultRecalls).toBe(0);
-    // Engaged there at T1: the clock starts then.
+    // Engaged there from T1; the T1 seam has already run, so the watch sees it on the
+    // next seam (T1 + 1) and the clock starts then.
     const T1 = world.tick;
     addFighter(world, ENEMY_COLONY_ID, second.surfaceTileX, second.surfaceTileY, null);
     expect(runTo(world, ctl, T1 + JEV_ASSAULT_STALL_TICKS)).toEqual([]);

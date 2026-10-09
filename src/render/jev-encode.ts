@@ -479,8 +479,9 @@ export function decodeAnswers(
       Object.keys(cands.posture) as PostureKey[],
       facts.currentPosture in cands.posture
         ? facts.currentPosture
-        : // A muster reported as `assault` whose target became unreachable must not
-          // fall back to clearing the rally.
+        : // A current posture no longer offered (a muster reported as `assault` whose
+          // target became unreachable, a contested pile that ran out, a midfield tile
+          // cut off) falls back to our door rather than clearing the rally.
           'guard_home' in cands.posture
           ? 'guard_home'
           : 'recall',
