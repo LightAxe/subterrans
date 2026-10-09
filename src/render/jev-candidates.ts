@@ -24,6 +24,8 @@ import {
   forEachPile,
   PICKUP_SHIFT,
 } from '../sim/food/food-api.js';
+import { eggReserveFp } from '../sim/colony/lifecycle-system.js';
+import { AI_STORAGE_RESERVE_MULTIPLE } from './ai-controller.js';
 import {
   SURFACE_GRID_WIDTH,
   SURFACE_GRID_HEIGHT,
@@ -51,7 +53,14 @@ export const NEAR_ENTRANCE_TILES = 10;
 export const SPIDER_NEAR_TILES = 24;
 export const CONTEST_MAX_DIST = 60;
 export const MIDFIELD_SEARCH_RADIUS = 8;
-export const EXPAND_STORAGE_FRACTION_PCT = 80;
+/**
+ * Playtest 5 (#436): `expand_storage` is offered once the stores reach this share of
+ * capacity — "add the next Food Storage when the stores pass about three quarters"
+ * (RESULTS.md B1 rule 1; it was 80) — and only while
+ * `expandStorageWanted` says more room is worth it (none pending, under the egg
+ * reserve bound).
+ */
+export const EXPAND_STORAGE_FRACTION_PCT = 75;
 
 export const RATIO_CANDIDATES: Readonly<Record<RatioKey, RatioCandidate>> = {
   all_in_economy: {
@@ -584,6 +593,44 @@ export function computeFacts(
 }
 
 // ---------------------------------------------------------------------------
+// The storage question's gate
+// ---------------------------------------------------------------------------
+
+/** A Food Storage of `colony`'s is placed and not dug yet. */
+export function foodStoragePending(world: WorldState, colony: ColonyRecord): boolean {
+  for (const key in world.pendingChambers) {
+    if (!Object.hasOwn(world.pendingChambers, key)) continue;
+    const pc = world.pendingChambers[key]!;
+    if (pc.colonyId === colony.colonyId && pc.chamberType === ChamberType.FoodStorage) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Playtest 5 (#436) — is one more Food Storage worth asking Jev about? It was offered
+ * at 80 % with no other check, and a "yes" every time built 21–26 larders a game
+ * (50–70 for a colony that grew big; the rules AI has 11–14 by 8:00). Now all of:
+ *   - the stores are at least EXPAND_STORAGE_FRACTION_PCT (75 %) of capacity;
+ *   - no Food Storage of ours is pending: one in flight at a time, and the next is
+ *     judged against the room the last one added (pending chambers add none);
+ *   - capacity is below AI_STORAGE_RESERVE_MULTIPLE (3) times the egg reserve
+ *     (eggReserveFp) — the rules AI's own bound (aiExtraFoodStorageWanted, #395):
+ *     past it more room no longer lets the queen lay more.
+ * The spot itself is found by the caller (findReachableChamberSpot).
+ */
+export function expandStorageWanted(
+  world: WorldState,
+  colony: ColonyRecord,
+  facts: RawFacts,
+): boolean {
+  if (facts.foodTotal * 100 < facts.foodCapacity * EXPAND_STORAGE_FRACTION_PCT) return false;
+  if (foodStoragePending(world, colony)) return false;
+  return facts.foodCapacity < AI_STORAGE_RESERVE_MULTIPLE * eggReserveFp(world, colony);
+}
+
+// ---------------------------------------------------------------------------
 // Candidate set
 // ---------------------------------------------------------------------------
 
@@ -690,7 +737,7 @@ export function buildCandidates(world: WorldState, seats: Seats, facts: RawFacts
       : null;
 
   let expandStorage: CandidateSet['expandStorage'] = null;
-  if (facts.foodTotal * 100 >= facts.foodCapacity * EXPAND_STORAGE_FRACTION_PCT) {
+  if (me !== undefined && expandStorageWanted(world, me, facts)) {
     const spot = findReachableChamberSpot(world, seats.mySeat, ChamberType.FoodStorage, comp);
     if (spot !== null) {
       expandStorage = { anchor: spot, describe: 'place one more food storage chamber in the nest' };
