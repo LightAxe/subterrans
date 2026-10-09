@@ -22,9 +22,12 @@ import {
   type JevClient,
   type JevMintResult,
 } from './jev-client.js';
-import type { Seats } from './jev-types.js';
+import type { CandidateSet, Seats } from './jev-types.js';
 import { JevCommandLedger } from './jev-commands.js';
-import { SPIDER_NEAR_TILES } from './jev-candidates.js';
+import { SPIDER_NEAR_TILES, buildCandidates, computeFacts } from './jev-candidates.js';
+import { bucket, tablesFor } from './jev-encode.js';
+import { AntTask, RaidType } from '../sim/enums.js';
+import { addFighter } from '../sim/raid-test-utils.js';
 import { createJevOpeningState, isHandoffComplete, runJevOpeningTick } from './jev-opening.js';
 
 /** Every tile of every pending footprint `colonyId` owns, as "x,y" keys. */
@@ -48,7 +51,17 @@ vi.mock('./ai-controller.js', async (importOriginal) => {
 });
 
 import { AI_DIG_INTERVAL, runAIController } from './ai-controller.js';
-import { JEV_DEFAULT_BEAT_TICKS, JevEnemyController } from './jev-enemy-controller.js';
+import {
+  JEV_DEFAULT_BEAT_TICKS,
+  JEV_MIN_BEAT_WALL_MS,
+  JEV_MUSTER_HOME_PCT,
+  JEV_MUSTER_HOME_RADIUS_TILES,
+  JEV_MUSTER_MIN_FIGHTERS,
+  JevEnemyController,
+  beatPaceFactor,
+  musterCount,
+  musteredPosture,
+} from './jev-enemy-controller.js';
 
 const SEED = 1;
 const BEAT = JEV_DEFAULT_BEAT_TICKS;
@@ -855,5 +868,264 @@ describe('JevEnemyController — failure policy', () => {
     expect(client.calls).toBe(0);
     expect(ctl.phase).toBe('opening');
     expect(vi.mocked(runAIController)).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Playtest 5 (#436): the muster, the Assault raid type, beat pacing, fine buckets
+// ---------------------------------------------------------------------------
+
+/** Our (the enemy seat's) fighters stood down, so a test sets the army it needs. No
+ *  tick runs between this and the read, so the ratio system cannot redraft them. */
+function standDownFighters(world: WorldState): void {
+  const a = world.ants;
+  for (const id of world.colonies[ENEMY_COLONY_ID]!.workers) {
+    if (a.alive[id] === 1 && a.task[id] === AntTask.Fighting) a.task[id] = AntTask.Foraging;
+  }
+}
+
+/** The beat's candidates for the enemy seat in `world` right now. */
+function candidatesNow(world: WorldState): CandidateSet {
+  const facts = computeFacts(world, SEATS, 'recall');
+  if (facts === null) throw new Error('expected facts');
+  return buildCandidates(world, SEATS, facts);
+}
+
+describe('JevEnemyController — the muster (playtest 5)', () => {
+  /** `home` fighters underground in our own nest, `awaySurface` on the surface far from
+   *  our entrance, `inTheirNest` underground in the opponent's nest. */
+  function army(home: number, awaySurface = 0, inTheirNest = 0): WorldState {
+    const world = handoffWorld();
+    standDownFighters(world);
+    const door = world.colonies[ENEMY_COLONY_ID]!.entrances[0]!;
+    for (let i = 0; i < home; i++)
+      addFighter(world, ENEMY_COLONY_ID, door.surfaceTileX, 20, ENEMY_COLONY_ID);
+    const farX = door.surfaceTileX > SURFACE_GRID_WIDTH / 2 ? 10 : SURFACE_GRID_WIDTH - 10;
+    for (let i = 0; i < awaySurface; i++)
+      addFighter(world, ENEMY_COLONY_ID, farX, door.surfaceTileY, null);
+    for (let i = 0; i < inTheirNest; i++)
+      addFighter(world, ENEMY_COLONY_ID, 30, 20, PLAYER_COLONY_ID);
+    return world;
+  }
+
+  it('holds an assault at home below JEV_MUSTER_MIN_FIGHTERS, and lets it go at it', () => {
+    expect(JEV_MUSTER_MIN_FIGHTERS).toBe(14);
+    const short = army(JEV_MUSTER_MIN_FIGHTERS - 1);
+    expect(musteredPosture(short, ENEMY_COLONY_ID, 'assault', candidatesNow(short))).toBe(
+      'guard_home',
+    );
+    const ready = army(JEV_MUSTER_MIN_FIGHTERS);
+    expect(musteredPosture(ready, ENEMY_COLONY_ID, 'assault', candidatesNow(ready))).toBe(
+      'assault',
+    );
+  });
+
+  it('needs JEV_MUSTER_HOME_PCT (80 %) of the army home: on the surface far off is away', () => {
+    expect(JEV_MUSTER_HOME_PCT).toBe(80);
+    // 16 of 20 home is exactly 80 %; 15 of 19 is 78.9 %.
+    const at80 = army(16, 4);
+    expect(
+      musterCount(at80, ENEMY_COLONY_ID, candidatesNow(at80).posture.guard_home!.tile!),
+    ).toEqual({
+      fighters: 20,
+      home: 16,
+    });
+    expect(musteredPosture(at80, ENEMY_COLONY_ID, 'assault', candidatesNow(at80))).toBe('assault');
+    const under = army(15, 4);
+    expect(musteredPosture(under, ENEMY_COLONY_ID, 'assault', candidatesNow(under))).toBe(
+      'guard_home',
+    );
+  });
+
+  it('a fighter on the surface by our entrance is home; one inside their nest is away', () => {
+    const world = army(14, 0, 4); // 14 of 18 home: 77.8 %
+    const cands = candidatesNow(world);
+    expect(musterCount(world, ENEMY_COLONY_ID, cands.posture.guard_home!.tile!)).toEqual({
+      fighters: 18,
+      home: 14,
+    });
+    expect(musteredPosture(world, ENEMY_COLONY_ID, 'assault', cands)).toBe('guard_home');
+    const door = world.colonies[ENEMY_COLONY_ID]!.entrances[0]!;
+    for (let i = 0; i < 2; i++) {
+      addFighter(
+        world,
+        ENEMY_COLONY_ID,
+        door.surfaceTileX + JEV_MUSTER_HOME_RADIUS_TILES,
+        door.surfaceTileY,
+        null,
+      );
+    }
+    // 16 of 20 now.
+    expect(musteredPosture(world, ENEMY_COLONY_ID, 'assault', candidatesNow(world))).toBe(
+      'assault',
+    );
+  });
+
+  it('an assault already on their door is followed as answered, however the army stands', () => {
+    const world = army(2);
+    const cands = candidatesNow(world);
+    const target = cands.posture.assault!.tile!;
+    world.colonies[ENEMY_COLONY_ID]!.rallyPoint = { tileX: target.x, tileY: target.y };
+    expect(musteredPosture(world, ENEMY_COLONY_ID, 'assault', cands)).toBe('assault');
+  });
+
+  it('never changes any other answer', () => {
+    const world = army(0);
+    const cands = candidatesNow(world);
+    for (const p of ['recall', 'guard_home', 'hold_midfield'] as const) {
+      expect(musteredPosture(world, ENEMY_COLONY_ID, p, cands)).toBe(p);
+    }
+  });
+
+  it('through the controller: guard_home while mustering, then an Assault raid on their door', async () => {
+    const SHORT_BEAT = 20;
+    const client = new ScriptedClient(scripted({ fight_ratio: 'military', posture: 'assault' }));
+    const ctl = new JevEnemyController({ seats: SEATS, client, orders: '', beatTicks: SHORT_BEAT });
+    const world = handoffWorld();
+    const colony = world.colonies[ENEMY_COLONY_ID]!;
+    const home = colony.entrances[0]!;
+
+    stepOnce(world, ctl);
+    await alignToBeat(world, ctl, undefined, SHORT_BEAT);
+    standDownFighters(world);
+    await step(world, ctl, 2); // beat + apply
+    expect(colony.rallyPoint).toEqual({ tileX: home.surfaceTileX, tileY: home.surfaceTileY });
+    expect(ctl.currentPosture).toBe('guard_home');
+
+    // A mustered army at home: the next beat sends it, as an Assault raid.
+    for (let i = 0; i < JEV_MUSTER_MIN_FIGHTERS + 2; i++) {
+      addFighter(world, ENEMY_COLONY_ID, home.surfaceTileX, 20, ENEMY_COLONY_ID);
+    }
+    const log: IssuedRecord[] = [];
+    await step(world, ctl, SHORT_BEAT + 1, log);
+    const rally = log.filter((r) => r.cmd.type === 'SetRallyPoint').at(-1)?.cmd;
+    expect(rally).toMatchObject({ type: 'SetRallyPoint', raidType: RaidType.Assault });
+    expect(colony.raidType).toBe(RaidType.Assault);
+    expect(
+      world.colonies[PLAYER_COLONY_ID]!.entrances.some(
+        (e) =>
+          e.surfaceTileX === colony.rallyPoint!.tileX &&
+          e.surfaceTileY === colony.rallyPoint!.tileY,
+      ),
+    ).toBe(true);
+    expect(ctl.currentPosture).toBe('assault');
+
+    // Once there it is followed as answered: the army falling below the muster does
+    // not pull it home.
+    standDownFighters(world);
+    const rallyBefore = { ...colony.rallyPoint! };
+    await step(world, ctl, SHORT_BEAT + 1);
+    expect(colony.rallyPoint).toEqual(rallyBefore);
+  });
+
+  it('a Loot rally already on their door (an older build) is re-sent as an Assault', async () => {
+    const SHORT_BEAT = 20;
+    const client = new ScriptedClient(scripted({ posture: 'assault' }));
+    const ctl = new JevEnemyController({ seats: SEATS, client, orders: '', beatTicks: SHORT_BEAT });
+    const world = handoffWorld();
+    const colony = world.colonies[ENEMY_COLONY_ID]!;
+    const target = candidatesNow(world).posture.assault!.tile!;
+    colony.rallyPoint = { tileX: target.x, tileY: target.y };
+    colony.raidType = RaidType.Loot;
+    stepOnce(world, ctl);
+    await alignToBeat(world, ctl, undefined, SHORT_BEAT);
+    const log: IssuedRecord[] = [];
+    await step(world, ctl, 2, log);
+    expect(log.map((r) => r.cmd)).toContainEqual(
+      expect.objectContaining({
+        type: 'SetRallyPoint',
+        tileX: target.x,
+        tileY: target.y,
+        raidType: RaidType.Assault,
+      }),
+    );
+    expect(colony.raidType).toBe(RaidType.Assault);
+  });
+
+  it('other rallies carry no raid type', async () => {
+    const client = new ScriptedClient(scripted({ posture: 'guard_home' }));
+    const ctl = new JevEnemyController({ seats: SEATS, client, orders: '' });
+    const world = handoffWorld();
+    stepOnce(world, ctl);
+    await alignToBeat(world, ctl);
+    const log: IssuedRecord[] = [];
+    await step(world, ctl, 2, log);
+    const rally = log.find((r) => r.cmd.type === 'SetRallyPoint')!.cmd;
+    expect('raidType' in rally).toBe(false);
+  });
+});
+
+describe('JevEnemyController — beats paced by game speed (playtest 5)', () => {
+  it('beatPaceFactor keeps a beat at least JEV_MIN_BEAT_WALL_MS of wall clock after the last', () => {
+    expect(JEV_MIN_BEAT_WALL_MS).toBeGreaterThanOrEqual(2000); // the proxy's floor
+    expect(beatPaceFactor(1)).toBe(1);
+    expect(beatPaceFactor(2)).toBe(1);
+    expect(beatPaceFactor(4)).toBe(2);
+    for (const speed of [1, 2, 4]) {
+      const wallMs = (BEAT * beatPaceFactor(speed) * 50) / speed;
+      expect(wallMs).toBeGreaterThanOrEqual(JEV_MIN_BEAT_WALL_MS);
+    }
+  });
+
+  it('beats every 200 ticks at 4×', async () => {
+    const client = new ScriptedClient(scripted());
+    const ctl = new JevEnemyController({ seats: SEATS, client, orders: '', speed: () => 4 });
+    const world = handoffWorld();
+    stepOnce(world, ctl);
+    await alignToBeat(world, ctl, undefined, BEAT * 2);
+    const beatTicks: number[] = [];
+    for (let i = 0; i < BEAT * 6; i++) {
+      const before = client.calls;
+      const t = world.tick;
+      await step(world, ctl, 1);
+      if (client.calls > before) beatTicks.push(t);
+    }
+    expect(beatTicks.length).toBe(3);
+    expect(beatTicks[1]! - beatTicks[0]!).toBe(BEAT * 2);
+    expect(beatTicks[2]! - beatTicks[1]!).toBe(BEAT * 2);
+  });
+
+  it('a switch to 4× right after a 1× beat waits a full 4× interval', async () => {
+    let speed = 1;
+    const client = new ScriptedClient(scripted());
+    const ctl = new JevEnemyController({ seats: SEATS, client, orders: '', speed: () => speed });
+    const world = handoffWorld();
+    stepOnce(world, ctl);
+    // A 1× beat on an odd hundred, so the next 4× boundary is only 100 ticks on.
+    await alignToBeat(world, ctl, undefined, BEAT * 2);
+    await step(world, ctl, BEAT);
+    const calls = client.calls;
+    const t0 = world.tick;
+    await step(world, ctl, 1);
+    expect(client.calls).toBe(calls + 1); // the 1× beat at t0 (an odd hundred)
+    speed = 4;
+    const beatTicks: number[] = [];
+    for (let i = 0; i < BEAT * 4; i++) {
+      const before = client.calls;
+      const t = world.tick;
+      await step(world, ctl, 1);
+      if (client.calls > before) beatTicks.push(t);
+    }
+    expect(beatTicks[0]! - t0).toBeGreaterThanOrEqual(BEAT * 2);
+  });
+});
+
+describe('JevEnemyController — fine buckets by default (playtest 5)', () => {
+  it('a controller with no `buckets` option sends the fine labels', async () => {
+    const client = new ScriptedClient(scripted());
+    const ctl = new JevEnemyController({ seats: SEATS, client, orders: '' });
+    const world = handoffWorld();
+    stepOnce(world, ctl);
+    await alignToBeat(world, ctl);
+    // Two of our fighters on the surface: `a_couple` (fine) against `few` (coarse).
+    standDownFighters(world);
+    const door = world.colonies[ENEMY_COLONY_ID]!.entrances[0]!;
+    addFighter(world, ENEMY_COLONY_ID, door.surfaceTileX, door.surfaceTileY, null);
+    addFighter(world, ENEMY_COLONY_ID, door.surfaceTileX, door.surfaceTileY, null);
+    stepOnce(world, ctl);
+    expect(client.calls).toBe(1);
+    const own = client.lastState!.our_colony as Record<string, string>;
+    expect(own.fighters_on_surface).toBe(bucket(2, tablesFor('fine').count));
+    expect(own.fighters_on_surface).not.toBe(bucket(2, tablesFor('coarse').count));
   });
 });

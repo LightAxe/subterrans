@@ -12,8 +12,10 @@
 //                     gives Jev the opening minutes of the round instead of
 //                     making it watch a build order play itself out.
 //   phase 'live'    — every AI_DIG_INTERVAL ticks, mark frontier tiles in the
-//                     direction Jev last chose; every `beatTicks` ticks, fire ONE
-//                     request describing the world in words. The proxy builds the
+//                     direction Jev last chose; every `beatTicks` ticks (twice
+//                     that at 4×, so a beat is never under 2.5 s of wall clock
+//                     after the last: beatPaceFactor), fire ONE request
+//                     describing the world in words. The proxy builds the
 //                     beat's questions from that state and answers them.
 //                     `digDirection` starts at 'hold' precisely so the one
 //                     digger finishes the planned nest before Jev spends it on a
@@ -63,11 +65,16 @@ import type {
   SetBehaviorRatioCommand,
   SetRallyPointCommand,
 } from '../sim/commands.js';
-import { ChamberType } from '../sim/enums.js';
+import { AntTask, ChamberType, RaidType } from '../sim/enums.js';
+import { Zone } from '../sim/terrain.js';
+import { FP_SHIFT } from '../sim/fixed.js';
+import type { ColonyId } from '../sim/colony/colony-store.js';
+import { rallyEnemyEntrance } from '../sim/raid-order.js';
 import { pileSlotById, pileTileX, pileTileY } from '../sim/food/food-api.js';
 import { AI_DIG_INTERVAL, AI_DIG_MARK_BUDGET, runAIController } from './ai-controller.js';
+import { MS_PER_TICK } from '../platform/game-loop.js';
 import { JevCommandLedger } from './jev-commands.js';
-import { buildCandidates, computeFacts, digFrontier } from './jev-candidates.js';
+import { buildCandidates, computeFacts, digFrontier, manhattan } from './jev-candidates.js';
 import { decodeAnswers, encodeBeat } from './jev-encode.js';
 import {
   createJevOpeningState,
@@ -88,11 +95,109 @@ import type {
 
 /** Ticks between model beats. 100 ticks = 5 s at the fixed 20 Hz timestep. */
 export const JEV_DEFAULT_BEAT_TICKS = 100;
+
+/**
+ * Playtest 5 (#436) — the least wall clock (ms) between two beats. The proxy refuses a
+ * beat that comes within 2 s of the session's last one (`too_fast`, the Lambda's
+ * MIN_BEAT_INTERVAL_MS) and counts it as a failed beat here. 100 ticks is 5 s at 1×
+ * and 2.5 s at 2×, but 1.25 s at 4×, so every other beat was refused. 2.5 s leaves
+ * 0.5 s for network jitter between two requests' arrival times.
+ */
+export const JEV_MIN_BEAT_WALL_MS = 2500;
+
+/**
+ * How many default beat intervals one beat spans at game speed `speed` (1, 2 or 4)
+ * so that a beat is never less than JEV_MIN_BEAT_WALL_MS of wall clock after the last:
+ * 1 at 1× (5 s) and 2× (2.5 s), 2 at 4× (200 ticks, 2.5 s). Measured against the
+ * DEFAULT beat (JEV_DEFAULT_BEAT_TICKS), so a custom `beatTicks` (a test knob) is only
+ * scaled at the speeds that need it. The per-session beat budget (320) then lasts at
+ * least 13 minutes of wall clock at any speed before the client re-mints.
+ */
+export function beatPaceFactor(speed: number): number {
+  const wallMs = (JEV_DEFAULT_BEAT_TICKS * MS_PER_TICK) / Math.max(1, speed);
+  return Math.max(1, Math.ceil(JEV_MIN_BEAT_WALL_MS / wallMs));
+}
 /**
  * Consecutive failed beats before the rule-based AI takes over for the round.
  * A failed readiness probe counts as one, same as a failed real beat.
  */
 export const JEV_MAX_CONSECUTIVE_FAILURES = 3;
+
+/**
+ * Playtest 5 (#436) — the muster. Jev's `assault` used to move the rally to their door
+ * the beat it was first given, when only 2–4 fighters existed (Balanced switches to
+ * "mostly fighters" on the same beat); the rest trickled in as they were drafted, and
+ * the median onset was 3 Jev fighters against 11 defenders. Mustered (the rally held
+ * on our own entrance until at least JEV_MUSTER_MIN_FIGHTERS fighters exist and
+ * JEV_MUSTER_HOME_PCT of them are home), onset became 14–18 against 7–9, and at
+ * colony parity the queen-kill rate rose from 31–47 % to 58–59 % (RESULTS.md B1
+ * rule 4; reference: the JEV_MUSTER scratch knob, 14 / 80 %).
+ */
+export const JEV_MUSTER_MIN_FIGHTERS = 14;
+/** Share of our fighters (percent) that must be home before a mustered assault goes. */
+export const JEV_MUSTER_HOME_PCT = 80;
+/** A fighter on the surface within this many tiles (Manhattan) of our entrance is home. */
+export const JEV_MUSTER_HOME_RADIUS_TILES = 12;
+
+/**
+ * Our fighters, and how many of them are home: underground in our own nest, or on the
+ * surface within JEV_MUSTER_HOME_RADIUS_TILES of `home` (our entrance, where
+ * `guard_home` rallies them). A fighter still inside an enemy nest is away.
+ * "Fighters" are what the sim calls the army (aiFighterCount): every living ant of
+ * the colony on the Fighting task, wherever it is.
+ */
+export function musterCount(
+  world: WorldState,
+  colonyId: ColonyId,
+  home: { readonly x: number; readonly y: number },
+): { fighters: number; home: number } {
+  const colony = world.colonies[colonyId];
+  if (colony === undefined) return { fighters: 0, home: 0 };
+  const a = world.ants;
+  let fighters = 0;
+  let atHome = 0;
+  for (const id of colony.workers) {
+    if (a.alive[id] !== 1 || a.task[id] !== AntTask.Fighting) continue;
+    fighters += 1;
+    if (a.zone[id] === Zone.Underground) {
+      if (a.currentGridColonyId[id] === colonyId) atHome += 1;
+    } else if (
+      manhattan(a.posX[id]! >> FP_SHIFT, a.posY[id]! >> FP_SHIFT, home.x, home.y) <=
+      JEV_MUSTER_HOME_RADIUS_TILES
+    ) {
+      atHome += 1;
+    }
+  }
+  return { fighters, home: atHome };
+}
+
+/**
+ * The posture to apply for Jev's answer `asked`. Only `assault` is ever changed: while
+ * our rally is not already on an opponent entrance (an assault under way follows
+ * Jev's answers as given, including a retarget to another of their entrances), it is
+ * held as `guard_home` — the rally on our own entrance, so the army gathers there —
+ * until at least JEV_MUSTER_MIN_FIGHTERS fighters exist and at least
+ * JEV_MUSTER_HOME_PCT % of them are home (musterCount). A colony that cannot raise
+ * that many fighters therefore guards instead of trickling into their nest. Pure read.
+ */
+export function musteredPosture(
+  world: WorldState,
+  colonyId: ColonyId,
+  asked: PostureKey,
+  cands: CandidateSet,
+): PostureKey {
+  if (asked !== 'assault') return asked;
+  const guard = cands.posture.guard_home;
+  const colony = world.colonies[colonyId];
+  // buildCandidates offers `assault` only beside `guard_home`; without it there is
+  // nowhere to gather, so the answer stands.
+  if (guard === undefined || guard.tile === null || colony === undefined) return asked;
+  if (rallyEnemyEntrance(world, colony) !== null) return asked;
+  const { fighters, home } = musterCount(world, colonyId, guard.tile);
+  const mustered =
+    fighters >= JEV_MUSTER_MIN_FIGHTERS && home * 100 >= fighters * JEV_MUSTER_HOME_PCT;
+  return mustered ? asked : 'guard_home';
+}
 
 export type JevControllerStatus = 'jev' | 'fallback';
 
@@ -106,6 +211,9 @@ export interface JevEnemyControllerOptions {
   readonly maxConsecutiveFailures?: number;
   /** Fired exactly once, on the tick the controller gives up on Jev for this round. */
   readonly onFallback?: () => void;
+  /** The game speed multiplier right now (1, 2 or 4), read every tick to pace the
+   *  beats (beatPaceFactor). Default: 1×. */
+  readonly speed?: () => number;
 }
 
 interface StashedDecision {
@@ -147,6 +255,7 @@ export class JevEnemyController {
   private readonly buckets: BucketMode;
   private readonly maxConsecutiveFailures: number;
   private readonly onFallback: (() => void) | undefined;
+  private readonly speed: () => number;
 
   private readonly opening: JevOpeningState = createJevOpeningState();
   private consecutiveFailures = 0;
@@ -154,15 +263,21 @@ export class JevEnemyController {
   private stashed: StashedDecision | null = null;
   private prevFacts: RawFacts | null = null;
   private fallbackNotified = false;
+  /** The tick the last beat was sent on (null: none yet this round). */
+  private lastBeatTick: number | null = null;
 
   constructor(opts: JevEnemyControllerOptions) {
     this.seats = opts.seats;
     this.client = opts.client;
     this.orders = opts.orders;
     this.beatTicks = opts.beatTicks ?? JEV_DEFAULT_BEAT_TICKS;
-    this.buckets = opts.buckets ?? 'coarse';
+    // Playtest 5 (#436): fine buckets by default. Coarse could not see the ¾ storage
+    // rule (`high` was 60–90 %) or an army bigger than 3 (`many` was ≥ 4); every fine
+    // label is in the proxy's vocabulary, and the spike's judgment test passed on it.
+    this.buckets = opts.buckets ?? 'fine';
     this.maxConsecutiveFailures = opts.maxConsecutiveFailures ?? JEV_MAX_CONSECUTIVE_FAILURES;
     this.onFallback = opts.onFallback;
+    this.speed = opts.speed ?? (() => 1);
   }
 
   /** Called from the game loop's `onBeforeTick` seam. Synchronous by contract. */
@@ -228,7 +343,19 @@ export class JevEnemyController {
     }
 
     if (world.tick % AI_DIG_INTERVAL === 0) this.executeDig(world);
-    if (world.tick % this.beatTicks === 0 && !this.inFlight) this.startBeat(world);
+    if (this.beatDue(world.tick) && !this.inFlight) this.startBeat(world);
+  }
+
+  /**
+   * A beat goes out on every `beatTicks × beatPaceFactor(speed)`-tick boundary, and
+   * never fewer ticks than that after the last one: at 4× that is every 200 ticks,
+   * and a switch to 4× right after a 1× beat waits for the next boundary that is far
+   * enough on (playtest 5, #436; see JEV_MIN_BEAT_WALL_MS).
+   */
+  private beatDue(tick: number): boolean {
+    const pace = this.beatTicks * beatPaceFactor(this.speed());
+    if (tick % pace !== 0) return false;
+    return this.lastBeatTick === null || tick - this.lastBeatTick >= pace;
   }
 
   /** Cadence executor: mark up to AI_DIG_MARK_BUDGET frontier tiles in the chosen direction. */
@@ -256,6 +383,7 @@ export class JevEnemyController {
     const cands = buildCandidates(world, this.seats, facts);
     const enc = encodeBeat(facts, cands, this.orders, this.buckets, this.prevFacts);
     this.prevFacts = facts;
+    this.lastBeatTick = world.tick;
     this.beats += 1;
     this.inFlight = true;
     void this.client
@@ -334,8 +462,14 @@ export class JevEnemyController {
       this.ledger.issue(world, cmd);
     }
 
-    const pc = cands.posture[d.posture];
+    // Playtest 5 (#436): an `assault` is mustered first (musteredPosture) and, once
+    // it goes, is an Assault raid — fighters ignore food and go for the queen. Every
+    // other rally carries no raid type (Loot), as before; on our own entrance or a
+    // pile it never applies.
+    const posture = musteredPosture(world, colonyId, d.posture, cands);
+    const pc = cands.posture[posture];
     if (pc !== undefined) {
+      const raidType = posture === 'assault' ? RaidType.Assault : undefined;
       if (pc.tile === null) {
         if (colony.rallyPoint !== null) {
           const cmd: ClearRallyPointCommand = {
@@ -348,18 +482,21 @@ export class JevEnemyController {
       } else if (
         colony.rallyPoint === null ||
         colony.rallyPoint.tileX !== pc.tile.x ||
-        colony.rallyPoint.tileY !== pc.tile.y
+        colony.rallyPoint.tileY !== pc.tile.y ||
+        (raidType !== undefined && colony.raidType !== raidType)
       ) {
         const cmd: SetRallyPointCommand = {
           type: 'SetRallyPoint',
           colonyId,
           tileX: pc.tile.x,
           tileY: pc.tile.y,
+          ...(raidType !== undefined ? { raidType } : {}),
           issuedAtTick: tick,
         };
         this.ledger.issue(world, cmd);
       }
-      this.currentPosture = d.posture;
+      // What the colony is actually doing: `guard_home` while an assault musters.
+      this.currentPosture = posture;
     }
 
     this.digDirection = d.dig;
