@@ -18,7 +18,7 @@ export interface Seats {
   readonly opponentSeat: ColonyId;
 }
 
-/** Bucket granularity for the encoded state. `coarse` is the shipped default. */
+/** Bucket granularity for the encoded state. `fine` is the shipped default (playtest 5). */
 export type BucketMode = 'coarse' | 'fine';
 
 export type RatioKey = 'all_in_economy' | 'economy' | 'balanced' | 'military' | 'all_in_war';
