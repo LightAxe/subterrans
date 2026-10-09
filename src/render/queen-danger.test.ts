@@ -14,6 +14,7 @@ import {
 } from './queen-danger.js';
 import { beforeSimTick } from './sim-tick-hook.js';
 import { createStoresFillingCaptionState } from './stores-filling-caption.js';
+import { createArmyWarningState } from './army-warning.js';
 import { createStorageHintState } from './storage-hint.js';
 import { createCounterAttackCaptionState } from './counter-attack-caption.js';
 import { createEnemyQueenWoundState } from './enemy-queen-wound.js';
@@ -568,6 +569,7 @@ describe('#416 review: harm inside a frame or a tick (seen before every sim tick
             enemyQueenWound: createEnemyQueenWoundState(),
             counterAttack: createCounterAttackCaptionState(),
             storesFilling: createStoresFillingCaptionState(),
+            armyWarning: createArmyWarningState(),
             storageHint: createStorageHintState(),
           }),
       },
@@ -988,6 +990,7 @@ describe('#416 review: the outcome of every tick is the same however the ticks a
                   enemyQueenWound: createEnemyQueenWoundState(),
                   counterAttack: createCounterAttackCaptionState(),
                   storesFilling: createStoresFillingCaptionState(),
+                  armyWarning: createArmyWarningState(),
                   storageHint: createStorageHintState(),
                 })
             : (w) => noteQueenDangerTick(s, w, PLAYER_COLONY_ID),

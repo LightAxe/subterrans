@@ -24,6 +24,7 @@ import { createQueenDangerState } from './queen-danger.js';
 import { createEnemyQueenWoundState } from './enemy-queen-wound.js';
 import { beforeSimTick } from './sim-tick-hook.js';
 import { createStoresFillingCaptionState } from './stores-filling-caption.js';
+import { createArmyWarningState } from './army-warning.js';
 import { createStorageHintState } from './storage-hint.js';
 import { createGameLoop, MS_PER_TICK } from '../platform/game-loop.js';
 import { GameOutcome } from '../sim/game-over.js';
@@ -302,6 +303,7 @@ describe('the follow-up is decided per sim tick, however the ticks are batched',
             enemyQueenWound: createEnemyQueenWoundState(),
             counterAttack: s,
             storesFilling: createStoresFillingCaptionState(),
+            armyWarning: createArmyWarningState(),
             storageHint: createStorageHintState(),
           });
           if (s.owedFollowUp && owedSeen === null) owedSeen = s.owedRoutTick;

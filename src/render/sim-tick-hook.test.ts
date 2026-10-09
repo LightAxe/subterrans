@@ -22,6 +22,7 @@ import {
 } from '../sim/constants.js';
 import { beforeSimTick } from './sim-tick-hook.js';
 import { createStoresFillingCaptionState } from './stores-filling-caption.js';
+import { createArmyWarningState } from './army-warning.js';
 import { createStorageHintState } from './storage-hint.js';
 import { createQueenDangerState } from './queen-danger.js';
 import { createCounterAttackCaptionState } from './counter-attack-caption.js';
@@ -153,6 +154,7 @@ describe('beforeSimTick — the rampage threat is checked every tick (#397)', ()
           enemyQueenWound: createEnemyQueenWoundState(),
           counterAttack: createCounterAttackCaptionState(),
           storesFilling: createStoresFillingCaptionState(),
+          armyWarning: createArmyWarningState(),
           storageHint: createStorageHintState(),
         }),
     });
@@ -179,6 +181,7 @@ describe('beforeSimTick — the rampage threat is checked every tick (#397)', ()
           enemyQueenWound: createEnemyQueenWoundState(),
           counterAttack: createCounterAttackCaptionState(),
           storesFilling: createStoresFillingCaptionState(),
+          armyWarning: createArmyWarningState(),
           storageHint: createStorageHintState(),
         }),
     });
@@ -210,6 +213,7 @@ describe('beforeSimTick — the rampage threat is checked every tick (#397)', ()
           enemyQueenWound: createEnemyQueenWoundState(),
           counterAttack: createCounterAttackCaptionState(),
           storesFilling: createStoresFillingCaptionState(),
+          armyWarning: createArmyWarningState(),
           storageHint: createStorageHintState(),
         }),
     });
@@ -228,6 +232,7 @@ describe('beforeSimTick — the rampage threat is checked every tick (#397)', ()
       enemyQueenWound: createEnemyQueenWoundState(),
       counterAttack: createCounterAttackCaptionState(),
       storesFilling: createStoresFillingCaptionState(),
+      armyWarning: createArmyWarningState(),
       storageHint: createStorageHintState(),
     });
     // The enemy AI's opening commands are queued for this tick's drain...
@@ -257,6 +262,7 @@ describe('beforeSimTick — the rampage threat is checked every tick (#397)', ()
             enemyQueenWound: createEnemyQueenWoundState(),
             counterAttack: createCounterAttackCaptionState(),
             storesFilling: createStoresFillingCaptionState(),
+            armyWarning: createArmyWarningState(),
             storageHint: createStorageHintState(),
           }),
       });
@@ -309,7 +315,7 @@ describe('beforeSimTick — the rampage threat is checked every tick (#397)', ()
     const here = dirname(fileURLToPath(import.meta.url));
     const src = readFileSync(join(here, 'game-scene.ts'), 'utf8');
     expect(src).toMatch(
-      /onBeforeTick:\s*\(w\)\s*=>\s*beforeSimTick\(\s*w,\s*this\.aiColonyIds,\s*PLAYER_COLONY_ID,\s*this\.prevState,\s*\{\s*rampage:\s*this\.rampageCaption,\s*queenDanger:\s*this\.queenDanger,\s*enemyQueenWound:\s*this\.enemyQueenWound,\s*counterAttack:\s*this\.counterAttackCaption,\s*storesFilling:\s*this\.storesFilling,\s*storageHint:\s*this\.storageHint,?\s*\},?\s*\)/,
+      /onBeforeTick:\s*\(w\)\s*=>\s*beforeSimTick\(\s*w,\s*this\.aiColonyIds,\s*PLAYER_COLONY_ID,\s*this\.prevState,\s*\{\s*rampage:\s*this\.rampageCaption,\s*queenDanger:\s*this\.queenDanger,\s*enemyQueenWound:\s*this\.enemyQueenWound,\s*counterAttack:\s*this\.counterAttackCaption,\s*storesFilling:\s*this\.storesFilling,\s*armyWarning:\s*this\.armyWarning,\s*storageHint:\s*this\.storageHint,?\s*\},?\s*\)/,
     );
     // ...and the per-frame check passes the same snapshot, for the frame's last tick.
     expect(src).toMatch(
@@ -321,7 +327,7 @@ describe('beforeSimTick — the rampage threat is checked every tick (#397)', ()
     );
     // ...and at the stores for the stores-filling caption, with the storage hint's clock.
     expect(src).toMatch(
-      /noteStoresFillingTick\(\s*this\.storesFilling,\s*this\.world,\s*PLAYER_COLONY_ID,\s*this\.storageHint\.lastOfferedTick,?\s*\)/,
+      /noteStoresFillingTick\(\s*this\.storesFilling,\s*this\.world,\s*PLAYER_COLONY_ID,\s*this\.storageHint\.lastOfferedTick,\s*this\.armyWarning,?\s*\)/,
     );
   });
 });
