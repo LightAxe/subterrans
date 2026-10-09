@@ -100,8 +100,11 @@ export const JEV_DEFAULT_BEAT_TICKS = 100;
  * Playtest 5 (#436) — the least wall clock (ms) between two beats. The proxy refuses a
  * beat that comes within 2 s of the session's last one (`too_fast`, the Lambda's
  * MIN_BEAT_INTERVAL_MS) and counts it as a failed beat here. 100 ticks is 5 s at 1×
- * and 2.5 s at 2×, but 1.25 s at 4×, so every other beat was refused. 2.5 s leaves
- * 0.5 s for network jitter between two requests' arrival times.
+ * and 2.5 s at 2×, but 1.25 s at 4×, so every other beat was refused. 2.5 s between
+ * SENDS leaves 0.5 s for the two requests' arrival times at the proxy to differ by
+ * (network jitter, a cold start on the first); a beat that still lands inside 2 s is
+ * one failed beat, reset by the next success, so it takes three such in a row to
+ * fall back.
  */
 export const JEV_MIN_BEAT_WALL_MS = 2500;
 
@@ -131,12 +134,17 @@ export const JEV_MAX_CONSECUTIVE_FAILURES = 3;
  * on our own entrance until at least JEV_MUSTER_MIN_FIGHTERS fighters exist and
  * JEV_MUSTER_HOME_PCT of them are home), onset became 14–18 against 7–9, and at
  * colony parity the queen-kill rate rose from 31–47 % to 58–59 % (RESULTS.md B1
- * rule 4; reference: the JEV_MUSTER scratch knob, 14 / 80 %).
+ * rule 4; reference: the JEV_MUSTER scratch knob, 14 / 80 %). Those rates were
+ * measured on the scratch knob, which differs in two details: it counted every
+ * underground fighter as home (here one inside an enemy nest is away) and bypassed
+ * the muster only with the rally on the exact assault tile (here on any opponent
+ * entrance). The refresh's re-measurement is in the jev-v74 handback notes.
  */
 export const JEV_MUSTER_MIN_FIGHTERS = 14;
 /** Share of our fighters (percent) that must be home before a mustered assault goes. */
 export const JEV_MUSTER_HOME_PCT = 80;
-/** A fighter on the surface within this many tiles (Manhattan) of our entrance is home. */
+/** A fighter on the surface within this many tiles (Manhattan) of our entrance — the
+ *  first open one, where guard_home rallies (a Jev colony has one) — is home. */
 export const JEV_MUSTER_HOME_RADIUS_TILES = 12;
 
 /**
@@ -294,6 +302,19 @@ export class JevEnemyController {
       // AI never gives or calls one off, so a priority Jev gave would outlive Jev.
       if (world.spiderPriorityColonyId === this.seats.mySeat) {
         this.issueSpiderPriority(world, false);
+      }
+      // Playtest 5 review: nor may a rally Jev gave — above all an Assault rally on
+      // the opponent's door, which would keep feeding every fighter the ratio drafts
+      // into their nest with nobody directing it. The rules AI has set no rally of
+      // its own yet (Jev drove this seat), and sets its own from here on; a rally it
+      // queues this same tick drains after this one.
+      if (colony.rallyPoint !== null) {
+        const cmd: ClearRallyPointCommand = {
+          type: 'ClearRallyPoint',
+          colonyId: this.seats.mySeat,
+          issuedAtTick: world.tick,
+        };
+        this.ledger.issue(world, cmd);
       }
       if (!this.fallbackNotified) {
         this.fallbackNotified = true;

@@ -26,3 +26,11 @@ export const JEV_ORDERS_CAPTION = 'Custom instructions for Jev, your opponent';
 
 /** The empty box's placeholder. */
 export const JEV_ORDERS_PLACEHOLDER = 'Tell Jev how to play (optional)';
+
+/** The new-game screen's subtitle while Jev is selected, in place of the difficulty
+ *  subtitle (difficulty-copy.ts NEW_GAME_SUBTITLE, which is about the tiers): the
+ *  difficulty rows are hidden then, because a Jev match is always Normal and the
+ *  presets are Jev's strength setting (Rob, 2026-10-09). One line, like the one it
+ *  replaces. */
+export const JEV_NEW_GAME_SUBTITLE =
+  'Jev always plays at Normal difficulty; the presets below set how it plays.';

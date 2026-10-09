@@ -1,14 +1,17 @@
 // counter-attack-jev.test.ts — Jev opponent beta (playtest 5, #436): the counter-attack
 // caption against a colony that attacks with rallies (the Jev-driven seat) instead of
 // AI invasions. Its assault ends when its rally leaves the player's entrance; the
-// caption is owed then if its whole army is broken, with the rout path's cooldown,
-// copy and army gate; and "attacks again" (which lapses the follow-up) is its rally
-// back on the player's entrance, not the AI state machine it leaves running.
+// caption is owed then if the assault was routed (its army down to at most half its
+// peak while the rally was on the door) and its whole army is broken (below the
+// tier's base need), with the rout path's cooldown, copy and army gate; and "attacks
+// again" (which lapses the follow-up) is its rally back on the player's entrance, not
+// the AI state machine it leaves running.
 
 import { describe, it, expect } from 'vitest';
 import {
   COUNTER_ATTACK_BUILD_UP_TEXT,
   COUNTER_ATTACK_CAPTION_COOLDOWN_TICKS,
+  COUNTER_ATTACK_RALLY_ROUT_PCT,
   COUNTER_ATTACK_CAPTION_TEXT,
   COUNTER_ATTACK_READY_FIGHTERS,
   counterAttackCaptionOwed,
@@ -23,7 +26,8 @@ import type { WorldState } from '../sim/types.js';
 import { createScenario } from '../sim/scenario.js';
 import { createDefaultAIStateRecord, getAIStateForColony } from '../sim/ai-state.js';
 import { addFighter } from '../sim/raid-test-utils.js';
-import { RaidType } from '../sim/enums.js';
+import { AntTask, RaidType } from '../sim/enums.js';
+import { despawnAnt } from '../sim/ant-death.js';
 import {
   AI_INVADING_FIGHTER_THRESHOLD,
   ENEMY_COLONY_ID,
@@ -53,7 +57,7 @@ function setTick(w: WorldState, t: number): void {
 
 /** A Normal match at tick 2000 with `playerFighters` player fighters and `enemyFighters`
  *  enemy fighters (the enemy starts with none on the Fighting task). */
-function world(playerFighters = COUNTER_ATTACK_READY_FIGHTERS, enemyFighters = 4): WorldState {
+function world(playerFighters = COUNTER_ATTACK_READY_FIGHTERS, enemyFighters = 10): WorldState {
   const w = createScenario(7, 'Normal');
   setTick(w, 2000);
   for (let i = 0; i < playerFighters; i++) addFighter(w, P, 10, 10, null);
@@ -82,19 +86,45 @@ function lookAt(s: CounterAttackCaptionState, w: WorldState, t: number): void {
   noteCounterAttackTick(s, w, P);
 }
 
+/** The enemy's living fighters cut down to `keep` (the assault's losses). */
+function enemyFightersDownTo(w: WorldState, keep: number): void {
+  const a = w.ants;
+  const alive = w.colonies[E]!.workers.filter(
+    (id) => a.alive[id] === 1 && a.task[id] === AntTask.Fighting,
+  );
+  for (const id of alive.slice(keep)) despawnAnt(w, id, { cause: 'starvation' });
+}
+
+/** An assault on the player's door, looked at on `onTick`; it loses all but `keep`
+ *  fighters, and its rally leaves the door, looked at on `offTick`. */
+function routedAssault(
+  s: CounterAttackCaptionState,
+  w: WorldState,
+  onTick: number,
+  offTick: number,
+  keep = 4,
+): void {
+  rallyOnPlayerDoor(w);
+  lookAt(s, w, onTick);
+  enemyFightersDownTo(w, keep);
+  w.colonies[E]!.rallyPoint = null;
+  lookAt(s, w, offTick);
+}
+
 function jevState(): CounterAttackCaptionState {
   const s = createCounterAttackCaptionState();
   setRallyAttackers(s, [E]);
   return s;
 }
 
-describe('Jev opponent: an assault by rally owes the counter-attack caption when it ends', () => {
-  it('the rally leaves the player door with its army broken: owed as of that tick, and shown', () => {
+describe('Jev opponent: a routed assault by rally owes the counter-attack caption when it ends', () => {
+  it('routed and broken: owed as of the tick the rally leaves the door, and shown', () => {
     const w = world();
     const s = jevState();
     rallyOnPlayerDoor(w);
     lookAt(s, w, 2000);
     expect(counterAttackCaptionOwed(s)).toBe(false); // under way: nothing yet
+    enemyFightersDownTo(w, 4); // 10 -> 4
     w.colonies[E]!.rallyPoint = null; // recalled
     lookAt(s, w, 2100);
     expect(s.owedRoutTick).toBe(2100);
@@ -110,6 +140,7 @@ describe('Jev opponent: an assault by rally owes the counter-attack caption when
     const s = jevState();
     rallyOnPlayerDoor(w);
     lookAt(s, w, 2000);
+    enemyFightersDownTo(w, 4);
     rallyHome(w);
     lookAt(s, w, 2050);
     expect(s.owedRoutTick).toBe(2050);
@@ -120,36 +151,65 @@ describe('Jev opponent: an assault by rally owes the counter-attack caption when
     const s = jevState();
     rallyOnPlayerDoor(w, RaidType.Loot);
     lookAt(s, w, 2000);
+    enemyFightersDownTo(w, 4);
     w.colonies[E]!.rallyPoint = null;
     lookAt(s, w, 2001);
     expect(counterAttackCaptionOwed(s)).toBe(true);
   });
 
-  it('its army not broken (at or above the base need) when the rally leaves: nothing owed', () => {
-    const w = world(COUNTER_ATTACK_READY_FIGHTERS, NORMAL_NEED);
+  it('an intact army called home is not broken, even below the base need (14 mustered, Normal needs 15)', () => {
+    expect(NORMAL_NEED).toBe(15);
+    const w = world(COUNTER_ATTACK_READY_FIGHTERS, 14);
     const s = jevState();
     rallyOnPlayerDoor(w);
     lookAt(s, w, 2000);
-    w.colonies[E]!.rallyPoint = null;
+    w.colonies[E]!.rallyPoint = null; // home before contact: no losses
     lookAt(s, w, 2001);
     expect(counterAttackCaptionOwed(s)).toBe(false);
-    // One fewer fighter would have been broken.
-    const w2 = world(COUNTER_ATTACK_READY_FIGHTERS, NORMAL_NEED - 1);
+  });
+
+  it(`routed means at most COUNTER_ATTACK_RALLY_ROUT_PCT (${COUNTER_ATTACK_RALLY_ROUT_PCT} %) of its peak army left`, () => {
+    expect(COUNTER_ATTACK_RALLY_ROUT_PCT).toBe(50);
+    for (const [keep, owed] of [
+      [5, true],
+      [6, false],
+    ] as const) {
+      const w = world(COUNTER_ATTACK_READY_FIGHTERS, 10);
+      const s = jevState();
+      routedAssault(s, w, 2000, 2001, keep);
+      expect(counterAttackCaptionOwed(s), `10 -> ${keep}`).toBe(owed);
+    }
+  });
+
+  it('routed but its whole army still at or above the base need: not broken, nothing owed', () => {
+    const w = world(COUNTER_ATTACK_READY_FIGHTERS, 2 * NORMAL_NEED);
+    const s = jevState();
+    routedAssault(s, w, 2000, 2001, NORMAL_NEED);
+    expect(counterAttackCaptionOwed(s)).toBe(false);
+    // One fewer would have been broken.
+    const w2 = world(COUNTER_ATTACK_READY_FIGHTERS, 2 * NORMAL_NEED);
     const s2 = jevState();
-    rallyOnPlayerDoor(w2);
-    lookAt(s2, w2, 2000);
-    w2.colonies[E]!.rallyPoint = null;
-    lookAt(s2, w2, 2001);
+    routedAssault(s2, w2, 2000, 2001, NORMAL_NEED - 1);
     expect(counterAttackCaptionOwed(s2)).toBe(true);
   });
 
-  it('the player army not ready: the build-up copy, then the Assault copy once it is', () => {
-    const w = world(6, 4);
+  it('the peak counts fighters drafted while the rally is on the door', () => {
+    const w = world(COUNTER_ATTACK_READY_FIGHTERS, 6);
     const s = jevState();
     rallyOnPlayerDoor(w);
-    lookAt(s, w, 2000);
+    lookAt(s, w, 2000); // 6 launched
+    for (let i = 0; i < 14; i++) addFighter(w, E, 20, 10, null);
+    lookAt(s, w, 2050); // 20 by now
+    enemyFightersDownTo(w, 8); // more than half of 6 survive, but not of 20
     w.colonies[E]!.rallyPoint = null;
-    lookAt(s, w, 2001);
+    lookAt(s, w, 2100);
+    expect(counterAttackCaptionOwed(s)).toBe(true);
+  });
+
+  it('the player army not ready: the build-up copy, then the Assault copy once it is', () => {
+    const w = world(6);
+    const s = jevState();
+    routedAssault(s, w, 2000, 2001);
     const ui = new IdleUi();
     expect(offerCounterAttackCaption(s, w, P, ui, 400, 60)).toBe(true);
     expect(ui.shown).toEqual([COUNTER_ATTACK_BUILD_UP_TEXT]);
@@ -163,10 +223,7 @@ describe('Jev opponent: an assault by rally owes the counter-attack caption when
   it('looking twice at the same world owes it once (frame step, then the next beforeSimTick)', () => {
     const w = world();
     const s = jevState();
-    rallyOnPlayerDoor(w);
-    lookAt(s, w, 2000);
-    w.colonies[E]!.rallyPoint = null;
-    lookAt(s, w, 2001);
+    routedAssault(s, w, 2000, 2001);
     const ui = new IdleUi();
     expect(offerCounterAttackCaption(s, w, P, ui, 400, 60)).toBe(true);
     lookAt(s, w, 2001);
@@ -177,22 +234,16 @@ describe('Jev opponent: an assault by rally owes the counter-attack caption when
     const w = world();
     const s = jevState();
     const ui = new IdleUi();
-    rallyOnPlayerDoor(w);
-    lookAt(s, w, 2000);
-    w.colonies[E]!.rallyPoint = null;
-    lookAt(s, w, 2001);
+    routedAssault(s, w, 2000, 2001);
     expect(offerCounterAttackCaption(s, w, P, ui, 400, 60)).toBe(true);
-    // A second assault ends inside the cooldown: nothing.
-    rallyOnPlayerDoor(w);
-    lookAt(s, w, 2100);
-    w.colonies[E]!.rallyPoint = null;
-    lookAt(s, w, 2001 + COUNTER_ATTACK_CAPTION_COOLDOWN_TICKS - 1);
+    // A second routed assault ends inside the cooldown: nothing.
+    for (let i = 0; i < 6; i++) addFighter(w, E, 20, 10, null);
+    routedAssault(s, w, 2100, 2001 + COUNTER_ATTACK_CAPTION_COOLDOWN_TICKS - 1);
     expect(counterAttackCaptionOwed(s)).toBe(false);
     // A third, ending at the cooldown: owed again.
-    rallyOnPlayerDoor(w);
-    lookAt(s, w, 2001 + COUNTER_ATTACK_CAPTION_COOLDOWN_TICKS);
-    w.colonies[E]!.rallyPoint = null;
-    lookAt(s, w, 2001 + COUNTER_ATTACK_CAPTION_COOLDOWN_TICKS);
+    for (let i = 0; i < 6; i++) addFighter(w, E, 20, 10, null);
+    const end = 2001 + COUNTER_ATTACK_CAPTION_COOLDOWN_TICKS;
+    routedAssault(s, w, end, end);
     expect(counterAttackCaptionOwed(s)).toBe(true);
   });
 
@@ -202,6 +253,7 @@ describe('Jev opponent: an assault by rally owes the counter-attack caption when
     const s = jevState(); // a fresh round's state: nothing seen yet
     lookAt(s, w, 2000);
     expect(counterAttackCaptionOwed(s)).toBe(false);
+    enemyFightersDownTo(w, 4);
     w.colonies[E]!.rallyPoint = null;
     lookAt(s, w, 2001);
     expect(counterAttackCaptionOwed(s)).toBe(true);
@@ -210,10 +262,7 @@ describe('Jev opponent: an assault by rally owes the counter-attack caption when
   it('a colony that is not a rally attacker (the rules AI) owes nothing for its rally', () => {
     const w = world();
     const s = createCounterAttackCaptionState();
-    rallyOnPlayerDoor(w);
-    lookAt(s, w, 2000);
-    w.colonies[E]!.rallyPoint = null;
-    lookAt(s, w, 2001);
+    routedAssault(s, w, 2000, 2001);
     expect(counterAttackCaptionOwed(s)).toBe(false);
   });
 
@@ -224,6 +273,7 @@ describe('Jev opponent: an assault by rally owes the counter-attack caption when
     lookAt(s, w, 2000);
     setRallyAttackers(s, []);
     expect(s.rallyOnViewer).toEqual([]);
+    enemyFightersDownTo(w, 4);
     w.colonies[E]!.rallyPoint = null;
     lookAt(s, w, 2001);
     expect(counterAttackCaptionOwed(s)).toBe(false);
@@ -231,14 +281,11 @@ describe('Jev opponent: an assault by rally owes the counter-attack caption when
 });
 
 describe("Jev opponent: the follow-up lapses on Jev's rally, not on the AI state it leaves running", () => {
-  /** A build-up caption shown for a Jev assault that ended at 2001. */
+  /** A build-up caption shown for a Jev assault routed at 2001. */
   function afterBuildUp(): { w: WorldState; s: CounterAttackCaptionState; ui: IdleUi } {
-    const w = world(6, 4);
+    const w = world(6);
     const s = jevState();
-    rallyOnPlayerDoor(w);
-    lookAt(s, w, 2000);
-    w.colonies[E]!.rallyPoint = null;
-    lookAt(s, w, 2001);
+    routedAssault(s, w, 2000, 2001);
     const ui = new IdleUi();
     offerCounterAttackCaption(s, w, P, ui, 400, 60);
     expect(ui.shown).toEqual([COUNTER_ATTACK_BUILD_UP_TEXT]);

@@ -596,7 +596,9 @@ export function computeFacts(
 // The storage question's gate
 // ---------------------------------------------------------------------------
 
-/** A Food Storage of `colony`'s is placed and not dug yet. */
+/** A Food Storage of `colony`'s is placed and not dug yet — or its PlaceChamber is
+ *  still queued for this tick's drain (a decision applied on a beat tick queues it
+ *  just before the beat builds its candidates). */
 export function foodStoragePending(world: WorldState, colony: ColonyRecord): boolean {
   for (const key in world.pendingChambers) {
     if (!Object.hasOwn(world.pendingChambers, key)) continue;
@@ -605,7 +607,12 @@ export function foodStoragePending(world: WorldState, colony: ColonyRecord): boo
       return true;
     }
   }
-  return false;
+  return world.commandQueue.some(
+    (c) =>
+      c.type === 'PlaceChamber' &&
+      c.colonyId === colony.colonyId &&
+      c.chamberType === ChamberType.FoodStorage,
+  );
 }
 
 /**

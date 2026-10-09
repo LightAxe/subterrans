@@ -2689,8 +2689,8 @@ export class GameScene extends Phaser.Scene {
               this.counterAttackCaption.rallyAttackers.filter((c) => c !== aiCid),
             );
           },
-          // Playtest 5: beats are paced by game speed (200 ticks at 4×) so the proxy's
-          // 2 s floor between beats is never hit.
+          // Playtest 5: beats are paced by game speed (200 ticks at 4×) so they go out
+          // at least 2.5 s of wall clock apart (the proxy refuses one within 2 s).
           speed: () => this.speedMultiplier,
         }),
       );

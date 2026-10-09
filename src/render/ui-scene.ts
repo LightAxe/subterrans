@@ -297,6 +297,7 @@ import {
   type OpponentPickerState,
 } from './opponent-picker-state.js';
 import {
+  JEV_NEW_GAME_SUBTITLE,
   JEV_ORDERS_CAPTION,
   JEV_ORDERS_PLACEHOLDER,
   NEW_GAME_OPPONENT_CAPTION,
@@ -3445,7 +3446,10 @@ export class UIScene extends Phaser.Scene {
     title.setDepth(21);
     group.push(title);
 
-    const subtitle = this.add.text(geo.subtitle.x, geo.subtitle.y, NEW_GAME_SUBTITLE, {
+    // Jev opponent beta: with the difficulty rows hidden, the tier subtitle gives way
+    // to one that says why (a Jev match is Normal).
+    const subtitleText = geo.difficultyVisible ? NEW_GAME_SUBTITLE : JEV_NEW_GAME_SUBTITLE;
+    const subtitle = this.add.text(geo.subtitle.x, geo.subtitle.y, subtitleText, {
       fontSize: '12px',
       fontFamily: 'monospace',
       color: '#aaaaaa',

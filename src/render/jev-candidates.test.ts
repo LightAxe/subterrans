@@ -377,6 +377,24 @@ describe('candidates — apply through a real tick()', () => {
     expect(buildCandidates(world, PLAYER_SEATS, full()).expandStorage).toBeNull();
   });
 
+  it('a Food Storage PlaceChamber still queued for this tick counts as pending', () => {
+    const world = worldAtHandoff();
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const f = factsFor(world, PLAYER_SEATS);
+    const full = { ...f, foodTotal: f.foodCapacity };
+    const spot = buildCandidates(world, PLAYER_SEATS, full).expandStorage!.anchor;
+    world.commandQueue.push({
+      type: 'PlaceChamber',
+      colonyId: PLAYER_COLONY_ID,
+      chamberType: ChamberType.FoodStorage,
+      anchorTileX: spot.x,
+      anchorTileY: spot.y,
+      issuedAtTick: world.tick,
+    });
+    expect(foodStoragePending(world, colony)).toBe(true);
+    expect(buildCandidates(world, PLAYER_SEATS, full).expandStorage).toBeNull();
+  });
+
   it('stops offering expand_storage once capacity reaches 3× the egg reserve', () => {
     const world = worldAtHandoff();
     const base = factsFor(world, PLAYER_SEATS);
