@@ -429,6 +429,15 @@ export interface Decoded {
  */
 const RATIO_ANSWER_IDS = ['ratio', 'fight_ratio'] as const;
 
+/**
+ * Haiku-vs-Jev test (2026-10-09): Jev's `expand_storage` noul sat between 0.38 and 0.58
+ * on every ask (a coin flip), so 59 % of offers it should have accepted were declined.
+ * The client only asks when stores are at least ¾ full with none pending, which is
+ * exactly when the Balanced preset says to build, so the bar is lower than the 0.5 of
+ * the other yes/no questions.
+ */
+export const JEV_EXPAND_STORAGE_NOUL_MIN = 0.4;
+
 export function decodeAnswers(
   answers: JevAnswerMap,
   cands: CandidateSet,
@@ -449,14 +458,14 @@ export function decodeAnswers(
     invalid.push(ids[0]);
     return fallback;
   };
-  const noul = (id: string, offered: boolean): boolean | null => {
+  const noul = (id: string, offered: boolean, min = 0.5): boolean | null => {
     if (!offered) return null;
     const a = answers[id];
     if (a === undefined || a.type !== 'noul') {
       invalid.push(id);
       return false;
     }
-    return a.noul >= 0.5;
+    return a.noul >= min;
   };
   const currentRatio = ratioKeyFor(facts.currentRatio);
   const decision: Decision = {
@@ -481,7 +490,11 @@ export function decodeAnswers(
       'none',
     ),
     spiderPriority: noul('spider_priority', cands.spiderPriority !== null),
-    expandStorage: noul('expand_storage', cands.expandStorage !== null),
+    expandStorage: noul(
+      'expand_storage',
+      cands.expandStorage !== null,
+      JEV_EXPAND_STORAGE_NOUL_MIN,
+    ),
   };
   return { decision, invalid };
 }

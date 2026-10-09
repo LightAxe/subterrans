@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  JEV_EXPAND_STORAGE_NOUL_MIN,
   JEV_ID_PATTERN,
   JEV_MAX_QUESTIONS,
   bucket,
@@ -327,7 +328,7 @@ describe('decodeAnswers', () => {
     expect(invalid).toEqual(['ratio', 'posture', 'dig', 'food_priority']);
   });
 
-  it('thresholds a noul at 0.5 and counts a wrong-typed noul as invalid', () => {
+  it('thresholds a noul at 0.5 (expand_storage: 0.4) and counts a wrong-typed noul as invalid', () => {
     const c = makeCandidates(facts, {
       spiderPriority: { describe: 'hunt the spider' },
       expandStorage: { anchor: { x: 5, y: 9 }, describe: 'more storage' },
@@ -335,7 +336,7 @@ describe('decodeAnswers', () => {
     const yes = decodeAnswers(
       {
         spider_priority: { type: 'noul', noul: 0.5 },
-        expand_storage: { type: 'noul', noul: 0.49 },
+        expand_storage: { type: 'noul', noul: 0.39 },
       },
       c,
       facts,
@@ -350,6 +351,26 @@ describe('decodeAnswers', () => {
     );
     expect(wrongType.decision.spiderPriority).toBe(false);
     expect(wrongType.invalid).toContain('spider_priority');
+  });
+
+  it('accepts expand_storage from JEV_EXPAND_STORAGE_NOUL_MIN, spider_priority from 0.5', () => {
+    expect(JEV_EXPAND_STORAGE_NOUL_MIN).toBe(0.4);
+    const c = makeCandidates(facts, {
+      spiderPriority: { describe: 'hunt the spider' },
+      expandStorage: { anchor: { x: 5, y: 9 }, describe: 'more storage' },
+    });
+    const ask = (spider: number, storage: number) =>
+      decodeAnswers(
+        {
+          spider_priority: { type: 'noul', noul: spider },
+          expand_storage: { type: 'noul', noul: storage },
+        },
+        c,
+        facts,
+      ).decision;
+    expect(ask(0.45, 0.45)).toMatchObject({ spiderPriority: false, expandStorage: true });
+    expect(ask(0.5, 0.39)).toMatchObject({ spiderPriority: true, expandStorage: false });
+    expect(ask(0.5, 0.4).expandStorage).toBe(true);
   });
 
   it('falls back to `economy` when the colony is on a ratio with no candidate key', () => {
