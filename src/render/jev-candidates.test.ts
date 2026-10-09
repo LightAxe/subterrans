@@ -15,9 +15,13 @@ import { isSurfaceTileInComponent } from '../sim/surface-features.js';
 import { runAIController } from './ai-controller.js';
 import { JevCommandLedger } from './jev-commands.js';
 import { createJevOpeningState, isHandoffComplete, runJevOpeningTick } from './jev-opening.js';
+import { eggReserveFp } from '../sim/colony/lifecycle-system.js';
+import { AI_STORAGE_RESERVE_MULTIPLE } from './ai-controller.js';
 import {
+  EXPAND_STORAGE_FRACTION_PCT,
   RECENT_WINDOW_TICKS,
   buildCandidates,
+  foodStoragePending,
   computeFacts,
   digFrontier,
   findReachableChamberSpot,
@@ -309,5 +313,81 @@ describe('candidates — apply through a real tick()', () => {
     tick(world, world.commandQueue.splice(0));
     ledger.settle(world);
     expect(ledger.counts.applied).toBe(1);
+  });
+
+  // Playtest 5 (#436): offered at three quarters, one at a time, and only while more
+  // room still lets the queen lay more (the rules AI's own bound).
+  it('offers expand_storage from EXPAND_STORAGE_FRACTION_PCT (75 %) of capacity', () => {
+    expect(EXPAND_STORAGE_FRACTION_PCT).toBe(75);
+    const world = worldAtHandoff();
+    const base = factsFor(world, PLAYER_SEATS);
+    const cap = 4000;
+    const at = (total: number) =>
+      buildCandidates(world, PLAYER_SEATS, { ...base, foodCapacity: cap, foodTotal: total })
+        .expandStorage;
+    expect(cap).toBeLessThan(
+      AI_STORAGE_RESERVE_MULTIPLE * eggReserveFp(world, world.colonies[PLAYER_COLONY_ID]!),
+    );
+    expect(at(2999)).toBeNull();
+    expect(at(3000)).not.toBeNull();
+  });
+
+  it('never offers expand_storage while one of our Food Storages is pending (and the opponent’s does not count)', () => {
+    const world = worldAtHandoff();
+    const colony = world.colonies[PLAYER_COLONY_ID]!;
+    const full = (): RawFacts => {
+      const f = factsFor(world, PLAYER_SEATS);
+      return { ...f, foodTotal: f.foodCapacity };
+    };
+    expect(foodStoragePending(world, colony)).toBe(false);
+    const c = buildCandidates(world, PLAYER_SEATS, full());
+    expect(c.expandStorage).not.toBeNull();
+
+    // The opponent's pending Food Storage is not ours.
+    const enemy = world.colonies[ENEMY_COLONY_ID]!;
+    const enemySpot = findReachableChamberSpot(world, ENEMY_COLONY_ID, ChamberType.FoodStorage);
+    expect(enemySpot).not.toBeNull();
+    tick(world, [
+      {
+        type: 'PlaceChamber',
+        colonyId: ENEMY_COLONY_ID,
+        chamberType: ChamberType.FoodStorage,
+        anchorTileX: enemySpot!.x,
+        anchorTileY: enemySpot!.y,
+        issuedAtTick: world.tick,
+      },
+    ]);
+    expect(foodStoragePending(world, enemy)).toBe(true);
+    expect(foodStoragePending(world, colony)).toBe(false);
+    expect(buildCandidates(world, PLAYER_SEATS, full()).expandStorage).not.toBeNull();
+
+    // Ours placed and not dug yet: not offered until it is built.
+    const spot = buildCandidates(world, PLAYER_SEATS, full()).expandStorage!.anchor;
+    tick(world, [
+      {
+        type: 'PlaceChamber',
+        colonyId: PLAYER_COLONY_ID,
+        chamberType: ChamberType.FoodStorage,
+        anchorTileX: spot.x,
+        anchorTileY: spot.y,
+        issuedAtTick: world.tick,
+      },
+    ]);
+    expect(foodStoragePending(world, colony)).toBe(true);
+    expect(buildCandidates(world, PLAYER_SEATS, full()).expandStorage).toBeNull();
+  });
+
+  it('stops offering expand_storage once capacity reaches 3× the egg reserve', () => {
+    const world = worldAtHandoff();
+    const base = factsFor(world, PLAYER_SEATS);
+    const bound =
+      AI_STORAGE_RESERVE_MULTIPLE * eggReserveFp(world, world.colonies[PLAYER_COLONY_ID]!);
+    expect(bound).toBeGreaterThan(0);
+    const at = (cap: number) =>
+      buildCandidates(world, PLAYER_SEATS, { ...base, foodCapacity: cap, foodTotal: cap })
+        .expandStorage;
+    expect(at(bound - 1)).not.toBeNull();
+    expect(at(bound)).toBeNull();
+    expect(at(bound * 2)).toBeNull();
   });
 });
