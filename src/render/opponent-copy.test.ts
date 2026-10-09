@@ -4,11 +4,13 @@
 // property the layout relies on: each row's description fits its single line.
 import { describe, it, expect } from 'vitest';
 import {
+  JEV_NEW_GAME_SUBTITLE,
   JEV_ORDERS_CAPTION,
   JEV_ORDERS_PLACEHOLDER,
   NEW_GAME_OPPONENT_CAPTION,
   OPPONENT_ROW_COPY,
 } from './opponent-copy.js';
+import { NEW_GAME_SUBTITLE } from './difficulty-copy.js';
 import {
   DIFFICULTY_ROW_PAD_RIGHT,
   NEW_GAME_COLUMN_MAX_W,
@@ -46,5 +48,11 @@ describe('opponent copy (#304 items 3–4)', () => {
       expect(desc.length, `${kind}: "${desc}"`).toBeLessThanOrEqual(maxChars);
       expect(desc).not.toContain('\n');
     }
+  });
+
+  it('with Jev selected the subtitle says the match is Normal, on one line no longer than the tier one', () => {
+    expect(JEV_NEW_GAME_SUBTITLE).toContain('Normal');
+    expect(JEV_NEW_GAME_SUBTITLE).not.toContain('\n');
+    expect(JEV_NEW_GAME_SUBTITLE.length).toBeLessThanOrEqual(NEW_GAME_SUBTITLE.length);
   });
 });

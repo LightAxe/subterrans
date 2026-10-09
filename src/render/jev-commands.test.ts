@@ -8,6 +8,7 @@ import { PLAYER_COLONY_ID } from '../sim/constants.js';
 import { UndergroundTileState, ugGet } from '../sim/terrain.js';
 import { pushCommand } from '../sim/commands.js';
 import { pilesForTest } from '../sim/food/food-test-utils.js';
+import { RaidType } from '../sim/enums.js';
 import { JevCommandLedger, PLAYER_SURFACE_COMMANDS } from './jev-commands.js';
 
 function drainAndTick(world: ReturnType<typeof createScenario>): void {
@@ -171,6 +172,24 @@ describe('JevCommandLedger — applied / rejected / no-op', () => {
     ledger.settle(world);
     expect(ledger.counts.noop).toBe(2);
     expect(ledger.counts.rejected).toBe(0);
+
+    // Playtest 5: the same rally with another raid type is a change (applied), and
+    // re-sending it with that raid type is then a no-op.
+    for (const expected of ['applied', 'noop'] as const) {
+      const before = { ...ledger.counts };
+      ledger.issue(world, {
+        type: 'SetRallyPoint',
+        colonyId: PLAYER_COLONY_ID,
+        tileX: entrance.surfaceTileX,
+        tileY: entrance.surfaceTileY,
+        raidType: RaidType.Assault,
+        issuedAtTick: world.tick,
+      });
+      drainAndTick(world);
+      ledger.settle(world);
+      expect(ledger.counts[expected]).toBe(before[expected] + 1);
+      expect(world.colonies[PLAYER_COLONY_ID]!.raidType).toBe(RaidType.Assault);
+    }
   });
 
   it('cancels a dig mark, and a cancel on an unmarked tile is a no-op', () => {

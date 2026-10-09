@@ -48,10 +48,14 @@
 // lists as RALLY ATTACKERS (setRallyAttackers: the seats Jev is driving), the trigger
 // is instead the rally leaving the viewer's entrance (the assault is over: called
 // home, retargeted elsewhere or cleared), judged per tick by noteCounterAttackTick,
-// with the same broken-army test (its whole army, aiFighterCount, below the tier's
-// base need), cooldown, copy and army gate; and "invades again" (which lapses a
-// follow-up) is the rally back on the viewer's entrance. (Playtest 5, #436: the
-// caption fired 0 times in 30 games against a Jev stand-in.)
+// when the assault was ROUTED — its army now no more than
+// COUNTER_ATTACK_RALLY_ROUT_PCT of its peak while the rally was on the viewer's door
+// (the rules AI's rout is its committed cohort nearly wiped out; Jev commits no
+// cohort, and its drafts keep joining the rally) — and the same broken-army test
+// holds (its whole army, aiFighterCount, below the tier's base need). Cooldown, copy
+// and army gate are the rout path's. "Invades again" (which lapses a follow-up) is
+// the rally back on the viewer's entrance. (Playtest 5, #436: the caption fired 0
+// times in 30 games against a Jev stand-in.)
 //
 // Render-side session state only: reads world state and events, writes nothing, saves
 // nothing (a loaded save starts with none owed). Pure and Phaser-free; GameScene owns
@@ -180,8 +184,9 @@ export interface CounterAttackCaptionState {
    *  (setRallyAttackers). Empty: every attacker is the rules AI. */
   rallyAttackers: ColonyId[];
   /** Of `rallyAttackers`, those whose rally was on one of the viewer's entrances at the
-   *  last look (noteCounterAttackTick). */
-  rallyOnViewer: ColonyId[];
+   *  last look (noteCounterAttackTick), each with its largest army (aiFighterCount)
+   *  seen while it was. */
+  rallyOnViewer: { readonly attackerId: ColonyId; peakArmy: number }[];
 }
 
 export function createCounterAttackCaptionState(): CounterAttackCaptionState {
@@ -209,8 +214,16 @@ export function setRallyAttackers(
   colonyIds: readonly ColonyId[],
 ): void {
   state.rallyAttackers = [...colonyIds];
-  state.rallyOnViewer = state.rallyOnViewer.filter((c) => colonyIds.includes(c));
+  state.rallyOnViewer = state.rallyOnViewer.filter((r) => colonyIds.includes(r.attackerId));
 }
+
+/**
+ * Jev opponent: an assault by rally that ends with its attacker's army at or below
+ * this percentage of the army's peak while the rally was on the viewer's door was
+ * routed (Fable review: 14 mustered fighters called home before contact are below
+ * Normal's base need of 15, but not broken).
+ */
+export const COUNTER_ATTACK_RALLY_ROUT_PCT = 50;
 
 /** `attackerId`'s rally is on one of `viewerColonyId`'s entrances (open or closed). */
 function rallyOnViewerEntrance(
@@ -241,10 +254,12 @@ function attacking(
 
 /**
  * Jev opponent: each rally attacker whose rally has left the viewer's entrance since
- * the last look ended an assault on this tick; it owes the caption if its whole army
- * is broken now (oweIfBroken, the rout path's test and cooldown). Idempotent for one
- * world state (GameScene's frame step and the next beforeSimTick both look at the
- * frame's last tick).
+ * the last look ended an assault on this tick; it owes the caption if the assault was
+ * routed (its army now at most COUNTER_ATTACK_RALLY_ROUT_PCT of its peak during the
+ * assault) and its whole army is broken now (oweIfBroken, the rout path's test and
+ * cooldown). While the rally is on the door, the peak is kept up to date. Idempotent
+ * for one world state (GameScene's frame step and the next beforeSimTick both look at
+ * the frame's last tick).
  */
 function noteRallyAssaults(
   state: CounterAttackCaptionState,
@@ -253,13 +268,18 @@ function noteRallyAssaults(
 ): void {
   for (const attacker of state.rallyAttackers) {
     const on = rallyOnViewerEntrance(world, attacker, viewerColonyId);
-    if (on === state.rallyOnViewer.includes(attacker)) continue;
+    const army = aiFighterCount(world, attacker);
+    const rec = state.rallyOnViewer.find((r) => r.attackerId === attacker);
     if (on) {
-      state.rallyOnViewer.push(attacker);
+      if (rec === undefined) state.rallyOnViewer.push({ attackerId: attacker, peakArmy: army });
+      else if (army > rec.peakArmy) rec.peakArmy = army;
       continue;
     }
-    state.rallyOnViewer = state.rallyOnViewer.filter((c) => c !== attacker);
-    oweIfBroken(state, world, world.tick, attacker, aiFighterCount(world, attacker));
+    if (rec === undefined) continue;
+    state.rallyOnViewer = state.rallyOnViewer.filter((r) => r !== rec);
+    if (army * 100 <= rec.peakArmy * COUNTER_ATTACK_RALLY_ROUT_PCT) {
+      oweIfBroken(state, world, world.tick, attacker, army);
+    }
   }
 }
 

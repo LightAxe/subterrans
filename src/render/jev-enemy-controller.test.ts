@@ -807,6 +807,51 @@ describe('JevEnemyController — failure policy', () => {
     }
   });
 
+  it('falling back calls off a rally Jev gave (an Assault on their door must not outlive Jev)', async () => {
+    const ctl = new JevEnemyController({ seats: SEATS, client: deadClient(), orders: '' });
+    const world = handoffWorld();
+    const colony = world.colonies[ENEMY_COLONY_ID]!;
+    const door = world.colonies[PLAYER_COLONY_ID]!.entrances[0]!;
+    colony.rallyPoint = { tileX: door.surfaceTileX, tileY: door.surfaceTileY };
+    colony.raidType = RaidType.Assault;
+    const log: IssuedRecord[] = [];
+    stepOnce(world, ctl, log); // the failed probe
+    await alignToBeat(world, ctl, log);
+    let flipTick = -1;
+    for (let i = 0; i < BEAT + 2 && flipTick < 0; i++) {
+      const t = world.tick;
+      await step(world, ctl, 1, log);
+      if (ctl.status === 'fallback') flipTick = t;
+    }
+    expect(flipTick).toBeGreaterThanOrEqual(0);
+    // The flip tick queues the call-off, and the rally is off their door after it.
+    expect(log.some((r) => r.cmd.type === 'ClearRallyPoint' && r.tick === flipTick)).toBe(true);
+    const rp = colony.rallyPoint as { tileX: number; tileY: number } | null;
+    expect(rp === null || rp.tileX !== door.surfaceTileX || rp.tileY !== door.surfaceTileY).toBe(
+      true,
+    );
+  });
+
+  it('falling back with no rally set issues no ClearRallyPoint', async () => {
+    const ctl = new JevEnemyController({ seats: SEATS, client: deadClient(), orders: '' });
+    const world = handoffWorld();
+    world.colonies[ENEMY_COLONY_ID]!.rallyPoint = null;
+    const log: IssuedRecord[] = [];
+    stepOnce(world, ctl, log);
+    await alignToBeat(world, ctl, log);
+    // Up to and including the flip tick: everything after it is the rules AI's.
+    let flipTick = -1;
+    for (let i = 0; i < BEAT + 2 && flipTick < 0; i++) {
+      const t = world.tick;
+      await step(world, ctl, 1, log);
+      if (ctl.status === 'fallback') flipTick = t;
+    }
+    expect(flipTick).toBeGreaterThanOrEqual(0);
+    expect(log.filter((r) => r.cmd.type === 'ClearRallyPoint' && r.tick <= flipTick)).toHaveLength(
+      0,
+    );
+  });
+
   it('a success resets the consecutive-failure streak', async () => {
     const onFallback = vi.fn();
     // The readiness probe is a session mint and succeeds, so it never joins the

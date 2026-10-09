@@ -21,6 +21,7 @@ import type { SimCommand } from '../sim/commands.js';
 import { pushCommand } from '../sim/commands.js';
 import { UndergroundTileState, ugGet } from '../sim/terrain.js';
 import { FP_SHIFT } from '../sim/fixed.js';
+import { RaidType } from '../sim/enums.js';
 
 /** Exactly the commands the player's own UI can produce (CONTEXT.md → Colony control). */
 export const PLAYER_SURFACE_COMMANDS: ReadonlySet<SimCommand['type']> = new Set<SimCommand['type']>(
@@ -119,8 +120,14 @@ function classifierFor(world: WorldState, cmd: SimCommand): Classifier {
         entranceAt(w, cmd.colonyId, cmd.surfaceTileX, cmd.surfaceTileY) ? 'applied' : 'rejected';
     }
     case 'SetRallyPoint': {
-      if (rallyEquals(world, cmd.colonyId, cmd.tileX, cmd.tileY)) return NOOP;
-      return (w) => (rallyEquals(w, cmd.colonyId, cmd.tileX, cmd.tileY) ? 'applied' : 'rejected');
+      // The raid type is part of the order (#352: absent = Loot): the Jev assault re-sends
+      // a Loot rally already on their door as an Assault (playtest 5), which moves no tile.
+      const raidType = cmd.raidType ?? RaidType.Loot;
+      const holds = (w: WorldState): boolean =>
+        rallyEquals(w, cmd.colonyId, cmd.tileX, cmd.tileY) &&
+        w.colonies[cmd.colonyId]?.raidType === raidType;
+      if (holds(world)) return NOOP;
+      return (w) => (holds(w) ? 'applied' : 'rejected');
     }
     case 'ClearRallyPoint': {
       if ((world.colonies[cmd.colonyId]?.rallyPoint ?? null) === null) return NOOP;
