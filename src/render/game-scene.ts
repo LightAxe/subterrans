@@ -47,7 +47,14 @@ import { beforeSimTick } from './sim-tick-hook.js';
 import { runAIController } from './ai-controller.js';
 import { JevEnemyController } from './jev-enemy-controller.js';
 import { createJevClient } from './jev-client.js';
-import { DEFAULT_OPPONENT, type OpponentConfig, type OpponentStatus } from './opponent-config.js';
+import {
+  DEFAULT_OPPONENT,
+  defaultScreenOpponent,
+  matchDifficulty,
+  type OpponentConfig,
+  type OpponentStatus,
+} from './opponent-config.js';
+import { DEFAULT_ORDERS_TEXT } from './jev-orders.js';
 import { buildDebugSnapshot } from '../platform/debug-snapshot.js';
 import { downloadDebugSnapshot } from './debug-snapshot-download.js';
 import { submitPlaytrace, type PlaytraceSurvey } from './playtrace-upload.js';
@@ -2408,8 +2415,14 @@ export class GameScene extends Phaser.Scene {
     opponent: OpponentConfig = DEFAULT_OPPONENT,
   ): void {
     this.resetSessionState();
-    this.currentDifficulty = difficulty;
     this.currentOpponent = this.effectiveOpponent(opponent);
+    // Jev opponent beta (Rob, 2026-10-09): a Jev match is always Normal, whatever
+    // tier was asked for (the new-game screen hides the rows while Jev is selected
+    // and keeps the player's tier for the Standard AI; the save-recovery fallbacks
+    // pass the persisted tier). A Jev request downgraded to the Standard AI (no
+    // endpoint) keeps it.
+    difficulty = matchDifficulty(difficulty, this.currentOpponent);
+    this.currentDifficulty = difficulty;
     // W1: seed formula — Date.now() is ~1.7e12, exceeds int32. Bitmask-clamp to positive int32.
     // Bitwise ops truncate to int32; 0x7fffffff mask ensures sign bit is clear.
     const seed = generateFreshSeed(Date.now());
@@ -2580,22 +2593,26 @@ export class GameScene extends Phaser.Scene {
   /** Callback payload shared by every path that opens the difficulty overlay, so
    *  the picker is seeded identically on first boot, New Game and restart.
    *
-   *  The in-memory `pendingOpponent` / `pendingOrders` win over the persisted
-   *  values, mirroring the pheromone/hint toggles (Codex round-6 P2): where
-   *  localStorage writes are blocked (private mode, quota) saveSettings is a
-   *  silent no-op and loadSettings would hand back the DEFAULT on the next open —
-   *  throwing away a choice the player made two minutes ago. Falls back to storage
-   *  on the first overlay of the session, which is exactly what it is for. */
+   *  The in-memory `pendingOpponent` / `pendingOrders` (this session's choice)
+   *  win; on the first overlay of the session the build's default applies. Being
+   *  in memory, the choice survives where localStorage writes are blocked
+   *  (private mode, quota), as the pheromone/hint toggles do (Codex round-6 P2). */
   private difficultySelectSeed(): {
     jevAvailable: boolean;
     initialOpponent: OpponentConfig;
     initialOrders: string;
   } {
-    const persisted = loadSettings();
+    // Rob, 2026-10-09: the screen opens on the build's default opponent
+    // (defaultScreenOpponent: Jev with the Balanced preset on the beta build, the
+    // Standard AI elsewhere) unless the player chose one earlier this session (a
+    // restart, a retry, the next New Game), which it keeps. A choice from an earlier
+    // visit (the persisted settings.opponent / jevOrders) no longer pre-selects the
+    // screen; it still seeds the save-recovery fallbacks (persistedOpponent).
+    const jevAvailable = this.isJevAvailable();
     return {
-      jevAvailable: this.isJevAvailable(),
-      initialOpponent: this.pendingOpponent ?? persisted.opponent,
-      initialOrders: this.pendingOrders ?? persisted.jevOrders,
+      jevAvailable,
+      initialOpponent: this.pendingOpponent ?? defaultScreenOpponent(jevAvailable),
+      initialOrders: this.pendingOrders ?? DEFAULT_ORDERS_TEXT,
     };
   }
 

@@ -167,9 +167,11 @@ export const HUD_ZONE_RECTS: readonly { readonly name: string; readonly rect: Re
 // the difficulty rows and Start are NOT where the plain-build rects above put
 // them. Two rect sets, one per picker state, evaluated from the same pure layout
 // function ui-scene.ts draws from; a spec clicks the set for the state the
-// screen is in.
+// screen is in. With Jev selected the difficulty rows are hidden (a Jev match is
+// Normal), so that set has none.
 export interface JevBuildNewGameRects {
-  difficultyRows: Readonly<Record<Difficulty, Rect>>;
+  /** Null in the Jev-selected set: the difficulty section is hidden. */
+  difficultyRows: Readonly<Record<Difficulty, Rect>> | null;
   startButton: Rect;
   /** "Standard AI" / "Jev (beta)" radio rows, keyed by kind. */
   opponentRows: Readonly<Record<OpponentKind, Rect>>;
@@ -185,7 +187,7 @@ function jevBuildRects(jevSelected: boolean): JevBuildNewGameRects {
   });
   if (opponent === null) throw new Error('jevAvailable: true must yield an opponent section');
   return {
-    difficultyRows: screen.difficultyRows,
+    difficultyRows: screen.difficultyVisible ? screen.difficultyRows : null,
     startButton: screen.startButton,
     opponentRows: opponent.rows,
     jev:
@@ -195,11 +197,11 @@ function jevBuildRects(jevSelected: boolean): JevBuildNewGameRects {
   };
 }
 
-/** The Jev-capable screen with the Standard AI row selected (how it opens on
- *  a fresh player). */
+/** The Jev-capable screen with the Standard AI row selected. */
 export const JEV_BUILD_RULES_SELECTED: JevBuildNewGameRects = jevBuildRects(false);
-/** The Jev-capable screen with the Jev row selected — the Jev options are up
- *  and everything else has moved. */
+/** The Jev-capable screen with the Jev row selected — the Jev options are up,
+ *  the difficulty rows are hidden, and Start has moved. How the beta build's
+ *  screen opens on a fresh visit (Jev + Balanced is its default). */
 export const JEV_BUILD_JEV_SELECTED: JevBuildNewGameRects = jevBuildRects(true);
 /** Preset ids/labels/text, so the spec asserts against the shipped text, not a copy. */
 export { JEV_ORDERS_PRESETS };

@@ -18,6 +18,8 @@
 //   selectedOpponent    the opponent row currently selected on the new-game
 //                       screen (Jev opponent beta; 'rules' on a build with no
 //                       Jev endpoint, where no opponent section is drawn)
+//   difficultyRowsVisible  whether the screen draws its difficulty rows (Jev
+//                       opponent beta: hidden while Jev is selected)
 
 import { expect, type Page } from '@playwright/test';
 import {
@@ -91,6 +93,15 @@ export async function selectedOpponent(page: Page): Promise<string> {
   return await page.evaluate(() => {
     const ui = (window as { __phase9_ui?: { selectedOpponent?: string } }).__phase9_ui;
     return ui?.selectedOpponent ?? '<undefined>';
+  });
+}
+
+/** Whether the new-game screen draws its difficulty rows (Jev opponent beta:
+ *  hidden while Jev is selected), or '<undefined>' before it has published. */
+export async function difficultyRowsVisible(page: Page): Promise<boolean | '<undefined>'> {
+  return await page.evaluate(() => {
+    const ui = (window as { __phase9_ui?: { difficultyRowsVisible?: boolean } }).__phase9_ui;
+    return ui?.difficultyRowsVisible ?? '<undefined>';
   });
 }
 

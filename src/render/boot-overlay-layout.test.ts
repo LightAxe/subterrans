@@ -48,6 +48,7 @@ import {
   opponentRowInner,
   opponentSectionH,
   opponentSectionLayout,
+  difficultyHiddenFor,
   type BootOverlayRect,
   type OpponentSectionOptions,
 } from './boot-overlay-layout.js';
@@ -367,7 +368,6 @@ describe('opponent section — Jev selected (expanded)', () => {
 
   it('nothing in the section overlaps anything else on the screen', () => {
     const rects: BootOverlayRect[] = [
-      ...DIFFICULTY_TIERS.map((t) => screen.difficultyRows[t]),
       ...OPPONENT_KINDS.map((k) => geo.rows[k]),
       ...jev.presetButtons,
       jev.textarea,
@@ -378,26 +378,51 @@ describe('opponent section — Jev selected (expanded)', () => {
         expect(overlaps(rects[i]!, rects[j]!), `${i} vs ${j}`).toBe(false);
       }
     }
-    // Reading order top to bottom: difficulty rows, opponent rows, options, Start.
-    expect(geo.rows.rules.y).toBeGreaterThan(screen.difficultyRows.Hard.y);
+    // Reading order top to bottom: title, opponent rows, options, Start.
+    expect(geo.caption.y).toBeGreaterThan(screen.subtitle.y);
     expect(jev.textarea.y).toBeGreaterThan(geo.rows.jev.y);
     expect(screen.startButton.y).toBeGreaterThan(jev.textarea.y + jev.textarea.h);
   });
 
-  it('the difficulty rows and Start move (the stack re-centres) between the two states', () => {
+  // Rob, 2026-10-09: a Jev match is Normal, so with Jev selected the difficulty
+  // section (caption and rows) is left out of the stack altogether.
+  it('hides the difficulty section: no rows to draw or click, no height, no gap', () => {
+    expect(difficultyHiddenFor(JEV)).toBe(true);
+    expect(screen.difficultyVisible).toBe(false);
+    for (const t of DIFFICULTY_TIERS) {
+      expect(screen.difficultyRows[t].w).toBe(0);
+      expect(screen.difficultyRows[t].h).toBe(0);
+    }
+    // The opponent section follows the title block directly.
+    expect(screen.opponentSlot.y).toBe(
+      screen.stack.y + NEW_GAME_TITLE_H + NEW_GAME_SUBTITLE_H + NEW_GAME_SECTION_GAP,
+    );
+    const titleH = NEW_GAME_TITLE_H + NEW_GAME_SUBTITLE_H;
+    const startH = NEW_GAME_START_H + NEW_GAME_START_HINT_H;
+    expect(screen.stack.h).toBe(titleH + opponentSectionH(JEV) + startH + 2 * NEW_GAME_SECTION_GAP);
+    expect(screen.stack.y).toBeCloseTo((DEFAULT_LAYOUT.h - screen.stack.h) / 2, 6);
+  });
+
+  it('the Standard AI state draws the difficulty section; no endpoint, as on main', () => {
+    expect(difficultyHiddenFor(RULES)).toBe(false);
+    expect(newGameScreenWithOpponent(DEFAULT_LAYOUT, RULES).screen.difficultyVisible).toBe(true);
+    expect(difficultyHiddenFor({ ...NONE, jevSelected: true })).toBe(false);
+    expect(newGameScreenLayout(DEFAULT_LAYOUT).difficultyVisible).toBe(true);
+  });
+
+  it('Start moves (the stack re-centres) between the two states', () => {
     const collapsed = newGameScreenWithOpponent(DEFAULT_LAYOUT, RULES).screen;
     const grew = opponentSectionH(JEV) - opponentSectionH(RULES);
     expect(grew).toBeGreaterThan(0);
-    // Everything above the section moves up; Start moves down. This is what
-    // tests/helpers/geometry.ts exports two rect sets for.
-    expect(screen.difficultyRows.Normal.y).toBeLessThan(collapsed.difficultyRows.Normal.y);
-    expect(screen.startButton.y).toBeGreaterThan(collapsed.startButton.y);
+    // This is what tests/helpers/geometry.ts exports two rect sets for.
+    expect(screen.startButton.y).not.toBe(collapsed.startButton.y);
+    expect(screen.opponentSlot.y).not.toBe(collapsed.opponentSlot.y);
   });
 
   it('reflows with the LayoutContext instead of a baked canvas size', () => {
     const wide = createLayoutContext(1200, 900);
     const w = newGameScreenWithOpponent(wide, JEV);
-    expect(w.opponent!.rows.jev.x).toBe(w.screen.difficultyRows.Hard.x);
+    expect(w.opponent!.rows.jev.x).toBe((1200 - 620) / 2);
     expect(w.opponent!.jev!.textarea.x + w.opponent!.jev!.textarea.w / 2).toBe(600);
     expect(w.screen.stack.y).toBe((900 - w.screen.stack.h) / 2);
     for (const narrowW of [520, 480, 360, 320]) {
