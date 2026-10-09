@@ -723,9 +723,9 @@ export class JevEnemyController {
       // from guarding, and most answers then cancelled the muster. So a muster in
       // progress reports `assault` (the rally on the world is unchanged). Side effect:
       // decodeAnswers' fallback for an invalid or failed posture answer is
-      // `facts.currentPosture`, so such an answer now keeps the muster going. A muster that never completes is
-      // reported as `assault` for as long as Jev keeps answering assault (the rally stays home, so the game effect
-      // equals guard_home).
+      // `facts.currentPosture`, so such an answer now keeps the muster going. A muster
+      // that never completes is reported as `assault` for as long as Jev keeps
+      // answering assault (the rally stays home, so the game effect equals guard_home).
       this.currentPosture =
         d.posture === 'assault' && posture === 'guard_home' ? 'assault' : posture;
     }
