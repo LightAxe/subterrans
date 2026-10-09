@@ -311,6 +311,11 @@ import {
 } from './hud-stats.js';
 import { formatQueenStoresLine, queenStoresWait } from './storage-hint.js';
 import {
+  createQueenStoresLineState,
+  holdQueenStoresLine,
+  resetQueenStoresLineState,
+} from './queen-stores-line.js';
+import {
   computeAntActivity,
   formatAntActivityLines,
   antActivityPanelRect,
@@ -702,6 +707,8 @@ export class UIScene extends Phaser.Scene {
   private queenStoresText!: Phaser.GameObjects.Text;
   private queenStoresColor: string = HUD_STATS_COLORS.queenStoresWaitingCss;
   private queenStoresShown: { text: string; color: string; rect: HudRect } | null = null;
+  // #425 — hysteresis for that line (queen-stores-line.ts), reset each round.
+  private queenStoresLineState = createQueenStoresLineState();
   private triangleLabels!: Phaser.GameObjects.Text[];
   private viewToggleText!: Phaser.GameObjects.Text;
   /** C1 — colony alarm toggle label; its text follows colony.alarmActive (the red
@@ -1637,6 +1644,7 @@ export class UIScene extends Phaser.Scene {
       spiderOrderChipState.visible = false;
       // #413 — nor the "Waiting for stores" strip.
       queenStoresStripState.rect = null;
+      resetQueenStoresLineState(this.queenStoresLineState);
       return;
     }
 
@@ -1717,8 +1725,24 @@ export class UIScene extends Phaser.Scene {
     // her stores against what they must hold for her to lay (queenStoresNeedFp), in
     // the warning colour once that is more than storage can hold. Hidden while the
     // ant-activity popup, which opens over the same spot, is up.
-    const storesWait =
-      colony && !antActivityPanelState.visible ? queenStoresWait(world, PLAYER_COLONY_ID) : null;
+    // #425 — held through laying blips (queen-stores-line.ts); the strip's input mask
+    // follows this displayed result. Once the round is over (her queen dead, or an end
+    // screen up: the game-over overlay, or the survey that replaces it when playtraces
+    // are on, or the new-game screen a restart opens over the old world) the hold is
+    // cleared, so the line can't linger frozen under it.
+    const roundOver =
+      this.gameOverGroup.length > 0 ||
+      this.surveyGroup.length > 0 ||
+      this.difficultySelectGroup.length > 0 ||
+      !colony ||
+      world.ants.alive[colony.queenEntityId] !== 1;
+    const heldWait = holdQueenStoresLine(
+      this.queenStoresLineState,
+      world.tick,
+      colony ? queenStoresWait(world, PLAYER_COLONY_ID) : null,
+      roundOver,
+    );
+    const storesWait = antActivityPanelState.visible ? null : heldWait;
     if (storesWait) {
       const line = formatQueenStoresLine(storesWait);
       const color = storesWait.capped
@@ -2536,6 +2560,7 @@ export class UIScene extends Phaser.Scene {
    * alongside resetCaptions()/resetFirstUseSession().
    */
   public resetCaptionsForRound(): void {
+    resetQueenStoresLineState(this.queenStoresLineState); // #425
     this.clearCaptionQueue();
     this.captionsClosed = false;
     this.captionsShownLog = [];

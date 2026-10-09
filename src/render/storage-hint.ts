@@ -58,7 +58,8 @@
 // back by the egg reserve at all: her stores (colonyFoodTotal, the Food count's
 // number) against what they must hold. That covers the storage stall (the need above
 // capacity: `capped`, drawn in the warning colour) and an ordinary wait for food. It
-// reads the live world.
+// reads the live world, held 2 s past the wait's end and 2 s amber past `capped`
+// (queen-stores-line.ts, #425).
 //
 // Render-side session state only: reads world state, writes nothing, saves nothing.
 // Pure and Phaser-free; GameScene owns the hint state and calls advanceStorageHint
