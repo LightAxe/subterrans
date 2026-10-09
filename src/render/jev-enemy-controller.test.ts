@@ -28,6 +28,7 @@ import { SPIDER_NEAR_TILES, buildCandidates, computeFacts } from './jev-candidat
 import { bucket, tablesFor } from './jev-encode.js';
 import { AntTask, RaidType } from '../sim/enums.js';
 import { addFighter } from '../sim/raid-test-utils.js';
+import { emitEvent } from '../sim/telemetry.js';
 import { createJevOpeningState, isHandoffComplete, runJevOpeningTick } from './jev-opening.js';
 
 /** Every tile of every pending footprint `colonyId` owns, as "x,y" keys. */
@@ -57,8 +58,12 @@ import {
   JEV_MUSTER_HOME_PCT,
   JEV_MUSTER_HOME_RADIUS_TILES,
   JEV_MUSTER_MIN_FIGHTERS,
+  JEV_ASSAULT_ENGAGE_RADIUS_TILES,
+  JEV_ASSAULT_STALL_TICKS,
   JevEnemyController,
+  assaultEngaged,
   beatPaceFactor,
+  newestAssaultKillTick,
   musterCount,
   musteredPosture,
 } from './jev-enemy-controller.js';
@@ -1035,7 +1040,8 @@ describe('JevEnemyController — the muster (playtest 5)', () => {
     standDownFighters(world);
     await step(world, ctl, 2); // beat + apply
     expect(colony.rallyPoint).toEqual({ tileX: home.surfaceTileX, tileY: home.surfaceTileY });
-    expect(ctl.currentPosture).toBe('guard_home');
+    // The rally is held at home, but Jev is told the muster is its assault.
+    expect(ctl.currentPosture).toBe('assault');
 
     // A mustered army at home: the next beat sends it, as an Assault raid.
     for (let i = 0; i < JEV_MUSTER_MIN_FIGHTERS + 2; i++) {
@@ -1063,7 +1069,39 @@ describe('JevEnemyController — the muster (playtest 5)', () => {
     expect(colony.rallyPoint).toEqual(rallyBefore);
   });
 
-  it('a Loot rally already on their door (an older build) is re-sent as an Assault', async () => {
+  it('a muster in progress is reported to Jev as `assault` on the next beat', async () => {
+    const SHORT_BEAT = 20;
+    const client = new ScriptedClient(scripted({ posture: 'assault' }));
+    const ctl = new JevEnemyController({ seats: SEATS, client, orders: '', beatTicks: SHORT_BEAT });
+    const world = handoffWorld();
+    const home = world.colonies[ENEMY_COLONY_ID]!.entrances[0]!;
+    stepOnce(world, ctl);
+    await alignToBeat(world, ctl, undefined, SHORT_BEAT);
+    standDownFighters(world);
+    await step(world, ctl, 2);
+    expect(world.colonies[ENEMY_COLONY_ID]!.rallyPoint).toEqual({
+      tileX: home.surfaceTileX,
+      tileY: home.surfaceTileY,
+    });
+    await step(world, ctl, SHORT_BEAT);
+    expect((client.lastState!.our_colony as Record<string, unknown>).current_posture).toBe(
+      'assault',
+    );
+  });
+
+  it('answering guard_home while mustering reports guard_home', async () => {
+    const SHORT_BEAT = 20;
+    const client = new ScriptedClient(scripted({ posture: 'guard_home' }));
+    const ctl = new JevEnemyController({ seats: SEATS, client, orders: '', beatTicks: SHORT_BEAT });
+    const world = handoffWorld();
+    stepOnce(world, ctl);
+    await alignToBeat(world, ctl, undefined, SHORT_BEAT);
+    standDownFighters(world);
+    await step(world, ctl, 2);
+    expect(ctl.currentPosture).toBe('guard_home');
+  });
+
+  it('a loot rally already on their door (an older build) is re-sent as an Assault', async () => {
     const SHORT_BEAT = 20;
     const client = new ScriptedClient(scripted({ posture: 'assault' }));
     const ctl = new JevEnemyController({ seats: SEATS, client, orders: '', beatTicks: SHORT_BEAT });
@@ -1172,5 +1210,200 @@ describe('JevEnemyController — fine buckets by default (playtest 5)', () => {
     const own = client.lastState!.our_colony as Record<string, string>;
     expect(own.fighters_on_surface).toBe(bucket(2, tablesFor('fine').count));
     expect(own.fighters_on_surface).not.toBe(bucket(2, tablesFor('coarse').count));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Haiku-vs-Jev test (2026-10-09): a stalled assault comes home
+// ---------------------------------------------------------------------------
+
+describe('assaultEngaged', () => {
+  const rally = { x: 100, y: 50 };
+  function bare(): WorldState {
+    const world = handoffWorld();
+    standDownFighters(world);
+    return world;
+  }
+
+  it('a fighter underground in their grid is engaged', () => {
+    const world = bare();
+    addFighter(world, ENEMY_COLONY_ID, 30, 20, PLAYER_COLONY_ID);
+    expect(assaultEngaged(world, ENEMY_COLONY_ID, PLAYER_COLONY_ID, rally)).toBe(true);
+  });
+
+  it('a fighter underground in our own grid is not', () => {
+    const world = bare();
+    addFighter(world, ENEMY_COLONY_ID, 30, 20, ENEMY_COLONY_ID);
+    expect(assaultEngaged(world, ENEMY_COLONY_ID, PLAYER_COLONY_ID, rally)).toBe(false);
+  });
+
+  it('a surface fighter within the radius of the rally tile is engaged, 13 away is not', () => {
+    expect(JEV_ASSAULT_ENGAGE_RADIUS_TILES).toBe(12);
+    const near = bare();
+    addFighter(near, ENEMY_COLONY_ID, rally.x + JEV_ASSAULT_ENGAGE_RADIUS_TILES, rally.y, null);
+    expect(assaultEngaged(near, ENEMY_COLONY_ID, PLAYER_COLONY_ID, rally)).toBe(true);
+    const far = bare();
+    addFighter(far, ENEMY_COLONY_ID, rally.x + JEV_ASSAULT_ENGAGE_RADIUS_TILES + 1, rally.y, null);
+    expect(assaultEngaged(far, ENEMY_COLONY_ID, PLAYER_COLONY_ID, rally)).toBe(false);
+  });
+
+  it('an ant that is not Fighting is not', () => {
+    const world = bare();
+    const id = addFighter(world, ENEMY_COLONY_ID, rally.x, rally.y, null);
+    world.ants.task[id] = AntTask.Foraging;
+    expect(assaultEngaged(world, ENEMY_COLONY_ID, PLAYER_COLONY_ID, rally)).toBe(false);
+  });
+});
+
+describe('newestAssaultKillTick', () => {
+  function kill(world: WorldState, at: number, killerColony: number, victimColony: number): void {
+    emitEvent(world, {
+      tick: at,
+      type: 'combat_kill',
+      payload: {
+        killer: { kind: 'Ant', id: 1, colonyId: killerColony },
+        victim: { kind: 'Ant', id: 2, colonyId: victimColony },
+        location: { x: 1, y: 1, grid: 'surface' },
+      },
+    } as never);
+  }
+
+  it('finds the newest qualifying kill inside the window; ignores other colonies and old kills', () => {
+    const world = createScenario(SEED, 'Normal');
+    world.events.length = 0;
+    // eslint-disable-next-line no-restricted-syntax -- test fixture clock, not a render write
+    world.tick = 5000;
+    kill(world, 5000 - JEV_ASSAULT_STALL_TICKS - 1, ENEMY_COLONY_ID, PLAYER_COLONY_ID); // too old
+    expect(newestAssaultKillTick(world, ENEMY_COLONY_ID, PLAYER_COLONY_ID)).toBeNull();
+    kill(world, 4600, ENEMY_COLONY_ID, PLAYER_COLONY_ID);
+    kill(world, 4700, ENEMY_COLONY_ID, PLAYER_COLONY_ID);
+    kill(world, 4800, PLAYER_COLONY_ID, ENEMY_COLONY_ID); // theirs
+    kill(world, 4900, ENEMY_COLONY_ID, ENEMY_COLONY_ID); // ours of ours
+    expect(newestAssaultKillTick(world, ENEMY_COLONY_ID, PLAYER_COLONY_ID)).toBe(4700);
+  });
+});
+
+describe('JevEnemyController — a stalled assault comes home', () => {
+  const NEVER = 1_000_000; // beatTicks: no beat is ever due, so the safety net runs alone
+  const T0 = 1001;
+
+  /** An Assault rally on their door, one fighter engaged at it, a controller already live. */
+  function setup(opts: { raidType?: RaidType; engaged?: boolean; guardKnown?: boolean } = {}) {
+    const world = handoffWorld();
+    standDownFighters(world);
+    const colony = world.colonies[ENEMY_COLONY_ID]!;
+    const cands = candidatesNow(world);
+    const door = cands.posture.assault!.tile!;
+    colony.rallyPoint = { tileX: door.x, tileY: door.y };
+    colony.raidType = opts.raidType ?? RaidType.Assault;
+    if (opts.engaged !== false) addFighter(world, ENEMY_COLONY_ID, door.x, door.y, null);
+    const client = new ScriptedClient(scripted());
+    const ctl = new JevEnemyController({ seats: SEATS, client, orders: '', beatTicks: NEVER });
+    if (opts.guardKnown !== false) {
+      (ctl as unknown as { lastGuardTile: unknown }).lastGuardTile = cands.posture.guard_home!.tile;
+    }
+    // eslint-disable-next-line no-restricted-syntax -- test fixture clock, not a render write
+    world.tick = T0;
+    ctl.onBeforeTick(world); // enters the live phase and starts the watch
+    world.commandQueue.length = 0;
+    return { world, ctl, colony, guard: cands.posture.guard_home!.tile! };
+  }
+
+  /** Run the controller seam (no sim tick) up to and including tick `to`. */
+  function runTo(world: WorldState, ctl: JevEnemyController, to: number): SimCommand[] {
+    const issued: SimCommand[] = [];
+    while (world.tick < to) {
+      // eslint-disable-next-line no-restricted-syntax -- test fixture clock, not a render write
+      world.tick += 1;
+      ctl.onBeforeTick(world);
+      issued.push(...world.commandQueue.splice(0));
+    }
+    return issued;
+  }
+
+  it('recalls to the guard tile, once, after JEV_ASSAULT_STALL_TICKS with no progress', () => {
+    expect(JEV_ASSAULT_STALL_TICKS).toBe(600);
+    const { world, ctl, colony, guard } = setup();
+    expect(runTo(world, ctl, T0 + JEV_ASSAULT_STALL_TICKS - 1)).toEqual([]);
+    expect(ctl.assaultRecalls).toBe(0);
+    const issued = runTo(world, ctl, T0 + JEV_ASSAULT_STALL_TICKS);
+    expect(issued).toHaveLength(1);
+    expect(issued[0]).toMatchObject({
+      type: 'SetRallyPoint',
+      colonyId: ENEMY_COLONY_ID,
+      tileX: guard.x,
+      tileY: guard.y,
+    });
+    expect('raidType' in issued[0]!).toBe(false);
+    expect(ctl.currentPosture).toBe('guard_home');
+    expect(ctl.assaultRecalls).toBe(1);
+    // The command has not been applied here (no sim tick), so the rally is still on
+    // their door; the watch is reset and does not fire again for another full window.
+    expect(colony.rallyPoint).not.toEqual({ tileX: guard.x, tileY: guard.y });
+    expect(runTo(world, ctl, world.tick + 10)).toEqual([]);
+  });
+
+  it('clears the rally when no guard tile is known', () => {
+    const { world, ctl } = setup({ guardKnown: false });
+    const issued = runTo(world, ctl, T0 + JEV_ASSAULT_STALL_TICKS);
+    expect(issued).toHaveLength(1);
+    expect(issued[0]).toMatchObject({ type: 'ClearRallyPoint', colonyId: ENEMY_COLONY_ID });
+    expect(ctl.currentPosture).toBe('recall');
+    expect(ctl.assaultRecalls).toBe(1);
+  });
+
+  it('a queen HP drop mid-window resets the clock', () => {
+    const { world, ctl } = setup();
+    runTo(world, ctl, T0 + 300);
+    const queen = world.colonies[PLAYER_COLONY_ID]!.queenEntityId;
+    world.ants.hp[queen] = world.ants.hp[queen]! - 1;
+    // The drop is seen on the next seam, so the window runs from T0 + 301.
+    expect(runTo(world, ctl, T0 + 301 + JEV_ASSAULT_STALL_TICKS - 1)).toEqual([]);
+    expect(runTo(world, ctl, T0 + 301 + JEV_ASSAULT_STALL_TICKS)).toHaveLength(1);
+  });
+
+  it('a qualifying combat_kill mid-window resets the clock', () => {
+    const { world, ctl } = setup();
+    runTo(world, ctl, T0 + 300);
+    emitEvent(world, {
+      tick: world.tick,
+      type: 'combat_kill',
+      payload: {
+        killer: { kind: 'Ant', id: 1, colonyId: ENEMY_COLONY_ID },
+        victim: { kind: 'Ant', id: 2, colonyId: PLAYER_COLONY_ID },
+        location: { x: 1, y: 1, grid: 'surface' },
+      },
+    } as never);
+    // The kill (tick T0 + 300) holds the recall off until it leaves the window.
+    expect(runTo(world, ctl, T0 + 300 + JEV_ASSAULT_STALL_TICKS)).toEqual([]);
+    expect(runTo(world, ctl, T0 + 300 + JEV_ASSAULT_STALL_TICKS + 1)).toHaveLength(1);
+  });
+
+  it('never engaged: never recalled', () => {
+    const { world, ctl } = setup({ engaged: false });
+    expect(runTo(world, ctl, T0 + JEV_ASSAULT_STALL_TICKS * 3)).toEqual([]);
+    expect(ctl.assaultRecalls).toBe(0);
+  });
+
+  it('a non-Assault rally is never recalled', () => {
+    const { world, ctl } = setup({ raidType: RaidType.Loot });
+    expect(runTo(world, ctl, T0 + JEV_ASSAULT_STALL_TICKS * 2)).toEqual([]);
+    expect(ctl.assaultRecalls).toBe(0);
+  });
+
+  it('a rally off their door (hold_midfield) is never recalled', () => {
+    const { world, ctl, colony } = setup();
+    colony.rallyPoint = { tileX: 5, tileY: 5 };
+    expect(runTo(world, ctl, T0 + JEV_ASSAULT_STALL_TICKS * 2)).toEqual([]);
+    expect(ctl.assaultRecalls).toBe(0);
+  });
+
+  it('fallback status is never recalled by the net', () => {
+    const { world, ctl } = setup();
+    ctl.status = 'fallback';
+    expect(
+      runTo(world, ctl, T0 + JEV_ASSAULT_STALL_TICKS * 2).filter((c) => c.type === 'SetRallyPoint'),
+    ).toEqual([]);
+    expect(ctl.assaultRecalls).toBe(0);
   });
 });

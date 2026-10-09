@@ -68,8 +68,9 @@ import type {
 import { AntTask, ChamberType, RaidType } from '../sim/enums.js';
 import { Zone } from '../sim/terrain.js';
 import { FP_SHIFT } from '../sim/fixed.js';
-import type { ColonyId } from '../sim/colony/colony-store.js';
+import type { ColonyId, ColonyRecord } from '../sim/colony/colony-store.js';
 import { rallyEnemyEntrance } from '../sim/raid-order.js';
+import { isAlive } from '../sim/ant/ant-store.js';
 import { pileSlotById, pileTileX, pileTileY } from '../sim/food/food-api.js';
 import { AI_DIG_INTERVAL, AI_DIG_MARK_BUDGET, runAIController } from './ai-controller.js';
 import { MS_PER_TICK } from '../platform/game-loop.js';
@@ -207,6 +208,73 @@ export function musteredPosture(
   return mustered ? asked : 'guard_home';
 }
 
+/**
+ * Haiku-vs-Jev test (2026-10-09) — a stalled assault comes home. An assault Jev
+ * launched ran until Jev itself called it off; when it stalled, every newly drafted
+ * fighter trickled into the enemy nest one at a time and died. This is the client-side
+ * safety net: JEV_ASSAULT_STALL_TICKS (60 s at 10 ticks/s) with no progress after
+ * engaging ⇒ come home. Jev itself calls a failing assault off after about a minute;
+ * this enforces it for any model.
+ */
+export const JEV_ASSAULT_STALL_TICKS = 600;
+/** A fighter on the surface within this many tiles (Manhattan) of the assault's target
+ *  entrance (the rally tile) is engaged; so is any fighter underground in their nest. */
+export const JEV_ASSAULT_ENGAGE_RADIUS_TILES = 12;
+
+/**
+ * Has the assault made contact? True when any living fighter of `colonyId` is inside
+ * the `opponentId` nest (underground on its grid), or on the surface within
+ * JEV_ASSAULT_ENGAGE_RADIUS_TILES of `rally` (the target entrance). No stall clock
+ * runs before contact: an army still walking over is not a stalled one. Pure read.
+ */
+export function assaultEngaged(
+  world: WorldState,
+  colonyId: ColonyId,
+  opponentId: ColonyId,
+  rally: { readonly x: number; readonly y: number },
+): boolean {
+  const colony = world.colonies[colonyId];
+  if (colony === undefined) return false;
+  const a = world.ants;
+  for (const id of colony.workers) {
+    if (a.alive[id] !== 1 || a.task[id] !== AntTask.Fighting) continue;
+    if (a.zone[id] === Zone.Underground) {
+      if (a.currentGridColonyId[id] === opponentId) return true;
+    } else if (
+      manhattan(a.posX[id]! >> FP_SHIFT, a.posY[id]! >> FP_SHIFT, rally.x, rally.y) <=
+      JEV_ASSAULT_ENGAGE_RADIUS_TILES
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The tick of the newest `combat_kill` by `killer` of one of `victim`'s ants within the
+ * last JEV_ASSAULT_STALL_TICKS, or null. Scans the event log from the end and stops at
+ * the first event older than the window, so it is cheap. Pure read.
+ */
+export function newestAssaultKillTick(
+  world: WorldState,
+  killer: ColonyId,
+  victim: ColonyId,
+): number | null {
+  const since = world.tick - JEV_ASSAULT_STALL_TICKS;
+  for (let i = world.events.length - 1; i >= 0; i--) {
+    const ev = world.events[i]!;
+    if (ev.tick < since) break;
+    if (
+      ev.type === 'combat_kill' &&
+      ev.payload.killer.colonyId === killer &&
+      ev.payload.victim.colonyId === victim
+    ) {
+      return ev.tick;
+    }
+  }
+  return null;
+}
+
 export type JevControllerStatus = 'jev' | 'fallback';
 
 export interface JevEnemyControllerOptions {
@@ -256,6 +324,8 @@ export class JevEnemyController {
    */
   digDirection: DigDirection = 'hold';
   currentPosture: PostureKey = 'recall';
+  /** Stalled assaults called home by the safety net (diagnostic). */
+  assaultRecalls = 0;
 
   private readonly client: JevClient;
   private readonly orders: string;
@@ -273,6 +343,18 @@ export class JevEnemyController {
   private fallbackNotified = false;
   /** The tick the last beat was sent on (null: none yet this round). */
   private lastBeatTick: number | null = null;
+  /** The guard_home tile of the last candidate set applied: where a stalled assault goes. */
+  private lastGuardTile: { x: number; y: number } | null = null;
+  /**
+   * The stall watch of the assault under way, null while none is. Not saved: a
+   * controller created from a save restarts tracking, which only delays a recall by
+   * up to JEV_ASSAULT_STALL_TICKS.
+   */
+  private assaultWatch: {
+    engagedTick: number | null;
+    lastProgressTick: number;
+    lastQueenHp: number;
+  } | null = null;
 
   constructor(opts: JevEnemyControllerOptions) {
     this.seats = opts.seats;
@@ -362,6 +444,8 @@ export class JevEnemyController {
       this.stashed = null;
       this.applyDecision(world, stashed.decision, stashed.candidates);
     }
+
+    this.watchAssault(world, colony);
 
     if (world.tick % AI_DIG_INTERVAL === 0) this.executeDig(world);
     if (this.beatDue(world.tick) && !this.inFlight) this.startBeat(world);
@@ -465,6 +549,72 @@ export class JevEnemyController {
     this.consecutiveFailures += 1;
   }
 
+  /**
+   * Haiku-vs-Jev test (2026-10-09): the stalled-assault safety net, run every live
+   * tick. While an Assault raid sits on their door: no stall clock before a fighter
+   * makes contact (assaultEngaged); after it, progress is a drop in their queen's HP
+   * or a kill of one of their ants (newestAssaultKillTick), and JEV_ASSAULT_STALL_TICKS
+   * without either sends the army home — to the guard tile if one is known, else the
+   * rally is cleared — exactly as applyDecision would for those postures. The rally is
+   * then no longer on their door, so Jev's next `assault` answer goes back through the
+   * muster and the army regroups at home before going again; there is no extra
+   * cooldown.
+   */
+  private watchAssault(world: WorldState, colony: ColonyRecord): void {
+    const { mySeat, opponentSeat } = this.seats;
+    const target = rallyEnemyEntrance(world, colony);
+    if (colony.raidType !== RaidType.Assault || target === null || colony.rallyPoint === null) {
+      this.assaultWatch = null;
+      return;
+    }
+    const opp = world.colonies[opponentSeat];
+    if (opp === undefined || !isAlive(world.ants, opp.queenEntityId)) return; // round is ending
+    const qhp = world.ants.hp[opp.queenEntityId]!;
+    const watch = (this.assaultWatch ??= {
+      engagedTick: null,
+      lastProgressTick: world.tick,
+      lastQueenHp: qhp,
+    });
+    if (qhp < watch.lastQueenHp) watch.lastProgressTick = world.tick;
+    watch.lastQueenHp = qhp;
+
+    if (watch.engagedTick === null) {
+      const rally = { x: colony.rallyPoint.tileX, y: colony.rallyPoint.tileY };
+      if (!assaultEngaged(world, mySeat, opponentSeat, rally)) return;
+      watch.engagedTick = world.tick;
+      watch.lastProgressTick = world.tick;
+    }
+    if (world.tick - watch.lastProgressTick < JEV_ASSAULT_STALL_TICKS) return;
+
+    const killTick = newestAssaultKillTick(world, mySeat, opponentSeat);
+    if (killTick !== null) {
+      watch.lastProgressTick = killTick;
+      return;
+    }
+
+    if (this.lastGuardTile !== null) {
+      const cmd: SetRallyPointCommand = {
+        type: 'SetRallyPoint',
+        colonyId: mySeat,
+        tileX: this.lastGuardTile.x,
+        tileY: this.lastGuardTile.y,
+        issuedAtTick: world.tick,
+      };
+      this.ledger.issue(world, cmd);
+      this.currentPosture = 'guard_home';
+    } else {
+      const cmd: ClearRallyPointCommand = {
+        type: 'ClearRallyPoint',
+        colonyId: mySeat,
+        issuedAtTick: world.tick,
+      };
+      this.ledger.issue(world, cmd);
+      this.currentPosture = 'recall';
+    }
+    this.assaultWatch = null;
+    this.assaultRecalls += 1;
+  }
+
   /** Push ONLY what changes the colony's current setting (a re-push would be a no-op at best). */
   private applyDecision(world: WorldState, d: Decision, cands: CandidateSet): void {
     const colonyId = this.seats.mySeat;
@@ -488,6 +638,7 @@ export class JevEnemyController {
     // other rally carries no raid type (Loot), as before; on our own entrance or a
     // pile it never applies.
     const posture = musteredPosture(world, colonyId, d.posture, cands);
+    this.lastGuardTile = cands.posture.guard_home?.tile ?? null;
     const pc = cands.posture[posture];
     if (pc !== undefined) {
       const raidType = posture === 'assault' ? RaidType.Assault : undefined;
@@ -516,8 +667,15 @@ export class JevEnemyController {
         };
         this.ledger.issue(world, cmd);
       }
-      // What the colony is actually doing: `guard_home` while an assault musters.
-      this.currentPosture = posture;
+      // Haiku-vs-Jev test (2026-10-09): what Jev is told it is doing. The rally is
+      // `guard_home` while an assault musters, but reporting that sent Jev
+      // `current_posture: guard_home` next beat, which a stateless model cannot tell
+      // from guarding, and most answers then cancelled the muster. So a muster in
+      // progress reports `assault` (the rally on the world is unchanged). Side effect:
+      // decodeAnswers' fallback for an invalid or failed posture answer is
+      // `facts.currentPosture`, so such an answer now keeps the muster going.
+      this.currentPosture =
+        d.posture === 'assault' && posture === 'guard_home' ? 'assault' : posture;
     }
 
     this.digDirection = d.dig;
