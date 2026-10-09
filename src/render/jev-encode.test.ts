@@ -15,9 +15,10 @@ import {
   decodeAnswers,
   encodeBeat,
   tablesFor,
+  workersVsOurs,
   type JevAnswerMap,
 } from './jev-encode.js';
-import { DIG_DESCRIBE, RATIO_CANDIDATES } from './jev-candidates.js';
+import { DIG_DESCRIBE, RATIO_CANDIDATES, SPIDER_NEAR_TILES } from './jev-candidates.js';
 import type { CandidateSet, DigDirection, RawFacts } from './jev-types.js';
 
 const ALL_DIG: readonly DigDirection[] = [
@@ -170,6 +171,50 @@ describe('encodeBeat', () => {
       for (const key of Object.keys(group as Record<string, string>)) {
         expect(key).toMatch(JEV_ID_PATTERN);
       }
+    }
+  });
+
+  it('workers_vs_ours is theirs ÷ ours, as the key reads (playtest 5, #436)', () => {
+    const vs = (own: number, opp: number, mode: 'coarse' | 'fine' = 'coarse'): string => {
+      const f = makeFacts({ ownWorkers: own, oppWorkers: opp });
+      const enc = encodeBeat(f, makeCandidates(f), '', mode);
+      return (enc.state.opponent_colony as Record<string, string>).workers_vs_ours!;
+    };
+    // They have twice our workers: `far_more` (the old code said `far_fewer`).
+    expect(vs(10, 20)).toBe('far_more');
+    expect(vs(21, 10)).toBe('far_fewer');
+    expect(vs(10, 13)).toBe('more');
+    expect(vs(13, 10)).toBe('fewer');
+    expect(vs(20, 20)).toBe('similar');
+    expect(vs(20, 20, 'fine')).toBe('equal');
+    expect(vs(10, 13, 'fine')).toBe('more');
+    // Edge cases: we have none (they overwhelmingly outnumber us), neither has any.
+    expect(vs(0, 5)).toBe('far_more');
+    expect(vs(0, 5, 'fine')).toBe('overwhelmingly_more');
+    expect(vs(5, 0)).toBe('far_fewer');
+    expect(vs(0, 0)).toBe('similar');
+    expect(vs(0, 0, 'fine')).toBe('equal');
+    expect(workersVsOurs(30, 20)).toBe(1.5);
+  });
+
+  it('brood_vs_workers stays brood ÷ workers (it already read the right way round)', () => {
+    const f = makeFacts({ ownBrood: 40, ownWorkers: 10 });
+    const enc = encodeBeat(f, makeCandidates(f), '', 'coarse');
+    expect((enc.state.our_colony as Record<string, string>).brood_vs_workers).toBe('far_more');
+  });
+
+  it('a spider within SPIDER_NEAR_TILES is prowling_near_us in both bucket modes', () => {
+    for (const mode of ['coarse', 'fine'] as const) {
+      const threat = (distOwn: number): string => {
+        const f = makeFacts({
+          spider: { state: 'Patrolling', distOwn, distOpp: 80, targetingUs: false },
+        });
+        const enc = encodeBeat(f, makeCandidates(f), '', mode);
+        return (enc.state.spider as Record<string, string>).threat!;
+      };
+      expect(threat(SPIDER_NEAR_TILES)).toBe('prowling_near_us');
+      expect(threat(13)).toBe('prowling_near_us');
+      expect(threat(SPIDER_NEAR_TILES + 1)).toBe('distant');
     }
   });
 

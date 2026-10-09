@@ -25,7 +25,7 @@ import type {
   RatioKey,
   RawFacts,
 } from './jev-types.js';
-import { RATIO_CANDIDATES } from './jev-candidates.js';
+import { RATIO_CANDIDATES, SPIDER_NEAR_TILES } from './jev-candidates.js';
 
 // ---------------------------------------------------------------------------
 // Question / answer shapes (mirrors the proxy contract)
@@ -176,6 +176,13 @@ const PHASE: BucketSpec = {
   labels: ['opening', 'early', 'mid', 'late'],
 };
 
+/** `opponent_colony.workers_vs_ours`: their workers ÷ ours (99 = overwhelmingly
+ *  more when we have none and they have some; 1 = equal when neither has any). */
+export function workersVsOurs(theirs: number, ours: number): number {
+  if (ours > 0) return theirs / ours;
+  return theirs > 0 ? 99 : 1;
+}
+
 function wordCount(n: number): string {
   return n <= 0 ? 'none' : n === 1 ? 'one' : n === 2 ? 'two' : 'several';
 }
@@ -243,6 +250,10 @@ export function encodeBeat(
     contested: p.contested ? 'yes' : 'no',
   }));
 
+  // `prowling_near_us` within SPIDER_NEAR_TILES (24), the radius the spider_priority
+  // question is asked within, in either bucket mode: the fine distance table starts
+  // at 12, and keying the threat word on it would call a spider 13–24 tiles off
+  // `distant` while `distance_to_us` says `near`.
   const spiderThreat =
     facts.spider === null
       ? 'absent'
@@ -250,7 +261,7 @@ export function encodeBeat(
         ? 'rampaging_against_us'
         : facts.spider.state === 'Rampaging'
           ? 'rampaging_against_opponent'
-          : facts.spider.distOwn <= T.distance.thresholds[0]!
+          : facts.spider.distOwn <= SPIDER_NEAR_TILES
             ? 'prowling_near_us'
             : 'distant';
 
@@ -280,10 +291,11 @@ export function encodeBeat(
     recent_kills: bucket(facts.ownKillsRecent, T.count),
   };
   state.opponent_colony = {
-    workers_vs_ours: bucket(
-      facts.oppWorkers > 0 ? facts.ownWorkers / facts.oppWorkers : 99,
-      T.ratioVs,
-    ),
+    // Theirs ÷ ours, as the key reads: `far_more` = they have far more workers
+    // than we do. (Through 62d7a65 this sent ours ÷ theirs, inverted; playtest 5,
+    // #436.) A colony with no workers left: they have overwhelmingly more unless
+    // they have none either (equal).
+    workers_vs_ours: bucket(workersVsOurs(facts.oppWorkers, facts.ownWorkers), T.ratioVs),
     fighters_on_surface: bucket(facts.oppFightersSurface, T.count),
     fighters_at_our_entrance: bucket(facts.oppFightersNearOurEntrance, T.count),
     entrances_open: wordCount(facts.oppEntrancesOpen),
