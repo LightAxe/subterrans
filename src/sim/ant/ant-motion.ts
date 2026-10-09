@@ -552,7 +552,7 @@ export function isInsideQueenChamber(colony: ColonyRecord, tileX: number, tileY:
  * one, or a chase that crosses one, is no blockade, so the narrow state check is
  * intentional. Read by the descent gate (isDescentBlocked: no ant goes down past
  * it) and, from V74 (#392), the hold at the shaft (idle-reserve.ts
- * holdAlarmedCivilianAtShaft: no civilian climbs out onto it). Both run in step-16
+ * holdCivilianAtShaft: no civilian climbs out onto it). Both run in step-16
  * movement, so they read the spider as the previous tick left it (it moves at step
  * 17.5). Pure: the spider's saved state and position.
  *

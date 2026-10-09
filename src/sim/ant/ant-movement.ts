@@ -85,7 +85,7 @@ import { surfaceDiggerEntranceDistance, surfaceDiggerRoutesToEntrance } from './
 import { OFF_GOAL_FIELD, entranceRoutedStep } from './entrance-routed-step.js';
 import { NO_FREE_HOSTILE, invaderHuntStep } from './invader-retarget.js';
 import {
-  holdAlarmedCivilianAtShaft,
+  holdCivilianAtShaft,
   idleMusterPassesThroughFriends,
   idleMustersHome,
   idleWalksHome,
@@ -1871,12 +1871,13 @@ export function tickAntMovement(
               for (let e = 0; e < colony.entrances.length; e++) {
                 const entrance = colony.entrances[e]!;
                 if (entrance.isOpen && entrance.surfaceTileX === tileX) {
-                  // C1 (V42) — an alarmed colony keeps its civilians in: shelter
-                  // at the shaft instead of ascending. Policy lives in
-                  // idle-reserve.ts with the rest of the alarm (#212 layering).
-                  // #392 (V74): so does the spider's blockade on this entrance.
+                  // A civilian is held at the shaft instead of ascending while the
+                  // colony is alarmed (C1, V42), an Idle worker while a rampage
+                  // threatens it (V68), or any civilian while the spider camps this
+                  // entrance (#392, V74). Policy lives in idle-reserve.ts with the
+                  // rest of the alarm (#212 layering).
                   if (
-                    holdAlarmedCivilianAtShaft(
+                    holdCivilianAtShaft(
                       world,
                       id,
                       inOwnGrid,

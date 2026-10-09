@@ -732,7 +732,7 @@ export const SIM_VERSION_V41_DEATH_CHOKEPOINT = 41 as const;
  *      Idle surface worker was drafted to fight first, failed 15b's civilian
  *      filter, and was never recalled at all.
  *   3. NO ASCENT (step 16) — the only production ascent (ant/ant-movement.ts)
- *      asks holdAlarmedCivilianAtShaft (ant/idle-reserve.ts); that ascent
+ *      asks holdCivilianAtShaft (ant/idle-reserve.ts); that ascent
  *      admits an Idle worker with no target and any SearchingFood /
  *      ReturningToNest forager. Under the alarm those are an Idle worker at the
  *      shaft row (post-deposit at a chamberless shaft pool, a V35 wander clear,
@@ -1770,7 +1770,7 @@ export const SIM_VERSION_V73_FULL_ARMY_LAUNCH = 73 as const;
  * every descender on that tile, and a forager demoted to Idle there found no way in
  * either (the V68 rampage shelter skips a door whose descent is blocked). It was
  * bitten or chased down: the 3 idle kills left in the #391 playtest measurement.
- * From V74 the hold at the shaft (idle-reserve.ts holdAlarmedCivilianAtShaft, which
+ * From V74 the hold at the shaft (idle-reserve.ts holdCivilianAtShaft, which
  * already keeps civilians below under the C1 alarm and Idle workers below while the
  * V68 rampage threatens their colony) has a third reason: the entrance tile the ant
  * would climb out at is a spider blockade (ant-motion.ts isSpiderBlockade, the

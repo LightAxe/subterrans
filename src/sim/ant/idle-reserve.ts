@@ -17,10 +17,12 @@
 // shifts one holding on the surface only away from the spider (#393,
 // rampageShelterHolds).
 //
-// One hook runs INSIDE step 16 rather than at 15b: holdAlarmedCivilianAtShaft
-// (C1, V42), which movement's ascent calls so the colony alarm can keep a
-// civilian from climbing out. It writes the same flee column this pass owns, so
-// the decision lives here with the rest of the alarm and shelter logic.
+// One hook runs INSIDE step 16 rather than at 15b: holdCivilianAtShaft, which
+// movement's ascent calls so a civilian is kept from climbing out while the
+// colony is alarmed (C1, V42), an Idle worker while a rampage threatens it
+// (V68), or any civilian while the spider camps that entrance (#392, V74). It
+// writes the same flee column this pass owns, so the decision lives here with the
+// rest of the alarm and shelter logic.
 //
 // The V38 doorstep push-through and local-all-clear release (#297) run inside
 // the per-worker loop. Reads are grid-guarded — a bare/test world with no
@@ -63,7 +65,6 @@ import {
 import {
   canEnterSurfaceTile,
   canEnterUndergroundTile,
-  isDescentBlocked,
   isSpiderBlockade,
   unpackStepDx,
   unpackStepDy,
@@ -271,7 +272,6 @@ function releaseOnLocalAllClear(
  */
 function onEnterableDoorstep(
   world: WorldState,
-  colony: ColonyRecord,
   entrances: readonly NestEntrance[],
   tileX: number,
   tileY: number,
@@ -305,12 +305,7 @@ function onEnterableDoorstep(
   for (let e = 0; e < entrances.length; e++) {
     const ent = entrances[e]!;
     if (!ent.isOpen) continue;
-    // `isDescentBlocked` is called rather than re-implemented so the two can
-    // never drift. `isOwnEntrance = true` + `AntTask.Foraging` reduces it to the
-    // #165 spider arm by construction (the #164 arm needs a FOREIGN Fighter).
-    if (
-      isDescentBlocked(world, AntTask.Foraging, true, colony, ent.surfaceTileX, ent.surfaceTileY)
-    ) {
+    if (isSpiderBlockade(world, ent.surfaceTileX, ent.surfaceTileY)) {
       return false; // some door the BFS might pick is impassable — hold
     }
     const dist = Math.abs(ent.surfaceTileX - tileX) + Math.abs(ent.surfaceTileY - tileY);
@@ -475,7 +470,7 @@ function setFleeTarget(
  * foreign grid (only a Fighting invader goes down another colony's entrance, and
  * one is never demoted to Idle there), so the own-grid rule above costs nothing.
  */
-export function holdAlarmedCivilianAtShaft(
+export function holdCivilianAtShaft(
   world: WorldState,
   id: number,
   inOwnGrid: boolean,
@@ -632,7 +627,7 @@ function pickRampageShelterEntrance(
     // Standing on it: it goes down this tick (movement's descent follows its step),
     // whatever the danger round it, unless the descent is blocked there.
     if (tileX === ex && tileY === ey) {
-      if (!isDescentBlocked(world, AntTask.Idle, true, colony, ex, ey)) return ent;
+      if (!isSpiderBlockade(world, ex, ey)) return ent;
       continue;
     }
     if (apart > 0 && entranceDanger(dangerGrid, ent) >= FLEE_THRESHOLD) continue;
@@ -774,7 +769,7 @@ function idleSurfaceShelterer(world: WorldState, id: number, phase: -1 | 0): boo
  *          threatens the colony, alarm or not (a forager keeps the alarm-or-danger
  *          poke-out)
  * An Idle worker climbing up from below is held at the shaft top as a shelterer
- * (holdAlarmedCivilianAtShaft).
+ * (holdCivilianAtShaft).
  *
  * #297 (V38) adds the two exits the surface hold was missing, so it is bounded by
  * the THREAT rather than unbounded in time:
@@ -864,7 +859,7 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
         // does none of that. The bite risk is the same either way; only the upside
         // differs, and the upside is real.
         isHomeboundForager &&
-        onEnterableDoorstep(world, colony, entrances, tileX, tileY);
+        onEnterableDoorstep(world, entrances, tileX, tileY);
 
       // A fleeing/sheltering worker the allocator reassigned AWAY from its reserve
       // task (Idle/Foraging) — e.g. recruited to Fighting/Nursing/Digging during

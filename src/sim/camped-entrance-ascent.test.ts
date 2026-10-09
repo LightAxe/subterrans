@@ -5,7 +5,7 @@
 // (isDescentBlocked). Up to V73 nothing stopped an ant coming UP onto it: a forager
 // climbing its shaft landed on the spider, could not go back down, and was bitten or
 // chased down. From V74 the hold at the shaft (idle-reserve.ts
-// holdAlarmedCivilianAtShaft) keeps a civilian (an adult Idle or Foraging ant in its
+// holdCivilianAtShaft) keeps a civilian (an adult Idle or Foraging ant in its
 // own nest) below as a shelterer instead; it leaves by the ordinary poke-out once the
 // DangerTrail over its exit has decayed. Fighters still climb out onto the camper.
 // V74 also cuts the camp leash (SPIDER_RAMPAGE_MAX_TICKS) from 1200 to 300 ticks, so a
@@ -18,7 +18,7 @@ import type { SpiderBehaviorState, WorldState } from './types.js';
 import { initAnt } from './ant/ant-store.js';
 import { killAnt } from './ant-death.js';
 import { addChamberForTest } from './food/food-test-utils.js';
-import { holdAlarmedCivilianAtShaft } from './ant/idle-reserve.js';
+import { holdCivilianAtShaft } from './ant/idle-reserve.js';
 import { isDescentBlocked, isSpiderBlockade } from './ant/ant-motion.js';
 import { rampageThreatens } from './ant/ant-system.js';
 import { resolveSpiderCombatOnTile } from './combat.js';
@@ -610,7 +610,7 @@ describe('#392 (V74) — a civilian does not climb out onto the spider blockade'
 // ---------------------------------------------------------------------------
 // State-space audit: every input to the hold at the shaft.
 //
-// holdAlarmedCivilianAtShaft reads the ant's grid (own or foreign), task, speed (adult
+// holdCivilianAtShaft reads the ant's grid (own or foreign), task, speed (adult
 // or brood), colony, the colony alarm, the V68 rampage threat (spider state, hunger,
 // the grace window, camp target, distance) and, from V74, the spider blockade on the
 // entrance tile it would climb out at (spider state and tile). The direct audit calls
@@ -784,7 +784,7 @@ describe('#392 (V74) — state-space audit of the hold at the shaft', () => {
                   civilian &&
                   adult &&
                   (alarm || (task === AntTask.Idle && sc.threat) || blockadeHere);
-                const got = holdAlarmedCivilianAtShaft(world, id, ownGrid, ex, ey);
+                const got = holdCivilianAtShaft(world, id, ownGrid, ex, ey);
                 const phase = world.ants.fleeShelterUntilTick[id]!;
                 const wantPhase = want ? world.tick + SHELTER_COOLDOWN_TICKS : -1;
                 if (got !== want || phase !== wantPhase) {
