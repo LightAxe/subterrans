@@ -260,6 +260,7 @@ describe('beforeSimTick — the rampage threat is checked every tick (#397)', ()
         enemyQueenWound: createEnemyQueenWoundState(),
         counterAttack: createCounterAttackCaptionState(),
         storesFilling: createStoresFillingCaptionState(),
+        armyWarning: createArmyWarningState(),
         storageHint: createStorageHintState(),
       },
       (w, cid) => {
