@@ -16,6 +16,7 @@ import {
 } from './enemy-queen-wound.js';
 import { beforeSimTick } from './sim-tick-hook.js';
 import { createStoresFillingCaptionState } from './stores-filling-caption.js';
+import { createArmyWarningState } from './army-warning.js';
 import { createStorageHintState } from './storage-hint.js';
 import { createQueenDangerState } from './queen-danger.js';
 import { createCounterAttackCaptionState } from './counter-attack-caption.js';
@@ -348,6 +349,7 @@ describe('GameScene’s wiring on the real sim: the game loop, beforeSimTick, a 
             enemyQueenWound: s,
             counterAttack: createCounterAttackCaptionState(),
             storesFilling: createStoresFillingCaptionState(),
+            armyWarning: createArmyWarningState(),
             storageHint: createStorageHintState(),
           }),
         onTickOutcome: (o) => {
@@ -634,6 +636,7 @@ describe('batching invariance: every frame presents what the per-tick model deci
                   enemyQueenWound: s,
                   counterAttack: createCounterAttackCaptionState(),
                   storesFilling: createStoresFillingCaptionState(),
+                  armyWarning: createArmyWarningState(),
                   storageHint: createStorageHintState(),
                 })
             : (w) => noteEnemyQueenWoundTick(s, w, PLAYER_COLONY_ID),

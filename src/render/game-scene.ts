@@ -2295,13 +2295,15 @@ export class GameScene extends Phaser.Scene {
     // world, so a Food Storage the player has ordered, still queued, drops it. It is not
     // owed within its cooldown of the storage hint's last offer (the same advice); the
     // hint, which says why when storage then holds the queen back, is not held back by
-    // it.
+    // it. #435: quiet while an army warning's wave is under way, and its cooldown doubles
+    // each time it is shown again with no Food Storage built since the last show.
     if (uiScene) {
       noteStoresFillingTick(
         this.storesFilling,
         this.world,
         PLAYER_COLONY_ID,
         this.storageHint.lastOfferedTick,
+        this.armyWarning,
       );
       offerStoresFillingCaption(
         this.storesFilling,
@@ -2594,6 +2596,7 @@ export class GameScene extends Phaser.Scene {
           enemyQueenWound: this.enemyQueenWound,
           counterAttack: this.counterAttackCaption,
           storesFilling: this.storesFilling,
+          armyWarning: this.armyWarning,
           storageHint: this.storageHint,
         }),
       onAfterDrain: (cmds) => {

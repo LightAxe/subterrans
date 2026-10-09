@@ -699,6 +699,18 @@ from the tick it became owed (or from the storage hint's last offer); a caption 
 without being shown frees that cooldown, so a trigger that still holds owes it again on
 the next tick (the dwell clock runs on; only a tick that breaks the trigger restarts
 it).
+Two rules keep it from nagging (#435). It stays quiet during an attack: from the moment
+the army warning fires for a wave until that invasion ends and the warning re-arms (the
+army warning's own disarmed state) it is never owed, and one owed but not yet shown is
+dropped like a stale one; the dwell clock runs on, so a trigger that still holds
+afterwards owes it again. And it backs off when ignored: each time it is shown again
+with no new Food Storage designated since the last show, the next cooldown doubles (the
+waits after successive ignored shows are 60 s, 120 s, 240 s, then 480 s, the cap); a new Food Storage designation
+(designated plus completed count goes up since the show) resets it to 60 s, and a
+caption dropped unshown does not advance it. Both are judged on every sim tick, but the
+army warning's armed state is advanced once per frame, so a wave's start or end can
+shift the owe tick by up to one frame (the frame step drops anything owed on a stale
+read, so it never shows during a wave). The back-off state resets with the session.
 _Avoid_: "storage hint" (the #395/#413 caption about a queen held back by storage).
 
 **Difficulty**:

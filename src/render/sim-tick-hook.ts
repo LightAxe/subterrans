@@ -20,6 +20,7 @@ import { noteRampageThreat, type RampageCaptionState } from './recurring-caption
 import { noteQueenDangerTick, type QueenDangerState } from './queen-danger.js';
 import { noteEnemyQueenWoundTick, type EnemyQueenWoundState } from './enemy-queen-wound.js';
 import { noteCounterAttackTick, type CounterAttackCaptionState } from './counter-attack-caption.js';
+import type { ArmyWarningState } from './army-warning.js';
 import { noteStoresFillingTick, type StoresFillingCaptionState } from './stores-filling-caption.js';
 import type { StorageHintState } from './storage-hint.js';
 
@@ -30,6 +31,9 @@ export interface BeforeTickCaptions {
   readonly enemyQueenWound: EnemyQueenWoundState;
   readonly counterAttack: CounterAttackCaptionState;
   readonly storesFilling: StoresFillingCaptionState;
+  /** Read for whether an army warning's wave is under way (#435), when the
+   *  stores-filling caption stays quiet. */
+  readonly armyWarning: ArmyWarningState;
   /** Read for the storage hint's last offer, which the stores-filling caption follows. */
   readonly storageHint: StorageHintState;
 }
@@ -57,7 +61,8 @@ export interface BeforeTickCaptions {
  *   6. (economy captions) the stores-filling caption's look at the viewer's colony
  *      (noteStoresFillingTick), so its dwell and cooldown run on world ticks; with the
  *      storage hint's last offer (`captions.storageHint`), which it does not follow
- *      within its cooldown;
+ *      within its cooldown, and the army warning (`captions.armyWarning`), during whose
+ *      wave it stays quiet (#435);
  *   7. the prevState snapshot for render interpolation.
  */
 export function beforeSimTick(
@@ -77,6 +82,7 @@ export function beforeSimTick(
     world,
     viewerColonyId,
     captions.storageHint.lastOfferedTick,
+    captions.armyWarning,
   );
   copyWorldState(world, prevState);
 }

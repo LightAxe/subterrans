@@ -167,6 +167,14 @@ export function createArmyWarningState(): ArmyWarningState {
   };
 }
 
+/** #435 — a wave is under way: the warning has fired for it (march, gathering or
+ *  invasion) and has not re-armed, which it does once the army has dispersed and any
+ *  invasion has ended, after ARMY_REARM_QUIET_TICKS of quiet. The stores-filling caption
+ *  stays quiet meanwhile. Advanced per frame (nextArmyWarning), not per tick. */
+export function armyWaveUnderWay(state: ArmyWarningState): boolean {
+  return !state.armed;
+}
+
 /** New round or loaded save: armed, nothing owed. */
 export function resetArmyWarningState(state: ArmyWarningState): void {
   state.armed = true;
