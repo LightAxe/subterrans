@@ -477,7 +477,13 @@ export function decodeAnswers(
     posture: pick<PostureKey>(
       ['posture'],
       Object.keys(cands.posture) as PostureKey[],
-      facts.currentPosture in cands.posture ? facts.currentPosture : 'recall',
+      facts.currentPosture in cands.posture
+        ? facts.currentPosture
+        : // A muster reported as `assault` whose target became unreachable must not
+          // fall back to clearing the rally.
+          'guard_home' in cands.posture
+          ? 'guard_home'
+          : 'recall',
     ),
     dig: pick<DigDirection>(
       ['dig'],

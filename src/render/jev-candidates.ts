@@ -648,10 +648,20 @@ const CONTEST_KEYS: readonly ('contest_pile_a' | 'contest_pile_b' | 'contest_pil
   'contest_pile_c',
 ];
 
+/**
+ * Where `guard_home` rallies: our first open entrance, if it is on the surface
+ * component the army can reach. Null when the colony has none (or it is cut off).
+ */
+export function guardHomeTile(world: WorldState, colonyId: ColonyId): Tile | null {
+  const me = world.colonies[colonyId];
+  const home = me === undefined ? null : homeTile(me);
+  return home !== null && isSurfaceTileInComponent(world, home.x, home.y) ? home : null;
+}
+
 export function buildCandidates(world: WorldState, seats: Seats, facts: RawFacts): CandidateSet {
   const me = world.colonies[seats.mySeat];
   const opp = world.colonies[seats.opponentSeat];
-  const home = me === undefined ? null : homeTile(me);
+  const home = guardHomeTile(world, seats.mySeat);
   const comp = undergroundComponent(world, seats.mySeat);
 
   const posture: Partial<Record<PostureKey, PostureCandidate>> = {
@@ -660,7 +670,7 @@ export function buildCandidates(world: WorldState, seats: Seats, facts: RawFacts
       describe: 'clear the rally point so every fighter returns home and idles inside the nest',
     },
   };
-  if (home !== null && isSurfaceTileInComponent(world, home.x, home.y)) {
+  if (home !== null) {
     posture.guard_home = {
       tile: home,
       describe: 'hold fighters on our own entrance so they defend the nest and descend if attacked',

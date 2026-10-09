@@ -1101,7 +1101,7 @@ describe('JevEnemyController — the muster (playtest 5)', () => {
     expect(ctl.currentPosture).toBe('guard_home');
   });
 
-  it('a loot rally already on their door (an older build) is re-sent as an Assault', async () => {
+  it('a Loot rally already on their door (an older build) is re-sent as an Assault', async () => {
     const SHORT_BEAT = 20;
     const client = new ScriptedClient(scripted({ posture: 'assault' }));
     const ctl = new JevEnemyController({ seats: SEATS, client, orders: '', beatTicks: SHORT_BEAT });
@@ -1274,8 +1274,10 @@ describe('newestAssaultKillTick', () => {
     // eslint-disable-next-line no-restricted-syntax -- test fixture clock, not a render write
     world.tick = 5000;
     kill(world, 5000 - JEV_ASSAULT_STALL_TICKS - 1, ENEMY_COLONY_ID, PLAYER_COLONY_ID); // too old
+    // The window is (tick − STALL, tick]: a kill exactly STALL ticks ago is outside it.
+    kill(world, 5000 - JEV_ASSAULT_STALL_TICKS, ENEMY_COLONY_ID, PLAYER_COLONY_ID);
     expect(newestAssaultKillTick(world, ENEMY_COLONY_ID, PLAYER_COLONY_ID)).toBeNull();
-    kill(world, 4600, ENEMY_COLONY_ID, PLAYER_COLONY_ID);
+    kill(world, 5000 - JEV_ASSAULT_STALL_TICKS + 1, ENEMY_COLONY_ID, PLAYER_COLONY_ID);
     kill(world, 4700, ENEMY_COLONY_ID, PLAYER_COLONY_ID);
     kill(world, 4800, PLAYER_COLONY_ID, ENEMY_COLONY_ID); // theirs
     kill(world, 4900, ENEMY_COLONY_ID, ENEMY_COLONY_ID); // ours of ours
@@ -1322,7 +1324,7 @@ describe('JevEnemyController — a stalled assault comes home', () => {
   }
 
   it('recalls to the guard tile, once, after JEV_ASSAULT_STALL_TICKS with no progress', () => {
-    expect(JEV_ASSAULT_STALL_TICKS).toBe(600);
+    expect(JEV_ASSAULT_STALL_TICKS).toBe(1200); // 60 s at 20 Hz
     const { world, ctl, colony, guard } = setup();
     expect(runTo(world, ctl, T0 + JEV_ASSAULT_STALL_TICKS - 1)).toEqual([]);
     expect(ctl.assaultRecalls).toBe(0);
@@ -1343,8 +1345,45 @@ describe('JevEnemyController — a stalled assault comes home', () => {
     expect(runTo(world, ctl, world.tick + 10)).toEqual([]);
   });
 
-  it('clears the rally when no guard tile is known', () => {
-    const { world, ctl } = setup({ guardKnown: false });
+  it('the real sequence: the recall drains, the rally goes home as Loot, and the next assault is mustered', async () => {
+    const LONG_BEAT = 5000;
+    const client = new ScriptedClient(scripted({ posture: 'assault' }));
+    const ctl = new JevEnemyController({ seats: SEATS, client, orders: '', beatTicks: LONG_BEAT });
+    const world = handoffWorld();
+    standDownFighters(world);
+    const colony = world.colonies[ENEMY_COLONY_ID]!;
+    const cands = candidatesNow(world);
+    const door = cands.posture.assault!.tile!;
+    const guard = cands.posture.guard_home!.tile!;
+    colony.rallyPoint = { tileX: door.x, tileY: door.y };
+    colony.raidType = RaidType.Assault;
+    addFighter(world, ENEMY_COLONY_ID, door.x, door.y, null);
+    expect(world.tick % LONG_BEAT).toBeLessThan(LONG_BEAT - JEV_ASSAULT_STALL_TICKS - 100);
+
+    const log: IssuedRecord[] = [];
+    for (let i = 0; i < JEV_ASSAULT_STALL_TICKS + 50 && ctl.assaultRecalls === 0; i++) {
+      stepOnce(world, ctl, log);
+    }
+    expect(ctl.assaultRecalls).toBe(1);
+    expect(log.filter((r) => r.cmd.type === 'SetRallyPoint')).toHaveLength(1);
+    // The seam after the drain: the rally is on our guard tile, no longer an Assault.
+    stepOnce(world, ctl);
+    expect(colony.rallyPoint).toEqual({ tileX: guard.x, tileY: guard.y });
+    expect(colony.raidType).toBe(RaidType.Loot);
+    expect((ctl as unknown as { assaultWatch: unknown }).assaultWatch).toBeNull();
+
+    // A following assault answer, the army away: held at home by the muster.
+    standDownFighters(world);
+    // eslint-disable-next-line no-restricted-syntax -- test fixture clock, not a render write
+    world.tick = LONG_BEAT - 1;
+    await step(world, ctl, 3);
+    expect(colony.rallyPoint).toEqual({ tileX: guard.x, tileY: guard.y });
+    expect(ctl.currentPosture).toBe('assault');
+  });
+
+  it('clears the rally when there is no guard tile at all', () => {
+    const { world, ctl, colony } = setup({ guardKnown: false });
+    colony.entrances.length = 0;
     const issued = runTo(world, ctl, T0 + JEV_ASSAULT_STALL_TICKS);
     expect(issued).toHaveLength(1);
     expect(issued[0]).toMatchObject({ type: 'ClearRallyPoint', colonyId: ENEMY_COLONY_ID });
@@ -1352,14 +1391,51 @@ describe('JevEnemyController — a stalled assault comes home', () => {
     expect(ctl.assaultRecalls).toBe(1);
   });
 
-  it('a queen HP drop mid-window resets the clock', () => {
+  it('a queen HP drop with a fighter of ours in their nest resets the clock', () => {
     const { world, ctl } = setup();
+    addFighter(world, ENEMY_COLONY_ID, 30, 20, PLAYER_COLONY_ID);
     runTo(world, ctl, T0 + 300);
     const queen = world.colonies[PLAYER_COLONY_ID]!.queenEntityId;
     world.ants.hp[queen] = world.ants.hp[queen]! - 1;
     // The drop is seen on the next seam, so the window runs from T0 + 301.
     expect(runTo(world, ctl, T0 + 301 + JEV_ASSAULT_STALL_TICKS - 1)).toEqual([]);
     expect(runTo(world, ctl, T0 + 301 + JEV_ASSAULT_STALL_TICKS)).toHaveLength(1);
+  });
+
+  it('a queen HP drop with no fighter of ours in their nest is not progress (starving queen)', () => {
+    const { world, ctl } = setup();
+    runTo(world, ctl, T0 + 300);
+    const queen = world.colonies[PLAYER_COLONY_ID]!.queenEntityId;
+    world.ants.hp[queen] = world.ants.hp[queen]! - 1;
+    expect(runTo(world, ctl, T0 + JEV_ASSAULT_STALL_TICKS - 1)).toEqual([]);
+    expect(runTo(world, ctl, T0 + JEV_ASSAULT_STALL_TICKS)).toHaveLength(1);
+  });
+
+  it('a retarget to another of their entrances starts a fresh watch', () => {
+    const { world, ctl, colony } = setup();
+    runTo(world, ctl, T0 + 1000);
+    const theirs = world.colonies[PLAYER_COLONY_ID]!;
+    const second = { ...theirs.entrances[0]! };
+    second.surfaceTileX += 40; // far beyond the engage radius of our fighter
+    theirs.entrances.push(second);
+    colony.rallyPoint = { tileX: second.surfaceTileX, tileY: second.surfaceTileY };
+    // Not engaged there: no recall, however long.
+    expect(runTo(world, ctl, T0 + 1000 + JEV_ASSAULT_STALL_TICKS + 500)).toEqual([]);
+    expect(ctl.assaultRecalls).toBe(0);
+    // Engaged there at T1: the clock starts then.
+    const T1 = world.tick;
+    addFighter(world, ENEMY_COLONY_ID, second.surfaceTileX, second.surfaceTileY, null);
+    expect(runTo(world, ctl, T1 + JEV_ASSAULT_STALL_TICKS)).toEqual([]);
+    expect(runTo(world, ctl, T1 + 1 + JEV_ASSAULT_STALL_TICKS)).toHaveLength(1);
+  });
+
+  it('a controller with no beat applied (from a save) derives the guard tile', () => {
+    const { world, ctl, guard } = setup({ guardKnown: false });
+    const issued = runTo(world, ctl, T0 + JEV_ASSAULT_STALL_TICKS);
+    expect(issued).toHaveLength(1);
+    expect(issued[0]).toMatchObject({ type: 'SetRallyPoint', tileX: guard.x, tileY: guard.y });
+    expect('raidType' in issued[0]!).toBe(false);
+    expect(ctl.currentPosture).toBe('guard_home');
   });
 
   it('a qualifying combat_kill mid-window resets the clock', () => {
@@ -1375,8 +1451,8 @@ describe('JevEnemyController — a stalled assault comes home', () => {
       },
     } as never);
     // The kill (tick T0 + 300) holds the recall off until it leaves the window.
-    expect(runTo(world, ctl, T0 + 300 + JEV_ASSAULT_STALL_TICKS)).toEqual([]);
-    expect(runTo(world, ctl, T0 + 300 + JEV_ASSAULT_STALL_TICKS + 1)).toHaveLength(1);
+    expect(runTo(world, ctl, T0 + 300 + JEV_ASSAULT_STALL_TICKS - 1)).toEqual([]);
+    expect(runTo(world, ctl, T0 + 300 + JEV_ASSAULT_STALL_TICKS)).toHaveLength(1);
   });
 
   it('never engaged: never recalled', () => {

@@ -373,6 +373,15 @@ describe('decodeAnswers', () => {
     expect(ask(0.5, 0.4).expandStorage).toBe(true);
   });
 
+  it('a posture fallback for a current posture that is no candidate prefers guard_home', () => {
+    const odd = makeFacts({ currentPosture: 'assault' });
+    const noAssault = makeCandidates(odd);
+    delete (noAssault.posture as Record<string, unknown>).assault;
+    expect(decodeAnswers({}, noAssault, odd).decision.posture).toBe('guard_home');
+    delete (noAssault.posture as Record<string, unknown>).guard_home;
+    expect(decodeAnswers({}, noAssault, odd).decision.posture).toBe('recall');
+  });
+
   it('falls back to `economy` when the colony is on a ratio with no candidate key', () => {
     const odd = makeFacts({ currentRatio: { forage: 4, fight: 6 } });
     const { decision } = decodeAnswers({}, makeCandidates(odd), odd);
