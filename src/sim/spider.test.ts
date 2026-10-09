@@ -929,7 +929,7 @@ describe('tickSpider', () => {
     it('DOES divert to a straggler when only the enemy QUEEN sits on the camped entrance (no gate-hold for an unbiteable queen)', () => {
       // Regression (seed2082146439 dump): the enemy queen parked on the camped entrance
       // made holdGate=true, suppressing the chase-divert, while combat refused to bite
-      // her — a ~1200-tick deadlock camp. The queen must not hold the gate; the spider
+      // her — a deadlock camp for the whole leash (1200 ticks then). The queen must not hold the gate; the spider
       // should chase the nearby bite-able straggler instead.
       const world = makeWorld();
       world.simVersion = SIM_VERSION_V23_SPIDER_AGGRO;

@@ -56,10 +56,15 @@ import { indexByDrainTick } from '../platform/input-log-replay.js';
 
 const DIFFICULTY = 'Hard';
 /** Hard maps scanned for this test: wave 1 is routed, and wave 2 comes once the AI has
- *  its floor (seed 3, ~2 900 ticks after wave 1) or after patience runs out (seed 20). */
+ *  its floor (seed 3, ~2 900 ticks after wave 1) or after patience runs out (seed 107).
+ *  Re-scanned at V74 (#392), whose hold and 300-tick camp leash shift these maps: the
+ *  patience map was seed 20, then 108. At V74 108's wave 2 launches at its floor (24
+ *  of 24) 1 653 ticks after Recovery, so it is a floor map now. Seeds 0–199 gave 12
+ *  patience maps; 20 is one again, with a narrow margin under its floor (17 of 19),
+ *  and 107 has the widest (14 of 32). */
 const CASES = [
   { seed: 3, branch: 'floor' },
-  { seed: 20, branch: 'patience' },
+  { seed: 107, branch: 'patience' },
 ] as const;
 /** Player fighters put at the door at wave 1's launch: enough to rout it. */
 const DEFENDERS = 40;

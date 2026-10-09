@@ -85,7 +85,7 @@ import { surfaceDiggerEntranceDistance, surfaceDiggerRoutesToEntrance } from './
 import { OFF_GOAL_FIELD, entranceRoutedStep } from './entrance-routed-step.js';
 import { NO_FREE_HOSTILE, invaderHuntStep } from './invader-retarget.js';
 import {
-  holdAlarmedCivilianAtShaft,
+  holdCivilianAtShaft,
   idleMusterPassesThroughFriends,
   idleMustersHome,
   idleWalksHome,
@@ -1871,10 +1871,22 @@ export function tickAntMovement(
               for (let e = 0; e < colony.entrances.length; e++) {
                 const entrance = colony.entrances[e]!;
                 if (entrance.isOpen && entrance.surfaceTileX === tileX) {
-                  // C1 (V42) — an alarmed colony keeps its civilians in: shelter
-                  // at the shaft instead of ascending. Policy lives in
-                  // idle-reserve.ts with the rest of the alarm (#212 layering).
-                  if (holdAlarmedCivilianAtShaft(world, id, inOwnGrid)) break;
+                  // A civilian is held at the shaft instead of ascending while the
+                  // colony is alarmed (C1, V42), an Idle worker while a rampage
+                  // threatens it (V68), or any civilian while the spider camps this
+                  // entrance (#392, V74). Policy lives in idle-reserve.ts with the
+                  // rest of the alarm (#212 layering).
+                  if (
+                    holdCivilianAtShaft(
+                      world,
+                      id,
+                      inOwnGrid,
+                      entrance.surfaceTileX,
+                      entrance.surfaceTileY,
+                    )
+                  ) {
+                    break;
+                  }
                   // V44 (#325) — a tunnel defender stays below.
                   if (fighterDefendsTunnels(world, id)) break;
                   // V43 (#323) — a sentry sheltering from the spider stays below
@@ -1894,9 +1906,12 @@ export function tickAntMovement(
                   ants.posY[id] = entrance.surfaceTileY << FP_SHIFT;
                   // Restore the surface invariant. For ants in their own
                   // grid this is a no-op (already equal). For an invader
-                  // who eventually leaves via the enemy entrance after
-                  // being re-promoted out of Fighting (e.g. Idle), this
-                  // snaps the grid id back to their own colony.
+                  // who leaves via the enemy entrance (a recalled, hungry,
+                  // hauling or blockading fighter), this snaps the grid id
+                  // back to their own colony. (No path demotes an invader
+                  // out of Fighting inside a foreign nest today — see
+                  // releaseSurplusFightersBelowFloor — so a civilian never
+                  // ascends from one.)
                   ants.currentGridColonyId[id] = ants.colonyId[id]!;
                   break;
                 }

@@ -536,8 +536,8 @@ export const SIM_VERSION_V37_CORPSE_FOOD = 37 as const;
  * spider that keeps returning to the door holds the entrance DangerTrail at its
  * deposit/decay equilibrium (SPIDER_DANGER_DEPOSIT 1280 re-deposited every tick
  * against DANGER_DECAY_FP 10 settles near 32 768, 64× FLEE_THRESHOLD) for as long
- * as it stays. A single rampage is leashed by SPIDER_RAMPAGE_MAX_TICKS (1200) and
- * a camper also leaves via the chase-divert, but the hold re-arms for the whole
+ * as it stays. A single rampage is leashed by SPIDER_RAMPAGE_MAX_TICKS (1200 when
+ * this was measured; 300 from V74, #392) and a camper also leaves via the chase-divert, but the hold re-arms for the whole
  * episode — and the episode is long: the longest CONTIGUOUS stretch above the
  * threshold at the AI entrance, over 10 seeds and counting only ticks while the
  * queen was ALIVE, is median 1 197.5 ticks / max 1 635 — about one rampage leash
@@ -732,7 +732,7 @@ export const SIM_VERSION_V41_DEATH_CHOKEPOINT = 41 as const;
  *      Idle surface worker was drafted to fight first, failed 15b's civilian
  *      filter, and was never recalled at all.
  *   3. NO ASCENT (step 16) — the only production ascent (ant/ant-movement.ts)
- *      asks holdAlarmedCivilianAtShaft (ant/idle-reserve.ts); that ascent
+ *      asks holdCivilianAtShaft (ant/idle-reserve.ts); that ascent
  *      admits an Idle worker with no target and any SearchingFood /
  *      ReturningToNest forager. Under the alarm those are an Idle worker at the
  *      shaft row (post-deposit at a chamberless shaft pool, a V35 wander clear,
@@ -1759,7 +1759,51 @@ export const SIM_VERSION_V72_AI_ESCALATION = 72 as const;
  * with it.
  */
 export const SIM_VERSION_V73_FULL_ARMY_LAUNCH = 73 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V73_FULL_ARMY_LAUNCH;
+
+/**
+ * #392 (V74) — no civilian climbs out onto the spider's blockade, and a camp nothing
+ * comes up at ends after 300 ticks (SPIDER_RAMPAGE_MAX_TICKS, was 1200). Up to V73 the
+ * ascent (step 16: an ant at the top of its shaft climbs onto the entrance's surface
+ * tile) never looked at the tile it lands on. A forager climbing out while the spider
+ * camped that entrance (a Rampaging spider on the entrance tile: the #165 blockade)
+ * came up onto the spider. It could not go back down, because the blockade holds
+ * every descender on that tile, and a forager demoted to Idle there found no way in
+ * either (the V68 rampage shelter skips a door whose descent is blocked). It was
+ * bitten or chased down: the 3 idle kills left in the #391 playtest measurement.
+ * From V74 the hold at the shaft (idle-reserve.ts holdCivilianAtShaft, which
+ * already keeps civilians below under the C1 alarm and Idle workers below while the
+ * V68 rampage threatens their colony) has a third reason: the entrance tile the ant
+ * would climb out at is a spider blockade (ant-motion.ts isSpiderBlockade, the
+ * predicate isDescentBlocked's #165 arm now calls). Any adult civilian, Idle or
+ * forager, in its own nest, alarm or not, shelters at the shaft top instead, and
+ * leaves by the existing poke-out once the DangerTrail above its exit has decayed
+ * below FLEE_THRESHOLD (a camping spider holds it far above), then climbs out as
+ * before; a poke-out that releases it while the spider is back on the door is held
+ * again. Like any shelterer it waits at least SHELTER_COOLDOWN_TICKS, even when the
+ * Rampaging spider was only crossing the door on its way to another. The shaft-top
+ * tile is occupancy-exempt, so a shelterer there never blocks an ant coming down the
+ * shaft. Fighters are not held: they fight the spider, and breaking a camp from below
+ * is theirs to do (the V43 sentry rule and the V44 tunnel defender are unchanged).
+ * Known gap, unchanged from V73: the blockade is the exact tile, so a door inside the
+ * spider's V26 edge band (#181), camped from the boundary tile the spider is clamped
+ * to, is no blockade, and a civilian climbing out there still comes up into the bite
+ * (combat folds the band onto the boundary tile); see isSpiderBlockade.
+ * The hold alone moved the cost rather than removing it: a camp the colony waits
+ * out ends at its leash with no meal, and the V54 rotation takes the still-hungry
+ * spider on to the next door, so the spider camped and stayed hungry far longer than
+ * at V73, and a colony waiting out a camp on its only door took in no food meanwhile.
+ * So V74 also cuts the camp leash, SPIDER_RAMPAGE_MAX_TICKS, from 1200 to 300 ticks
+ * (the owner's pick of three measured options on the #392 PR). A camp still running
+ * at 300 ticks has seen no civilian come up (any ant near the camper ends the camp by
+ * the chase-divert), so it is the "nothing came up" rule with no new field; a camp
+ * fought at the door (a fighter-adjacent kill keeps the spider Rampaging) also ends
+ * at 300 now. The single-entrance revisit cooldown stays 1200.
+ * Colony-agnostic (CLNY-08): the blockade is a tile, read for every colony's ants
+ * alike. No new field, no command, no world.rngState draw, no tick-order change.
+ * Pre-1.0 policy: no version gate; MIN_ACCEPTED is raised to V74 with it.
+ */
+export const SIM_VERSION_V74_NO_ASCENT_ONTO_BLOCKADE = 74 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V74_NO_ASCENT_ONTO_BLOCKADE;
 
 /**
  * S2 — AI colony state machine states.

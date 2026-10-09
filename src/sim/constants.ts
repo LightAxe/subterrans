@@ -390,8 +390,8 @@ export const FLEE_THRESHOLD = 512;
  * builds a second, so a spider that keeps returning to that one door holds its
  * DangerTrail at the deposit/decay equilibrium (SPIDER_DANGER_DEPOSIT 1280 against
  * DANGER_DECAY_FP 10 ≈ 32 768, i.e. 64× this threshold) for as long as it stays.
- * A single rampage is leashed by SPIDER_RAMPAGE_MAX_TICKS (1200), and a camper
- * also leaves via the chase-divert — but the hold, designed as a one-tick "wait
+ * A single rampage is leashed by SPIDER_RAMPAGE_MAX_TICKS (1200 when this was
+ * measured; 300 from V74, #392), and a camper also leaves via the chase-divert — but the hold, designed as a one-tick "wait
  * for a safer door", re-arms for the whole episode. MEASURED on `main`, longest
  * CONTIGUOUS stretch of the AI entrance reading ≥ this threshold over 10 seeds,
  * counting only ticks while the queen was still ALIVE: median 1 197.5 ticks, max
@@ -1427,16 +1427,32 @@ export const SPIDER_TERRITORY_RADIUS_TILES = 24 as const;
 
 /** S3 — Brood kills in a single rampage before spider exits to Feeding. */
 export const SPIDER_RAMPAGE_KILL_QUOTA = 2 as const;
-export const SPIDER_RAMPAGE_MAX_TICKS = 1200 as const; // timeout if no kills after 60s (1200 ticks @ 20Hz)
+/**
+ * The camp leash: a rampage that has eaten nothing ends this many ticks after it
+ * began (spider.ts, the Rampaging case), and the V54 rotation moves the spider on.
+ * 300 ticks (15 s) from #392 (V74); 1200 before. From V74 a civilian is held below a
+ * camp instead of climbing out onto it, so the spider lost its usual meal at the door
+ * and a waited-out camp ran the full 1200 ticks. Any ant that comes within
+ * SPIDER_CHASE_TRIGGER_RADIUS of a camper already ends the camp (the straggler
+ * divert), so a camp still running at this age has seen no civilian come up at its
+ * door: "a camp ends after N ticks with nothing emerging" is this leash, with no new
+ * field. Not quite everything: the divert waits while an ant stands on the camped
+ * tile, and a kill made with a fighter adjacent keeps the spider Rampaging, so a camp
+ * fought at the door also ends at this age. 300 is the chase leash
+ * (SPIDER_CHASE_MAX_TICKS), the spider's patience for a single prey, and is not tuned
+ * further; at V73 the mean camp was 54–78 ticks (camp lengths themselves were not
+ * measured). Chosen by the owner from three measured options (#392 PR).
+ */
+export const SPIDER_RAMPAGE_MAX_TICKS = 300 as const;
 
 /**
  * V54 (#337) — single-entrance rule. After a rampage times out on an entrance, the
  * spider rotates to another open entrance; when there is no other open entrance in the
  * world it may camp the same one again only this many ticks after the timeout, and
- * meanwhile patrols (still chasing and hunting). Equal to SPIDER_RAMPAGE_MAX_TICKS, so a
- * lone entrance gets the same break it would get in a two-entrance rotation (the time
- * the spider spends camping the other one). Well past the ~100-tick DangerTrail decay
- * tail, so sheltering ants can come out before the spider may return.
+ * meanwhile patrols (still chasing and hunting). Set equal to the camp leash as it was
+ * then (1200), so a lone entrance got the break it would get in a two-entrance
+ * rotation; left at 1200 when #392 (V74) cut the leash to 300. Well past the ~100-tick
+ * DangerTrail decay tail, so sheltering ants can come out before the spider may return.
  */
 export const SPIDER_RAMPAGE_REVISIT_COOLDOWN_TICKS = 1200 as const;
 

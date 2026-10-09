@@ -17,10 +17,12 @@
 // shifts one holding on the surface only away from the spider (#393,
 // rampageShelterHolds).
 //
-// One hook runs INSIDE step 16 rather than at 15b: holdAlarmedCivilianAtShaft
-// (C1, V42), which movement's ascent calls so the colony alarm can keep a
-// civilian from climbing out. It writes the same flee column this pass owns, so
-// the decision lives here with the rest of the alarm and shelter logic.
+// One hook runs INSIDE step 16 rather than at 15b: holdCivilianAtShaft, which
+// movement's ascent calls so a civilian is kept from climbing out while the
+// colony is alarmed (C1, V42), an Idle worker while a rampage threatens it
+// (V68), or any civilian while the spider camps that entrance (#392, V74). It
+// writes the same flee column this pass owns, so the decision lives here with the
+// rest of the alarm and shelter logic.
 //
 // The V38 doorstep push-through and local-all-clear release (#297) run inside
 // the per-worker loop. Reads are grid-guarded — a bare/test world with no
@@ -63,7 +65,7 @@ import {
 import {
   canEnterSurfaceTile,
   canEnterUndergroundTile,
-  isDescentBlocked,
+  isSpiderBlockade,
   unpackStepDx,
   unpackStepDy,
   DIR_DX,
@@ -270,7 +272,6 @@ function releaseOnLocalAllClear(
  */
 function onEnterableDoorstep(
   world: WorldState,
-  colony: ColonyRecord,
   entrances: readonly NestEntrance[],
   tileX: number,
   tileY: number,
@@ -304,12 +305,7 @@ function onEnterableDoorstep(
   for (let e = 0; e < entrances.length; e++) {
     const ent = entrances[e]!;
     if (!ent.isOpen) continue;
-    // `isDescentBlocked` is called rather than re-implemented so the two can
-    // never drift. `isOwnEntrance = true` + `AntTask.Foraging` reduces it to the
-    // #165 spider arm by construction (the #164 arm needs a FOREIGN Fighter).
-    if (
-      isDescentBlocked(world, AntTask.Foraging, true, colony, ent.surfaceTileX, ent.surfaceTileY)
-    ) {
+    if (isSpiderBlockade(world, ent.surfaceTileX, ent.surfaceTileY)) {
       return false; // some door the BFS might pick is impassable — hold
     }
     const dist = Math.abs(ent.surfaceTileX - tileX) + Math.abs(ent.surfaceTileY - tileY);
@@ -413,8 +409,10 @@ function setFleeTarget(
 /**
  * C1 (V42) — the colony alarm's hold at the shaft. Called by movement's ascent
  * (ant-movement.ts, the only production underground → surface write) from INSIDE
- * its matching-open-entrance branch, for an ant that would otherwise climb out.
- * Returns true if the alarm holds it; the caller then skips the ascent.
+ * its matching-open-entrance branch, for an ant that would otherwise climb out at
+ * entrance tile (entranceTileX, entranceTileY). Returns true if it is held (by the
+ * alarm, the rampage shelter or the spider's blockade, below); the caller then
+ * skips the ascent.
  *
  * That ascent admits an Idle worker with no target and any SearchingFood /
  * ReturningToNest forager, and never consulted the alarm. Under the alarm those
@@ -456,11 +454,28 @@ function setFleeTarget(
  * and fleeing back down. A forager still climbs out to work (the alarm alone holds
  * it). (This hold also makes the poke-out's rampage hold, below, belt and braces:
  * an Idle shelterer the poke-out let out would be held here the same tick.)
+ *
+ * #392 (V74): and any civilian, Idle or forager, alarm or not, whose entrance tile
+ * is the spider's blockade (isSpiderBlockade, the #165 footprint: a Rampaging
+ * spider standing on it). Up to V73 a forager climbing out there came up onto the
+ * spider and could not go back down (the descent gate holds every descender on a
+ * blockade), so it was bitten or chased down. Held here it shelters at the shaft
+ * top like any other shelterer and leaves by the poke-out once the DangerTrail
+ * above its exit has decayed, so not the tick the camp times out with the hungry
+ * spider still standing on the door; a poke-out that releases it while the spider
+ * is back on the door is held again here. Fighters still climb out onto a camper:
+ * they fight it (the spider pairs with a fighter on its tile first, and a spider
+ * priority sends them there), and breaking a camp from below is theirs to do; a
+ * sentry keeps its own spider rule (sentryHoldsBelow). A civilian is never in a
+ * foreign grid (only a Fighting invader goes down another colony's entrance, and
+ * one is never demoted to Idle there), so the own-grid rule above costs nothing.
  */
-export function holdAlarmedCivilianAtShaft(
+export function holdCivilianAtShaft(
   world: WorldState,
   id: number,
   inOwnGrid: boolean,
+  entranceTileX: number,
+  entranceTileY: number,
 ): boolean {
   if (!inOwnGrid) return false;
   const ants = world.ants;
@@ -468,9 +483,11 @@ export function holdAlarmedCivilianAtShaft(
   if (task !== AntTask.Idle && task !== AntTask.Foraging) return false;
   if (ants.speed[id]! <= 0) return false; // brood (and the queen)
   const colony = world.colonies[ants.colonyId[id]!];
+  if (colony === undefined) return false;
   if (
-    colony?.alarmActive !== true &&
-    !(task === AntTask.Idle && colony !== undefined && rampageThreatens(world, colony))
+    colony.alarmActive !== true &&
+    !(task === AntTask.Idle && rampageThreatens(world, colony)) &&
+    !isSpiderBlockade(world, entranceTileX, entranceTileY)
   ) {
     return false;
   }
@@ -610,7 +627,7 @@ function pickRampageShelterEntrance(
     // Standing on it: it goes down this tick (movement's descent follows its step),
     // whatever the danger round it, unless the descent is blocked there.
     if (tileX === ex && tileY === ey) {
-      if (!isDescentBlocked(world, AntTask.Idle, true, colony, ex, ey)) return ent;
+      if (!isSpiderBlockade(world, ex, ey)) return ent;
       continue;
     }
     if (apart > 0 && entranceDanger(dangerGrid, ent) >= FLEE_THRESHOLD) continue;
@@ -752,7 +769,7 @@ function idleSurfaceShelterer(world: WorldState, id: number, phase: -1 | 0): boo
  *          threatens the colony, alarm or not (a forager keeps the alarm-or-danger
  *          poke-out)
  * An Idle worker climbing up from below is held at the shaft top as a shelterer
- * (holdAlarmedCivilianAtShaft).
+ * (holdCivilianAtShaft).
  *
  * #297 (V38) adds the two exits the surface hold was missing, so it is bounded by
  * the THREAT rather than unbounded in time:
@@ -842,7 +859,7 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
         // does none of that. The bite risk is the same either way; only the upside
         // differs, and the upside is real.
         isHomeboundForager &&
-        onEnterableDoorstep(world, colony, entrances, tileX, tileY);
+        onEnterableDoorstep(world, entrances, tileX, tileY);
 
       // A fleeing/sheltering worker the allocator reassigned AWAY from its reserve
       // task (Idle/Foraging) — e.g. recruited to Fighting/Nursing/Digging during
@@ -911,10 +928,11 @@ export function tickIdleReserveAndFlee(world: WorldState): void {
             // #297 (V38): a carrier already ON its doorstep takes the `else`
             // (no hold) and pushes through — waiting there is what starved the
             // colony. A Rampaging camper does eventually leave (the chase-divert,
-            // or SPIDER_RAMPAGE_MAX_TICKS), but the camp outlasts
-            // STARVATION_GRACE_TICKS several times over: measured on `main`, the
-            // longest contiguous camp while the queen was still alive runs a
-            // median 1 197.5 ticks and up to 1 635, ~4× the 300-tick grace.
+            // or SPIDER_RAMPAGE_MAX_TICKS), but the camp outlasted
+            // STARVATION_GRACE_TICKS several times over: measured on `main` before V38,
+            // with the leash then 1200 ticks (300 from V74, #392), the longest
+            // contiguous camp while the queen was still alive ran a median
+            // 1 197.5 ticks and up to 1 635, ~4× the 300-tick grace.
             ants.targetPosX[id] = -1;
             ants.targetPosY[id] = -1;
             ants.fleeShelterUntilTick[id] = tick + 1;

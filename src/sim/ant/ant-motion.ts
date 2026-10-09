@@ -543,6 +543,38 @@ export function isInsideQueenChamber(colony: ColonyRecord, tileX: number, tileY:
 }
 
 // ---------------------------------------------------------------------------
+// The spider blockade (#165) — the one definition of a camped entrance's
+// footprint, read by both shaft gates below.
+// ---------------------------------------------------------------------------
+/**
+ * #165 — the spider blockade: a `Rampaging` spider stands on surface tile
+ * (tileX, tileY). Only Rampaging camps an entrance; a sated spider meandering over
+ * one, or a chase that crosses one, is no blockade, so the narrow state check is
+ * intentional. Read by the descent gate (isDescentBlocked: no ant goes down past
+ * it) and, from V74 (#392), the hold at the shaft (idle-reserve.ts
+ * holdCivilianAtShaft: no civilian climbs out onto it). Both run in step-16
+ * movement, so they read the spider as the previous tick left it (it moves at step
+ * 17.5). Pure: the spider's saved state and position.
+ *
+ * Exact tile only. A known gap, the same at V73 and here: the spider is clamped
+ * SPIDER_EDGE_MARGIN_TILES in from every map edge (V26, #181), and while Rampaging
+ * its bite also covers the band beyond a boundary tile it stands on (combat.ts
+ * resolveSpiderCombatOnTile's per-axis fold). So a door inside that band is camped
+ * from the boundary tile but is never a blockade: a descender there slips in, and
+ * an ascender comes up into the bite. Folding this predicate would also need the
+ * spider's DangerTrail folded (its cross is centred on the boundary tile, so a band
+ * door reads no danger and the V34 flee, the mill and the poke-out would treat it as
+ * safe), so it is left for its own change. The scenario's starting doors are not in
+ * the band; a door the player places there is (as is the AI's rare row-0 recovery
+ * door, render/ai-controller.ts aiEntranceDesignation).
+ */
+export function isSpiderBlockade(world: WorldState, tileX: number, tileY: number): boolean {
+  const spider = world.spider;
+  if (spider === null || spider.state !== 'Rampaging') return false;
+  return spider.posX >> FP_SHIFT === tileX && spider.posY >> FP_SHIFT === tileY;
+}
+
+// ---------------------------------------------------------------------------
 // Pre-descent gate (#164, #165)
 //
 // Descent (Surface → Underground) is a zone transition performed during step-16
@@ -566,16 +598,9 @@ export function isDescentBlocked(
   // #165 — spider blockade. A Rampaging spider parked on the entrance tile is the
   // blockade footprint; hold every descender on the surface so step-17.5 spider
   // combat (which only scans the spider's own tile) catches it instead of letting
-  // carriers slip through the zone transition. Applies to any ant. Only Rampaging
-  // camps an entrance (both V22 and V23); a sated V23 spider meandering over an
-  // entrance must NOT trap descenders, so the narrow state check is intentional.
-  const spider = world.spider;
-  if (spider !== null && spider.state === 'Rampaging') {
-    const sx = spider.posX >> FP_SHIFT;
-    const sy = spider.posY >> FP_SHIFT;
-    if (sx === entranceTileX && sy === entranceTileY) {
-      return true;
-    }
+  // carriers slip through the zone transition. Applies to any ant.
+  if (isSpiderBlockade(world, entranceTileX, entranceTileY)) {
+    return true;
   }
 
   // #164 — foreign fighter vs. a surface queen on the entrance tile. In the
