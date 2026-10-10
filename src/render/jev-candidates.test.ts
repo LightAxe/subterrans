@@ -8,8 +8,10 @@ import { beforeAll, describe, it, expect } from 'vitest';
 import { createScenario } from '../sim/scenario.js';
 import { tick } from '../sim/tick.js';
 import { copyWorldState, type WorldState } from '../sim/types.js';
-import { ChamberType } from '../sim/enums.js';
-import { UndergroundTileState, ugGet } from '../sim/terrain.js';
+import { AntTask, ChamberType } from '../sim/enums.js';
+import { aiFighterCount } from '../sim/ai-state.js';
+import { antMaxHp } from '../sim/health.js';
+import { UndergroundTileState, Zone, ugGet } from '../sim/terrain.js';
 import { ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
 import { isSurfaceTileInComponent } from '../sim/surface-features.js';
 import { runAIController } from './ai-controller.js';
@@ -213,6 +215,56 @@ describe('computeFacts', () => {
     expect(after.ownKillsRecent - before.ownKillsRecent).toBe(1);
     expect(after.oppLossesRecent - before.oppLossesRecent).toBe(1);
     expect(after.ownLossesRecent - before.ownLossesRecent).toBe(1);
+  });
+
+  it('counts armies (Fighting anywhere) and only invaders underground in OUR grid', () => {
+    const world = worldAtHandoff();
+    const enemy = world.colonies[ENEMY_COLONY_ID]!;
+    const ids = [...enemy.workers].filter((id) => world.ants.alive[id] === 1).slice(0, 3);
+    expect(ids.length).toBe(3);
+    const [onSurface, inOurs, inTheirs] = ids as [number, number, number];
+    for (const id of ids) world.ants.task[id] = AntTask.Fighting;
+    world.ants.zone[onSurface] = Zone.Surface;
+    world.ants.zone[inOurs] = Zone.Underground;
+    world.ants.currentGridColonyId[inOurs] = PLAYER_COLONY_ID;
+    world.ants.zone[inTheirs] = Zone.Underground;
+    world.ants.currentGridColonyId[inTheirs] = ENEMY_COLONY_ID;
+    // Anyone else of theirs already underground in our grid would also count.
+    const others = [...enemy.workers].filter(
+      (id) =>
+        !ids.includes(id) &&
+        world.ants.alive[id] === 1 &&
+        world.ants.task[id] === AntTask.Fighting &&
+        world.ants.zone[id] === Zone.Underground &&
+        world.ants.currentGridColonyId[id] === PLAYER_COLONY_ID,
+    ).length;
+
+    const f = factsFor(world, PLAYER_SEATS);
+    expect(f.oppFightersInOurNest).toBe(1 + others);
+    expect(f.oppArmy).toBe(aiFighterCount(world, ENEMY_COLONY_ID));
+    expect(f.ownArmy).toBe(aiFighterCount(world, PLAYER_COLONY_ID));
+    expect(f.oppArmy).toBeGreaterThanOrEqual(3);
+    // Seat-agnostic: the other seat sees the mirror image.
+    const g = factsFor(world, ENEMY_SEATS);
+    expect(g.ownArmy).toBe(f.oppArmy);
+    expect(g.oppArmy).toBe(f.ownArmy);
+  });
+
+  it('reads both queens HP, and 0 for a dead queen', () => {
+    const world = worldAtHandoff();
+    const own = world.colonies[PLAYER_COLONY_ID]!.queenEntityId;
+    const opp = world.colonies[ENEMY_COLONY_ID]!.queenEntityId;
+    world.ants.hp[own] = 17;
+    world.ants.hp[opp] = 33;
+    const f = factsFor(world, PLAYER_SEATS);
+    expect(f.ownQueenHp).toBe(17);
+    expect(f.ownQueenMaxHp).toBe(antMaxHp(world, own));
+    expect(f.oppQueenHp).toBe(33);
+    expect(f.oppQueenMaxHp).toBe(antMaxHp(world, opp));
+    world.ants.alive[opp] = 0;
+    const dead = factsFor(world, PLAYER_SEATS);
+    expect(dead.oppQueenHp).toBe(0);
+    expect(dead.oppQueenMaxHp).toBeGreaterThan(0);
   });
 
   it('sorts food piles by distance from our home entrance', () => {

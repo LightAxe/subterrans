@@ -15,8 +15,9 @@ import {
   containsDigits,
   decodeAnswers,
   encodeBeat,
+  queenHealth,
   tablesFor,
-  workersVsOurs,
+  theirsVsOurs,
   type JevAnswerMap,
 } from './jev-encode.js';
 import { DIG_DESCRIBE, RATIO_CANDIDATES, SPIDER_NEAR_TILES } from './jev-candidates.js';
@@ -40,6 +41,13 @@ function makeFacts(over: Partial<RawFacts> = {}): RawFacts {
     ownForagersOut: 5,
     oppFightersSurface: 2,
     oppFightersNearOurEntrance: 0,
+    ownArmy: 12,
+    oppArmy: 9,
+    ownQueenHp: 50,
+    ownQueenMaxHp: 50,
+    oppQueenHp: 50,
+    oppQueenMaxHp: 50,
+    oppFightersInOurNest: 0,
     foodTotal: 1000,
     foodCapacity: 4000,
     storageChambers: 1,
@@ -175,6 +183,50 @@ describe('encodeBeat', () => {
     }
   });
 
+  it('army_vs_ours is theirs ÷ ours, with the zero cases of workers_vs_ours', () => {
+    const vs = (own: number, opp: number, mode: 'coarse' | 'fine' = 'coarse'): string => {
+      const f = makeFacts({ ownArmy: own, oppArmy: opp });
+      const enc = encodeBeat(f, makeCandidates(f), '', mode);
+      return (enc.state.opponent_colony as Record<string, string>).army_vs_ours!;
+    };
+    expect(vs(10, 20)).toBe('far_more');
+    expect(vs(21, 10)).toBe('far_fewer');
+    expect(vs(20, 20, 'fine')).toBe('equal');
+    expect(vs(0, 5)).toBe('far_more');
+    expect(vs(5, 0)).toBe('far_fewer');
+    expect(vs(0, 0)).toBe('similar');
+  });
+
+  it('queen_health agrees with the wound caption at the 1/2 and 3/4 boundaries', () => {
+    // 50 max: wounded below 25 (24 or less), healed from 38.
+    expect(queenHealth(24, 50)).toBe('badly_wounded');
+    expect(queenHealth(25, 50)).toBe('wounded');
+    expect(queenHealth(37, 50)).toBe('wounded');
+    expect(queenHealth(38, 50)).toBe('unhurt');
+    expect(queenHealth(50, 50)).toBe('unhurt');
+    expect(queenHealth(0, 50)).toBe('badly_wounded');
+    expect(queenHealth(0, 0)).toBe('badly_wounded');
+  });
+
+  it('encodes army, both queens and invaders in both bucket modes', () => {
+    const f = makeFacts({
+      ownArmy: 25,
+      ownQueenHp: 30,
+      oppQueenHp: 10,
+      oppFightersInOurNest: 4,
+    });
+    for (const mode of ['coarse', 'fine'] as const) {
+      const T = tablesFor(mode);
+      const state = encodeBeat(f, makeCandidates(f), '', mode).state;
+      const own = state.our_colony as Record<string, string>;
+      const opp = state.opponent_colony as Record<string, string>;
+      expect(own.army).toBe(bucket(25, T.workers));
+      expect(own.queen_health).toBe('wounded');
+      expect(opp.queen_health).toBe('badly_wounded');
+      expect(opp.fighters_in_our_nest).toBe(bucket(4, T.count));
+    }
+  });
+
   it('workers_vs_ours is theirs ÷ ours, as the key reads (playtest 5, #436)', () => {
     const vs = (own: number, opp: number, mode: 'coarse' | 'fine' = 'coarse'): string => {
       const f = makeFacts({ ownWorkers: own, oppWorkers: opp });
@@ -195,7 +247,7 @@ describe('encodeBeat', () => {
     expect(vs(5, 0)).toBe('far_fewer');
     expect(vs(0, 0)).toBe('similar');
     expect(vs(0, 0, 'fine')).toBe('equal');
-    expect(workersVsOurs(30, 20)).toBe(1.5);
+    expect(theirsVsOurs(30, 20)).toBe(1.5);
   });
 
   it('brood_vs_workers stays brood ÷ workers (it already read the right way round)', () => {
