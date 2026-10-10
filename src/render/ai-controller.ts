@@ -829,9 +829,11 @@ export const AI_DEFENCE_HOME_RADIUS_TILES = 40 as const;
  * a colony that enters Invading as parked raiders arrive still commits its cohort
  * (600 ticks of its shared pre-cohort + invasion budget left if the raid began as it
  * entered Invading, more if earlier, less if later; one that runs out goes to
- * Recovery, and the next Invading, the clock still running, commits at once). After it, two enemy fighters parked by the door no longer stop probes and
- * invasions; the colony keeps defending (ratio 2:8 included). An enemy inside always
- * holds.
+ * Recovery, and the next Invading, the clock still running, commits at once) — if it
+ * still has its need of fighters then: a raid that thinned it below the need stands it
+ * down to WarFooting instead (#426, V75). After it, two enemy fighters parked by the
+ * door no longer stop probes and invasions; the colony keeps defending (ratio 2:8
+ * included). An enemy inside always holds.
  */
 export const AI_DEFENCE_OPS_HOLD_LIMIT_TICKS = 1200 as const;
 /**
