@@ -57,7 +57,11 @@ import type { AIStateRecord, WorldState } from '../sim/types.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import { createScenario } from '../sim/scenario.js';
 import { eggReserveFp } from '../sim/colony/lifecycle-system.js';
-import { createDefaultAIStateRecord } from '../sim/ai-state.js';
+import {
+  createDefaultAIStateRecord,
+  advanceAIState,
+  invasionFighterNeed,
+} from '../sim/ai-state.js';
 import { tick, applyCommands } from '../sim/tick.js';
 import { serializeWorldState, deserializeWorldState } from '../platform/save.js';
 import {
@@ -69,6 +73,7 @@ import {
   FOOD_CHAMBER_CAPACITY,
   QUEEN_EGG_FOOD_THRESHOLD,
   STARTING_WORKERS,
+  AI_INVADING_MIN_TICK,
 } from '../sim/constants.js';
 import { colonyFoodCapacity, colonyFoodTotal } from '../sim/food/food-api.js';
 import {
@@ -2135,8 +2140,14 @@ describe('#371 (V62) — the AI defends its own nest', () => {
   const DOOR_X = 40;
 
   /** Two colonies; the AI owns one open entrance at (DOOR_X, 0) and no rally. */
-  function setup(tick = 0): { world: WorldState; colony: ColonyRecord; foe: ColonyRecord } {
-    const world = makeWorld(tick);
+  function setup(
+    tick = 0,
+    antCapacity = 16,
+  ): { world: WorldState; colony: ColonyRecord; foe: ColonyRecord } {
+    const world =
+      antCapacity === 16
+        ? makeWorld(tick)
+        : ({ ...createWorldState(42, antCapacity), tick } as unknown as WorldState);
     const foe = addColony(world, FOE, allocateEntityId(world));
     const colony = addColony(world, AI, allocateEntityId(world));
     addUndergroundGrid(world, AI);
@@ -2528,6 +2539,56 @@ describe('#371 (V62) — the AI defends its own nest', () => {
     world.ants.posX[back] = DOOR_X << FP_SHIFT;
     ant(world, AI, DOOR_X, 1);
     expect(aiDefenceSallies(world, colony)).toBe(true); // 3 at home vs 2
+  });
+
+  it('#426 (V75): an Invading colony defending a raid that thins it below its need launches nothing, stands down, and launches a full cohort once rebuilt', () => {
+    const { world, colony } = setup(AI_INVADING_MIN_TICK + 100, 64);
+    const rec = createDefaultAIStateRecord(AI);
+    rec.state = 'WarFooting';
+    rec.lastProbeEndTick = world.tick; // no probe signal noise
+    world.aiState.push(rec);
+    setPoolFoodForTest(world, colony, colonyFoodCapacity(colony)); // fed
+    const need = invasionFighterNeed(world, rec);
+    const starts = (): { fighterIds: number[] }[] =>
+      world.commandQueue.filter((c) => c.type === 'StartAIOperation') as unknown as {
+        fighterIds: number[];
+      }[];
+    /** One controller tick, then the sim's AI state step (tick.ts 18b); queue kept. */
+    const step = (): void => {
+      world.commandQueue.length = 0;
+      runAIController(world, AI);
+      advanceAIState(world, AI);
+    };
+
+    // The army at its need, at home, with the raiders at the door.
+    const army: number[] = [];
+    for (let i = 0; i < need; i++) army.push(ant(world, AI, DOOR_X + 1, 5, AI));
+    const raiders = [ant(world, FOE, DOOR_X + 2, 1), ant(world, FOE, DOOR_X - 2, 1)];
+    step();
+    expect(rec.state).toBe('Invading'); // the gate counts the defenders
+    expect(starts()).toHaveLength(0); // ...but the controller holds the cohort (#371)
+
+    // The raid thins the army below the need, then the raiders are gone.
+    for (const id of army.slice(0, 4)) world.ants.alive[id] = 0;
+    step();
+    expect(rec.state).toBe('WarFooting');
+    expect(starts()).toHaveLength(0);
+    for (const id of raiders) world.ants.alive[id] = 0;
+    colony.rallyPoint = null;
+    for (let t = 0; t < 5; t++) {
+      step();
+      expect(rec.state).toBe('WarFooting'); // 4 short: no launch, no cohort
+      expect(starts()).toHaveLength(0);
+    }
+
+    // Rebuilt to the need: the gate fires again and a full cohort commits.
+    for (let i = 0; i < 4; i++) ant(world, AI, DOOR_X + 1, 5, AI);
+    step();
+    expect(rec.state).toBe('Invading');
+    step();
+    const committed = starts();
+    expect(committed).toHaveLength(1);
+    expect(committed[0]!.fighterIds.length).toBeGreaterThanOrEqual(need);
   });
 
   it('#371 Codex P1: a 5-fighter colony with its probe out calls the probe home against 2 raiders, holds through drafting, and resumes once they leave', () => {

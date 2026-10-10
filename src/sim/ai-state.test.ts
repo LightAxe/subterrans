@@ -1403,3 +1403,101 @@ describe('#421 — a full army launches without the food check (V73)', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// #426 (V75) — a pre-cohort Invading stands down to WarFooting when the army is
+// below the launch need.
+// ---------------------------------------------------------------------------
+
+describe('#426 — an invasion with no cohort yet stands down under the need (V75)', () => {
+  const E = ENEMY_COLONY_ID as ColonyId;
+  const NEED_NORMAL = AI_INVADING_FIGHTER_THRESHOLD[NORMAL_TIER_INDEX];
+
+  /** An Invading record, no cohort committed, with `fighters` fighters and a floor. */
+  function preCohort(fighters: number, floor = 0): { world: WorldState; rec: AIStateRecord } {
+    const world = makeMinimalWorld();
+    world.simVersion = LATEST_SIM_VERSION;
+    world.difficulty = 'Normal';
+    world.tick = 9000;
+    const rec = getAIStateForColony(world, E)!;
+    rec.state = 'Invading';
+    rec.enteredTick = 8900;
+    rec.invasionStartTick = 8900;
+    rec.invasionFloor = floor;
+    rec.recoveryEndTick = 1234;
+    rec.invasionRallyTileX = 30;
+    rec.invasionRallyTileY = 5;
+    spawnFighters(world, ENEMY_COLONY_ID, fighters, 100);
+    return { world, rec };
+  }
+
+  it('(1) fighters below the need: back to WarFooting, nothing launched, nothing raised', () => {
+    const { world, rec } = preCohort(NEED_NORMAL - 1);
+    expect(invasionFighterNeed(world, rec)).toBe(NEED_NORMAL);
+    advanceAIState(world, E);
+    expect(rec.state).toBe('WarFooting');
+    expect(rec.enteredTick).toBe(world.tick);
+    expect(rec.invasionStartTick).toBe(0);
+    expect(rec.invasionRallyTileX).toBe(-1);
+    expect(rec.invasionRallyTileY).toBe(-1);
+    expect(rec.operationKind).toBe('None');
+    expect(rec.invasionFloor).toBe(0);
+    expect(rec.recoveryEndTick).toBe(1234);
+    const ev = world.events.filter((e) => e.type === 'ai_state_transition');
+    expect(ev).toHaveLength(1);
+    expect(ev[0]!.payload).toMatchObject({ colonyId: E, from: 'Invading', to: 'WarFooting' });
+    expect(world.events.some((e) => e.type === 'invasion_end')).toBe(false);
+    expect(world.commandQueue.some((c) => c.type === 'ClearRallyPoint')).toBe(false);
+  });
+
+  it('(1b) the floor counts as the need while it is in force, and the stand-down leaves it', () => {
+    const floor = NEED_NORMAL + 6;
+    const { world, rec } = preCohort(NEED_NORMAL + 2, floor);
+    rec.recoveryEndTick = world.tick - 10; // patience has barely begun: the need is the floor
+    expect(invasionFighterNeed(world, rec)).toBe(floor);
+    advanceAIState(world, E);
+    expect(rec.state).toBe('WarFooting');
+    expect(rec.invasionFloor).toBe(floor);
+  });
+
+  it('(2) fighters exactly at the need: stays Invading', () => {
+    const { world, rec } = preCohort(NEED_NORMAL);
+    advanceAIState(world, E);
+    expect(rec.state).toBe('Invading');
+    expect(rec.invasionStartTick).toBe(8900);
+    expect(world.events.some((e) => e.type === 'ai_state_transition')).toBe(false);
+  });
+
+  it('(3) once a cohort is committed, fewer fighters than the need do not stand it down', () => {
+    const { world, rec } = preCohort(0);
+    const ids = spawnFighters(world, ENEMY_COLONY_ID, NEED_NORMAL, 100);
+    setAIRallyOperation(world, E, 30, 5, ids, 'Invasion');
+    // The rest of the army falls: 3 of the cohort left, below the need but not a rout.
+    for (const id of ids.slice(3)) world.ants.alive[id] = 0;
+    expect(aiFightersAlive(world)).toBeLessThan(NEED_NORMAL);
+    advanceAIState(world, E);
+    expect(rec.state).toBe('Invading');
+    expect(rec.operationKind).toBe('Invasion');
+    // The rout rule is unchanged: fewer than 3 of the cohort alive ends it.
+    world.ants.alive[ids[0]!] = 0;
+    advanceAIState(world, E);
+    expect(rec.state).toBe('Recovery');
+    expect(world.events.find((e) => e.type === 'invasion_end')?.payload).toMatchObject({
+      outcome: 'fighter_rout',
+    });
+  });
+
+  it('the pre-cohort timeout still fires when the army is at its need', () => {
+    const { world, rec } = preCohort(NEED_NORMAL);
+    world.tick = rec.invasionStartTick + AI_INVADING_TIMEOUT_TICKS;
+    advanceAIState(world, E);
+    expect(rec.state).toBe('Recovery');
+  });
+
+  function aiFightersAlive(world: WorldState): number {
+    return world.ants.alive.reduce(
+      (n, a, i) => n + (a === 1 && world.ants.colonyId[i] === E ? 1 : 0),
+      0,
+    );
+  }
+});

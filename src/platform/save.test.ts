@@ -65,7 +65,7 @@ import {
   setPoolFoodForTest,
 } from '../sim/food/food-test-utils.js';
 import { QUEEN_HUNGER } from '../sim/hunger.js';
-import { SIM_VERSION_V74_NO_ASCENT_ONTO_BLOCKADE } from '../sim/types.js';
+import { SIM_VERSION_V75_INVASION_NEED_STANDDOWN } from '../sim/types.js';
 import { stageQueenInNest } from '../sim/health-test-utils.js';
 import { pheromoneKeyIsSurface } from '../sim/pheromone/pheromone-store.js';
 
@@ -1278,12 +1278,12 @@ describe('save.ts (SCEN-04 + SCEN-06)', () => {
         OldSimVersionError,
       );
     });
-    it('the pre-1.0 save wipe (#400 V71, #398 V72, #421 V73, #392 V74): every simVersion below MIN (V30 up) is rejected as old; MIN loads', () => {
+    it('the pre-1.0 save wipe (#400 V71, #398 V72, #421 V73, #392 V74, #426 V75): every simVersion below MIN (V30 up) is rejected as old; MIN loads', () => {
       // Pre-1.0 policy (no simVersion gates): MIN moves with LATEST. #400 (V71) was
-      // the first such raise, from the V50 floor (#290 PR 2); #398 (V72), #421 (V73)
-      // and #392 (V74) the next — so V30..V73 report OldSimVersionError (bootFromSave
+      // the first such raise, from the V50 floor (#290 PR 2); #398 (V72), #421 (V73),
+      // #392 (V74) and #426 (V75) the next — so V30..V74 report OldSimVersionError (bootFromSave
       // overwrites such a save instead of loading it).
-      expect(MIN_ACCEPTED_SIM_VERSION).toBe(SIM_VERSION_V74_NO_ASCENT_ONTO_BLOCKADE);
+      expect(MIN_ACCEPTED_SIM_VERSION).toBe(SIM_VERSION_V75_INVASION_NEED_STANDDOWN);
       for (let v = 30; v < MIN_ACCEPTED_SIM_VERSION; v++) {
         const snapshot = makeSavedSnapshot((s) => {
           s.simVersion = v;

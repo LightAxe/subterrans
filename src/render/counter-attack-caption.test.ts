@@ -704,8 +704,9 @@ describe('through the sim: what advanceAIState reports for each way an invasion 
 
   it('no cohort committed by the timeout (pre-cohort): Recovery with no invasion_end, no caption', () => {
     const start = 10;
+    // The army is at its need (#426, V75: below it the invasion stands down instead).
     const { events, shown } = playTick(
-      invadingWorld(start + AI_INVADING_TIMEOUT_TICKS, start, 0, 0),
+      invadingWorld(start + AI_INVADING_TIMEOUT_TICKS, start, 0, 0, NORMAL_NEED),
     );
     expect(ends(events)).toEqual([]);
     expect(

@@ -1393,7 +1393,9 @@ function aiInvasionTick(world: WorldState, aiColonyId: ColonyId, defending = fal
   // Retry every tick while operationKind is None — entrance may be unavailable on entry tick.
   if (aiState.operationKind === 'None') {
     // #371 (V62): a colony defending its own nest commits no cohort yet; the
-    // invasion goes ahead once the raiders are gone (within its timeout budget).
+    // invasion goes ahead once the raiders are gone (within its timeout budget) if the
+    // colony still has its need; #426 (V75): otherwise advanceAIState stands it down to
+    // WarFooting, so a cohort is never committed below the need.
     if (defending) return;
     const targetEntrance = _selectInvasionEntrance(world, aiState);
     if (targetEntrance === null) return;

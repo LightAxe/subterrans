@@ -1803,7 +1803,26 @@ export const SIM_VERSION_V73_FULL_ARMY_LAUNCH = 73 as const;
  * Pre-1.0 policy: no version gate; MIN_ACCEPTED is raised to V74 with it.
  */
 export const SIM_VERSION_V74_NO_ASCENT_ONTO_BLOCKADE = 74 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V74_NO_ASCENT_ONTO_BLOCKADE;
+
+/**
+ * #426 (V75) — an AI invasion stands down if its army drops below the launch need
+ * before the cohort commits. The WarFooting -> Invading gate counts nest defenders, so
+ * a colony defending a player raid can enter Invading at its need; the controller
+ * defers the cohort while it defends (#371), and the raid thins the army. Up to V74 the
+ * cohort then committed every surviving fighter (>= 3): measured 3-13-fighter
+ * "invasions" against a need of 12-18 (Hard 12, Normal 15, Easy 18), which raise the
+ * full "enemy army" warning and are routed. From V75, while no cohort is committed
+ * (operationFighterCount 0), fighters below invasionFighterNeed return the state to
+ * WarFooting (ai-state.ts _checkInvadingToRecovery): no invasion_start was emitted so
+ * no invasion_end, no ClearRallyPoint, no invasionFloor raise and recoveryEndTick is
+ * untouched. Once the colony is back at its need (and fed, per the gate) the launch
+ * gate fires again and commits a full cohort.
+ * Colony-agnostic (CLNY-08). No new field, no command, no world.rngState draw, no
+ * tick-order change. Pre-1.0 policy: no version gate; MIN_ACCEPTED is raised to V75
+ * with it.
+ */
+export const SIM_VERSION_V75_INVASION_NEED_STANDDOWN = 75 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V75_INVASION_NEED_STANDDOWN;
 
 /**
  * S2 — AI colony state machine states.
