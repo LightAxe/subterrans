@@ -1407,12 +1407,8 @@ function aiInvasionTick(world: WorldState, aiColonyId: ColonyId, defending = fal
     // tick.ts rejects Invasion StartAIOperation with fighterIds.length < 3; skip early and
     // avoid pushing a SetRallyPoint that routes uncohorted fighters toward the enemy entrance.
     if (fighters.length < 3) return;
-    // #426 (V75): never commit below the need. advanceAIState (tick.ts step 18b) has
-    // already stood a thinned colony down by the time this runs — nothing kills or
-    // drafts an ant between 18b and the next tick's step 1, and _selectAllFighters
-    // counts what aiFighterCount counts (need <= AI_MAX_OPERATION_FIGHTERS), and the
-    // need only falls across the tick boundary (floor -> base at patience expiry) — so
-    // this guards that ordering rather than adding a rule: it changes no run today.
+    // #426 (V75): never commit a cohort below the need. A colony thinned below it stands
+    // down to WarFooting instead (_checkInvadingToRecovery, sim/ai-state.ts).
     if (fighters.length < invasionFighterNeed(world, aiState)) return;
 
     // Push StartAIOperation so tick.ts applies setAIRallyOperation sim-side (ADR-0007).
