@@ -11,6 +11,7 @@ import vocab from './jev-vocab.json';
 import { queenHealth, tablesFor } from './jev-encode.js';
 import { DIG_DESCRIBE, RATIO_CANDIDATES } from './jev-candidates.js';
 import type { DigDirection, FoodPriorityKey, PostureKey, RatioKey } from './jev-types.js';
+import type { SpiderBehaviorState } from '../sim/types.js';
 
 const TABLES = [
   'fraction',
@@ -38,6 +39,20 @@ describe('vocabulary agreement with the server', () => {
   it('queenHealth only emits vocabulary words', () => {
     const out = new Set([queenHealth(0, 50), queenHealth(30, 50), queenHealth(50, 50)]);
     expect([...out].sort()).toEqual([...vocab.queenHealth].sort());
+  });
+
+  it('every sim spider state, lower-cased as the encoder sends it, is a spider behaviour word', () => {
+    // A Record over the union: a new sim state fails to compile here until it is listed.
+    const states: Record<SpiderBehaviorState, true> = {
+      Patrolling: true,
+      Hunting: true,
+      Chasing: true,
+      Striking: true,
+      Feeding: true,
+      Rampaging: true,
+      Retreating: true,
+    };
+    for (const s of Object.keys(states)) expect(vocab.spiderBehavior).toContain(s.toLowerCase());
   });
 
   it('ratio, dig, posture and food-priority keys are in the vocabulary', () => {
