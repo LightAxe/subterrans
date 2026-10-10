@@ -377,7 +377,8 @@ export function buildQuestions(cands: CandidateSet, hasOrders: boolean): JevQues
       instructions:
         pre +
         'Choose where our fighters should be right now. Options are listed under `candidates.posture`; ' +
-        'assaulting sends fighters into the opponent nest, guarding keeps them home.',
+        'assaulting gathers the army at home first, then sends it into the opponent nest; ' +
+        'while it gathers, current_posture already reads assault.',
       criteria: Object.fromEntries(Object.entries(cands.posture).map(([k, v]) => [k, v.describe])),
     },
     dig: {
@@ -407,7 +408,7 @@ export function buildQuestions(cands: CandidateSet, hasOrders: boolean): JevQues
       instructions:
         pre + 'Should our fighters treat the spider as their priority target right now?',
       criteria: {
-        true: 'yes — fighters engage the spider before anything else',
+        true: 'yes — only if the spider is attacking our fighters right now; a camp on our door ends by itself within seconds',
         false: 'no — fighters keep to their posture and ignore the spider',
       },
     };
@@ -417,7 +418,7 @@ export function buildQuestions(cands: CandidateSet, hasOrders: boolean): JevQues
       type: 'noul',
       instructions: pre + 'Should we place one more food storage chamber in the nest now?',
       criteria: {
-        true: 'yes — our stores are nearly full and growth needs room',
+        true: 'yes — stores are at three quarters full or more and no storage chamber is being dug',
         false: 'no — not worth the digging effort now',
       },
     };
