@@ -32,7 +32,7 @@ import {
   manhattan,
   undergroundComponent,
 } from './jev-candidates.js';
-import { JEV_ID_PATTERN, buildQuestions } from './jev-encode.js';
+import { JEV_ID_PATTERN, buildQuestions, encodeBeat } from './jev-encode.js';
 import type { DigDirection, RawFacts, Seats } from './jev-types.js';
 
 const PLAYER_SEATS: Seats = { mySeat: PLAYER_COLONY_ID, opponentSeat: ENEMY_COLONY_ID };
@@ -459,5 +459,35 @@ describe('candidates — apply through a real tick()', () => {
     expect(at(bound - 1)).not.toBeNull();
     expect(at(bound)).toBeNull();
     expect(at(bound * 2)).toBeNull();
+  });
+});
+
+/**
+ * The proxy rejects any candidate description longer than its MAX_DESCRIPTION_CHARS
+ * (website `infra/lambdas/src/lib/jev-state.ts`) with a 400, before it discards the
+ * text for its own canonical copy. The client mirrors that canonical copy, so a
+ * server wording change that grows past the cap would fail every beat offering it.
+ */
+const PROXY_MAX_DESCRIPTION_CHARS = 200;
+
+describe('candidate descriptions fit the proxy cap', () => {
+  it('every description an encoded beat sends is at most 200 chars, assault included', () => {
+    const world = worldAtHandoff();
+    for (const seats of [PLAYER_SEATS, ENEMY_SEATS]) {
+      const facts = factsFor(world, seats);
+      const cands = buildCandidates(world, seats, facts);
+      expect(cands.posture.assault).toBeDefined();
+      for (const mode of ['coarse', 'fine'] as const) {
+        const sent = encodeBeat(facts, cands, '', mode).state.candidates as Record<
+          string,
+          string | Record<string, string>
+        >;
+        for (const entry of Object.values(sent)) {
+          const texts = typeof entry === 'string' ? [entry] : Object.values(entry);
+          for (const text of texts)
+            expect(text.length).toBeLessThanOrEqual(PROXY_MAX_DESCRIPTION_CHARS);
+        }
+      }
+    }
   });
 });

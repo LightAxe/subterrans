@@ -709,7 +709,7 @@ export function buildCandidates(world: WorldState, seats: Seats, facts: RawFacts
         posture.assault = {
           tile: t,
           describe:
-            "gather the army on our own entrance, then rally every fighter on the opponent's nearest open entrance so they descend and go straight for their queen, ignoring food; a stalled assault comes home by itself",
+            "gather the army at our entrance, then rally every fighter on the opponent's nearest open entrance so they descend and go straight for their queen, ignoring food; a stalled assault comes home",
         };
       }
       const mid = nearestComponentTile(
