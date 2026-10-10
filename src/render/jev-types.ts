@@ -93,6 +93,16 @@ export interface RawFacts {
   readonly ownForagersOut: number;
   readonly oppFightersSurface: number;
   readonly oppFightersNearOurEntrance: number;
+  /** Living ants on the Fighting task, anywhere (the sim's aiFighterCount). */
+  readonly ownArmy: number;
+  readonly oppArmy: number;
+  /** Queen HP and max HP where she stands now; a dead or missing queen reads hp 0. */
+  readonly ownQueenHp: number;
+  readonly ownQueenMaxHp: number;
+  readonly oppQueenHp: number;
+  readonly oppQueenMaxHp: number;
+  /** Opponent Fighting ants underground in OUR nest grid. */
+  readonly oppFightersInOurNest: number;
   readonly foodTotal: number;
   readonly foodCapacity: number;
   readonly storageChambers: number;

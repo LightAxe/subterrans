@@ -16,6 +16,9 @@ import type { NestEntrance } from '../sim/colony/entrance.js';
 import { AntTask, ChamberType } from '../sim/enums.js';
 import { Zone, UndergroundTileState, ugGet } from '../sim/terrain.js';
 import { FP_SHIFT } from '../sim/fixed.js';
+import { isAlive } from '../sim/ant/ant-store.js';
+import { antMaxHp } from '../sim/health.js';
+import { aiFighterCount } from '../sim/ai-state.js';
 import { isSurfaceTileInComponent } from '../sim/surface-features.js';
 import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
 import {
@@ -470,6 +473,13 @@ function countWorkers(
   return n;
 }
 
+/** A colony's queen HP and max HP; a dead or missing queen reads hp 0. */
+function queenHp(world: WorldState, colony: ColonyRecord): { hp: number; maxHp: number } {
+  const q = colony.queenEntityId;
+  if (!isAlive(world.ants, q)) return { hp: 0, maxHp: q >= 0 ? antMaxHp(world, q) : 0 };
+  return { hp: world.ants.hp[q] ?? 0, maxHp: antMaxHp(world, q) };
+}
+
 export function livingWorkers(world: WorldState, colonyId: ColonyId): number {
   const colony = world.colonies[colonyId];
   if (!colony) return 0;
@@ -522,6 +532,9 @@ export function computeFacts(
             manhattan(a.posX[id]! >> FP_SHIFT, a.posY[id]! >> FP_SHIFT, home.x, home.y) <=
               NEAR_ENTRANCE_TILES,
         );
+
+  const ownQueen = queenHp(world, me);
+  const oppQueen = queenHp(world, opp);
 
   let ownLosses = 0;
   let oppLosses = 0;
@@ -577,6 +590,20 @@ export function computeFacts(
     ),
     oppFightersSurface: fightersOnSurface(world, seats.opponentSeat),
     oppFightersNearOurEntrance: oppFightersNear,
+    ownArmy: aiFighterCount(world, seats.mySeat),
+    oppArmy: aiFighterCount(world, seats.opponentSeat),
+    ownQueenHp: ownQueen.hp,
+    ownQueenMaxHp: ownQueen.maxHp,
+    oppQueenHp: oppQueen.hp,
+    oppQueenMaxHp: oppQueen.maxHp,
+    oppFightersInOurNest: countWorkers(
+      world,
+      opp,
+      (id) =>
+        a.task[id] === AntTask.Fighting &&
+        a.zone[id] === Zone.Underground &&
+        a.currentGridColonyId[id] === seats.mySeat,
+    ),
     foodTotal: colonyFoodTotal(world, me),
     foodCapacity: foodCapacity(me),
     storageChambers: me.chambers.filter((c) => c.chamberType === ChamberType.FoodStorage).length,

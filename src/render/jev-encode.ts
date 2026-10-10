@@ -25,6 +25,7 @@ import type {
   RatioKey,
   RawFacts,
 } from './jev-types.js';
+import { woundLevel } from './enemy-queen-wound.js';
 import { RATIO_CANDIDATES, SPIDER_NEAR_TILES } from './jev-candidates.js';
 
 // ---------------------------------------------------------------------------
@@ -176,11 +177,20 @@ const PHASE: BucketSpec = {
   labels: ['opening', 'early', 'mid', 'late'],
 };
 
-/** `opponent_colony.workers_vs_ours`: their workers ÷ ours (99 = overwhelmingly
- *  more when we have none and they have some; 1 = equal when neither has any). */
-export function workersVsOurs(theirs: number, ours: number): number {
+/** Their count ÷ ours — `workers_vs_ours` (workers) and `army_vs_ours` (armies): 99 =
+ *  overwhelmingly more when we have none and they have some; 1 = equal when neither has any. */
+export function theirsVsOurs(theirs: number, ours: number): number {
   if (ours > 0) return theirs / ours;
   return theirs > 0 ? 99 : 1;
+}
+
+/** `queen_health`: the words agree with the player's HP bar / "their queen is wounded"
+ *  caption (enemy-queen-wound.ts): below half her max is badly wounded, at least three
+ *  quarters is unhurt. A queen with no max HP is gone, which is as hurt as it gets. */
+export function queenHealth(hp: number, maxHp: number): string {
+  if (maxHp <= 0) return 'badly_wounded';
+  const level = woundLevel(hp, maxHp);
+  return level === 'wounded' ? 'badly_wounded' : level === 'healed' ? 'unhurt' : 'wounded';
 }
 
 function wordCount(n: number): string {
@@ -270,6 +280,8 @@ export function encodeBeat(
   state.game_phase = bucket(facts.tick, PHASE);
   state.our_colony = {
     workers: bucket(facts.ownWorkers, T.workers),
+    army: bucket(facts.ownArmy, T.workers),
+    queen_health: queenHealth(facts.ownQueenHp, facts.ownQueenMaxHp),
     brood: bucket(facts.ownBrood, T.brood),
     fighters_on_surface: bucket(facts.ownFightersSurface, T.count),
     foragers_out: bucket(facts.ownForagersOut, T.count),
@@ -295,9 +307,12 @@ export function encodeBeat(
     // than we do. (Through 62d7a65 this sent ours ÷ theirs, inverted; playtest 5,
     // #436.) A colony with no workers left: they have overwhelmingly more unless
     // they have none either (equal).
-    workers_vs_ours: bucket(workersVsOurs(facts.oppWorkers, facts.ownWorkers), T.ratioVs),
+    workers_vs_ours: bucket(theirsVsOurs(facts.oppWorkers, facts.ownWorkers), T.ratioVs),
+    army_vs_ours: bucket(theirsVsOurs(facts.oppArmy, facts.ownArmy), T.ratioVs),
+    queen_health: queenHealth(facts.oppQueenHp, facts.oppQueenMaxHp),
     fighters_on_surface: bucket(facts.oppFightersSurface, T.count),
     fighters_at_our_entrance: bucket(facts.oppFightersNearOurEntrance, T.count),
+    fighters_in_our_nest: bucket(facts.oppFightersInOurNest, T.count),
     entrances_open: wordCount(facts.oppEntrancesOpen),
     has_open_entrance: facts.oppEntrancesOpen > 0 ? 'yes' : 'no',
     recent_losses: bucket(facts.oppLossesRecent, T.count),
