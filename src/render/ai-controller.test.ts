@@ -2487,12 +2487,14 @@ describe('#371 (V62) — the AI defends its own nest', () => {
   });
 
   it('Rob: two parked raiders hold an invasion for AI_DEFENCE_OPS_HOLD_LIMIT_TICKS, then it commits; one inside still holds', () => {
-    const { world, colony } = setup(5000);
+    const { world, colony } = setup(5000, 64);
     const rec = createDefaultAIStateRecord(AI);
     rec.state = 'Invading';
     rec.invasionStartTick = world.tick;
     world.aiState.push(rec);
-    for (let i = 0; i < 8; i++) colony.workers.push(ant(world, AI, DOOR_X + 1, 1));
+    // #426 (V75): the army at its need, or the controller commits nothing at all.
+    const need = invasionFighterNeed(world, rec);
+    for (let i = 0; i < need; i++) colony.workers.push(ant(world, AI, DOOR_X + 1, 1));
     ant(world, FOE, DOOR_X + 3, 0); // parked by the door
     ant(world, FOE, DOOR_X - 3, 0);
     const commits = (): boolean => world.commandQueue.some((c) => c.type === 'StartAIOperation');
@@ -2570,9 +2572,14 @@ describe('#371 (V62) — the AI defends its own nest', () => {
 
     // The raid thins the army below the need, then the raiders are gone.
     for (const id of army.slice(0, 4)) world.ants.alive[id] = 0;
+    const eventsBefore = world.events.length;
     step();
     expect(rec.state).toBe('WarFooting');
     expect(starts()).toHaveLength(0);
+    // A stand-down is not a repelled invasion: nothing launched, so nothing ends and
+    // no rally is cleared.
+    expect(world.events.slice(eventsBefore).some((e) => e.type === 'invasion_end')).toBe(false);
+    expect(world.commandQueue.some((c) => c.type === 'ClearRallyPoint')).toBe(false);
     for (const id of raiders) world.ants.alive[id] = 0;
     colony.rallyPoint = null;
     for (let t = 0; t < 5; t++) {
@@ -2589,6 +2596,30 @@ describe('#371 (V62) — the AI defends its own nest', () => {
     const committed = starts();
     expect(committed).toHaveLength(1);
     expect(committed[0]!.fighterIds.length).toBeGreaterThanOrEqual(need);
+  });
+
+  it('#426 (V75): the controller itself never commits a cohort below the need (guard on the 18b ordering)', () => {
+    const { world, colony } = setup(AI_INVADING_MIN_TICK + 100, 64);
+    const rec = createDefaultAIStateRecord(AI);
+    rec.state = 'Invading'; // hand-set: the sim would already have stood this colony down
+    rec.invasionStartTick = world.tick;
+    world.aiState.push(rec);
+    setPoolFoodForTest(world, colony, colonyFoodCapacity(colony));
+    const need = invasionFighterNeed(world, rec);
+    for (let i = 0; i < need - 1; i++) ant(world, AI, DOOR_X + 1, 5, AI);
+    world.commandQueue.length = 0;
+    runAIController(world, AI);
+    expect(world.commandQueue.some((c) => c.type === 'StartAIOperation')).toBe(false);
+    expect(world.commandQueue.some((c) => c.type === 'SetRallyPoint')).toBe(false);
+    // One more fighter and the same call commits the full cohort.
+    ant(world, AI, DOOR_X + 1, 5, AI);
+    world.commandQueue.length = 0;
+    runAIController(world, AI);
+    const starts = world.commandQueue.filter((c) => c.type === 'StartAIOperation') as unknown as {
+      fighterIds: number[];
+    }[];
+    expect(starts).toHaveLength(1);
+    expect(starts[0]!.fighterIds.length).toBe(need);
   });
 
   it('#371 Codex P1: a 5-fighter colony with its probe out calls the probe home against 2 raiders, holds through drafting, and resumes once they leave', () => {
@@ -3048,12 +3079,14 @@ describe('#371 (V62) — the AI defends its own nest', () => {
 
   it('a raided colony starts no probe and commits no invasion cohort', () => {
     for (const state of ['WarFooting', 'Invading'] as const) {
-      const { world, foe } = setup();
+      const { world, foe } = setup(undefined, 64);
       const rec = createDefaultAIStateRecord(AI);
       rec.state = state;
       rec.lastProbeEndTick = -100000;
       world.aiState.push(rec);
-      for (let i = 0; i < 6; i++) ant(world, AI, DOOR_X + 2, 2);
+      // A probe needs 3; an invasion cohort needs the colony's need (#426, V75).
+      const n = state === 'Invading' ? invasionFighterNeed(world, rec) : 6;
+      for (let i = 0; i < n; i++) ant(world, AI, DOOR_X + 2, 2);
       setPilesForTest(world, [
         { foodPileId: 77, tileX: 8, tileY: 3, pickupsRemaining: 4, pickupsInitial: 4 },
       ]);
