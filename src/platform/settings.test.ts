@@ -11,6 +11,11 @@ import {
 // Cross-layer import in a TEST only: the point is to prove the two constants
 // agree. Production platform/ code must not import from render/.
 import { PLAYTRACE_EMAIL_MAX } from '../render/playtrace-upload.js';
+// Cross-layer import — TEST ONLY (same pattern as save.test.ts importing
+// render/opponent-config.js). settings.ts duplicates the `balanced` text as a
+// local literal (DEFAULT_JEV_ORDERS) to keep platform/ free of a runtime
+// dependency on render/; this import lets a test below catch the two drifting.
+import { ordersTextForPreset } from '../render/jev-orders.js';
 
 // jsdom provides a real localStorage in the test environment (test-setup.ts
 // mounts it). Each test resets the namespace key to ensure isolation.
@@ -115,6 +120,126 @@ describe('loadSettings', () => {
     );
     // Arrays are objects; only string-keyed boolean entries survive → {}.
     expect(loadSettings().firstUseHints).toEqual({});
+  });
+
+  // ---------------------------------------------------------------------------
+  // W3 — opponent preference (Jev opponent beta)
+  // ---------------------------------------------------------------------------
+
+  it('defaults the opponent to the rule-based AI', () => {
+    expect(loadSettings().opponent).toEqual({ kind: 'rules' });
+  });
+
+  it('round-trips a jev opponent preference including the free text', () => {
+    const next = mk({ opponent: { kind: 'jev', orders: 'press the entrance' } });
+    saveSettings(next);
+    expect(loadSettings()).toEqual(next);
+  });
+
+  it('round-trips a jev preference with empty orders (no standing orders at all)', () => {
+    // Empty orders remain a legal, distinct state — reached by clearing the
+    // text box — even though `balanced` itself is no longer empty.
+    saveSettings(mk({ opponent: { kind: 'jev', orders: '' } }));
+    expect(loadSettings().opponent).toEqual({ kind: 'jev', orders: '' });
+  });
+
+  it('fills the opponent default for a blob written before W3 (no version bump)', () => {
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        version: SETTINGS_VERSION,
+        settings: { pheromoneOverlay: false, hintStripVisible: true, firstUseHints: {} },
+      }),
+    );
+    expect(loadSettings()).toEqual(mk({ pheromoneOverlay: false }));
+  });
+
+  it('replaces a malformed opponent with the default but keeps valid siblings', () => {
+    const malformed: unknown[] = [
+      null,
+      'jev',
+      42,
+      [],
+      {},
+      { kind: 'random' },
+      { kind: 'jev' }, // orders missing
+      { kind: 'jev', orders: 7 }, // orders wrong type
+      { kind: 'rules', orders: 'ignored' }, // extra key is fine — still `rules`
+    ];
+    for (const opponent of malformed) {
+      localStorage.setItem(
+        SETTINGS_KEY,
+        JSON.stringify({
+          version: SETTINGS_VERSION,
+          settings: { hintStripVisible: false, opponent },
+        }),
+      );
+      const loaded = loadSettings();
+      expect(loaded.opponent).toEqual({ kind: 'rules' });
+      expect(loaded.hintStripVisible).toBe(false); // sibling survived
+    }
+  });
+
+  it('accepts an over-long orders string (the render layer owns the length cap)', () => {
+    // Mirrors save.ts: the envelope/settings validator checks SHAPE only, so a
+    // tampered blob can't brick the file; jevOpponent / the picker cap the text
+    // before it reaches the wire.
+    const long = 'z'.repeat(5000);
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        version: SETTINGS_VERSION,
+        settings: { opponent: { kind: 'jev', orders: long } },
+      }),
+    );
+    expect(loadSettings().opponent).toEqual({ kind: 'jev', orders: long });
+  });
+
+  it("defaults jevOrders to the balanced preset's tuned (non-empty) text", () => {
+    expect(loadSettings().jevOrders).toBe(DEFAULT_SETTINGS.jevOrders);
+    expect(loadSettings().jevOrders.length).toBeGreaterThan(0);
+  });
+
+  it('keeps DEFAULT_SETTINGS.jevOrders in sync with the render-layer balanced text', () => {
+    // settings.ts duplicates this string (a runtime platform→render import isn't
+    // allowed here — see the import comment at the top of this file); this test
+    // is the tripwire that catches the two drifting apart.
+    expect(DEFAULT_SETTINGS.jevOrders).toBe(ordersTextForPreset('balanced'));
+  });
+
+  it('round-trips jevOrders independently of the opponent kind', () => {
+    // The point of the separate field: the `rules` arm of OpponentConfig has
+    // nowhere to carry the text, so picking Standard AI must not erase it.
+    saveSettings(mk({ opponent: { kind: 'rules' }, jevOrders: 'hold the line' }));
+    const loaded = loadSettings();
+    expect(loaded.opponent).toEqual({ kind: 'rules' });
+    expect(loaded.jevOrders).toBe('hold the line');
+  });
+
+  it('replaces a wrong-typed jevOrders with the default', () => {
+    for (const jevOrders of [null, 42, {}, ['a']]) {
+      localStorage.setItem(
+        SETTINGS_KEY,
+        JSON.stringify({
+          version: SETTINGS_VERSION,
+          settings: { hintStripVisible: false, jevOrders },
+        }),
+      );
+      const loaded = loadSettings();
+      expect(loaded.jevOrders).toBe(DEFAULT_SETTINGS.jevOrders);
+      expect(loaded.hintStripVisible).toBe(false); // sibling survived
+    }
+  });
+
+  it('hands out a fresh opponent object per load (no shared default reference)', () => {
+    const a = loadSettings();
+    const b = loadSettings();
+    expect(a.opponent).not.toBe(b.opponent);
+    expect(a.opponent).not.toBe(DEFAULT_SETTINGS.opponent);
+    // Mutating a load must not poison the module-level default.
+    (a.opponent as { kind: string }).kind = 'jev';
+    expect(loadSettings().opponent).toEqual({ kind: 'rules' });
+    expect(DEFAULT_SETTINGS.opponent).toEqual({ kind: 'rules' });
   });
 
   it('ignores unknown extra keys in the settings object', () => {

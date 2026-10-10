@@ -64,6 +64,10 @@ export interface BeforeTickCaptions {
  *      within its cooldown, and the army warning (`captions.armyWarning`), during whose
  *      wave it stays quiet (#435);
  *   7. the prevState snapshot for render interpolation.
+ *
+ * `runAI` (Jev opponent beta, last and optional) drives one AI colony's controller
+ * for the tick; it defaults to the rules AI (runAIController). The Jev opponent
+ * passes a dispatcher that routes the seat it drives to its own controller.
  */
 export function beforeSimTick(
   world: WorldState,
@@ -71,8 +75,9 @@ export function beforeSimTick(
   viewerColonyId: ColonyId,
   prevState: WorldState,
   captions: BeforeTickCaptions,
+  runAI: (world: WorldState, colonyId: ColonyId) => void = runAIController,
 ): void {
-  for (const aiCid of aiColonyIds) runAIController(world, aiCid);
+  for (const aiCid of aiColonyIds) runAI(world, aiCid);
   noteRampageThreat(captions.rampage, world, viewerColonyId, prevState);
   noteQueenDangerTick(captions.queenDanger, world, viewerColonyId);
   noteEnemyQueenWoundTick(captions.enemyQueenWound, world, viewerColonyId);

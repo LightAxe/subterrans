@@ -1,0 +1,442 @@
+// jev-encode.test.ts — bucketing, the digit-free state contract, question
+// shaping and answer decoding. Ported from the spike's encode tests.
+//
+// Fixtures are hand-built here on purpose: `encodeBeat` is a pure function of
+// (facts, candidates), so a real world would only re-test jev-candidates.ts.
+// The candidate-legality half of the contract lives in jev-candidates.test.ts.
+
+import { describe, it, expect } from 'vitest';
+import {
+  JEV_EXPAND_STORAGE_NOUL_MIN,
+  JEV_ID_PATTERN,
+  JEV_MAX_QUESTIONS,
+  bucket,
+  buildQuestions,
+  containsDigits,
+  decodeAnswers,
+  encodeBeat,
+  queenHealth,
+  tablesFor,
+  theirsVsOurs,
+  type JevAnswerMap,
+} from './jev-encode.js';
+import { DIG_DESCRIBE, RATIO_CANDIDATES, SPIDER_NEAR_TILES } from './jev-candidates.js';
+import type { CandidateSet, DigDirection, RawFacts } from './jev-types.js';
+
+const ALL_DIG: readonly DigDirection[] = [
+  'deeper',
+  'wider_left',
+  'wider_right',
+  'toward_surface',
+  'hold',
+];
+
+function makeFacts(over: Partial<RawFacts> = {}): RawFacts {
+  return {
+    tick: 5000,
+    ownWorkers: 20,
+    oppWorkers: 18,
+    ownBrood: 6,
+    ownFightersSurface: 3,
+    ownForagersOut: 5,
+    oppFightersSurface: 2,
+    oppFightersNearOurEntrance: 0,
+    ownArmy: 12,
+    oppArmy: 9,
+    ownQueenHp: 50,
+    ownQueenMaxHp: 50,
+    oppQueenHp: 50,
+    oppQueenMaxHp: 50,
+    oppFightersInOurNest: 0,
+    foodTotal: 1000,
+    foodCapacity: 4000,
+    storageChambers: 1,
+    ownEntrancesOpen: 1,
+    oppEntrancesOpen: 1,
+    spider: null,
+    piles: [
+      {
+        id: 7,
+        tile: { x: 10, y: 3 },
+        remaining: 30,
+        initial: 40,
+        distOwn: 8,
+        distOpp: 40,
+        contested: false,
+      },
+      {
+        id: 9,
+        tile: { x: 40, y: 2 },
+        remaining: 5,
+        initial: 40,
+        distOwn: 30,
+        distOpp: 12,
+        contested: true,
+      },
+    ],
+    ownLossesRecent: 1,
+    oppLossesRecent: 2,
+    ownKillsRecent: 0,
+    currentRatio: { forage: 7, fight: 3 },
+    currentPosture: 'recall',
+    ...over,
+  };
+}
+
+function makeCandidates(facts: RawFacts, over: Partial<CandidateSet> = {}): CandidateSet {
+  const dig = Object.fromEntries(
+    ALL_DIG.map((d) => [d, { describe: DIG_DESCRIBE[d], available: d !== 'toward_surface' }]),
+  ) as CandidateSet['dig'];
+  return {
+    ratio: RATIO_CANDIDATES,
+    posture: {
+      recall: { tile: null, describe: 'everyone home' },
+      guard_home: { tile: { x: 20, y: 0 }, describe: 'hold our entrance' },
+      assault: { tile: { x: 90, y: 0 }, describe: 'storm their entrance' },
+    },
+    dig,
+    foodPriority: {
+      none: { pileId: null, tile: null, describe: 'no priority pile' },
+      pile_a: { pileId: 7, tile: { x: 10, y: 3 }, describe: 'prioritize pile_a' },
+      pile_b: { pileId: 9, tile: { x: 40, y: 2 }, describe: 'prioritize pile_b' },
+    },
+    spiderPriority: null,
+    expandStorage: null,
+    facts,
+    ...over,
+  };
+}
+
+describe('buckets', () => {
+  it('coarse boundaries', () => {
+    const T = tablesFor('coarse');
+    expect(bucket(0, T.fraction)).toBe('empty');
+    expect(bucket(0.05, T.fraction)).toBe('low');
+    expect(bucket(0.299, T.fraction)).toBe('low');
+    expect(bucket(0.3, T.fraction)).toBe('half');
+    expect(bucket(1, T.fraction)).toBe('full');
+    expect(bucket(0, T.count)).toBe('none');
+    expect(bucket(3, T.count)).toBe('few');
+    expect(bucket(4, T.count)).toBe('many');
+    expect(bucket(0.49, T.ratioVs)).toBe('far_fewer');
+    expect(bucket(1, T.ratioVs)).toBe('similar');
+    expect(bucket(2, T.ratioVs)).toBe('far_more');
+  });
+
+  it('fine has strictly more levels than coarse everywhere', () => {
+    const C = tablesFor('coarse');
+    const F = tablesFor('fine');
+    for (const k of Object.keys(C) as (keyof typeof C)[]) {
+      expect(F[k].labels.length).toBeGreaterThan(C[k].labels.length);
+      expect(F[k].labels.length).toBe(F[k].thresholds.length + 1);
+      expect(C[k].labels.length).toBe(C[k].thresholds.length + 1);
+    }
+  });
+});
+
+describe('encodeBeat', () => {
+  const facts = makeFacts();
+  const cands = makeCandidates(facts);
+
+  it('sends no digits, with or without standing orders', () => {
+    for (const orders of ['', 'Strike early and often.']) {
+      const enc = encodeBeat(facts, cands, orders, 'coarse');
+      expect(containsDigits(enc.state)).toBe(false);
+      expect(containsDigits(enc.questions)).toBe(false);
+      expect('standing_orders' in enc.state).toBe(orders !== '');
+    }
+  });
+
+  it('asks the four core questions and stays inside the proxy limits', () => {
+    const enc = encodeBeat(facts, cands, '', 'coarse');
+    expect(Object.keys(enc.questions)).toEqual(
+      expect.arrayContaining(['ratio', 'posture', 'dig', 'food_priority']),
+    );
+    expect(Object.keys(enc.questions).length).toBeLessThanOrEqual(JEV_MAX_QUESTIONS);
+    expect(enc.estimatedTokens).toBeLessThan(3000);
+  });
+
+  it('every question id and option key matches the proxy id pattern', () => {
+    const enc = encodeBeat(
+      facts,
+      makeCandidates(facts, {
+        spiderPriority: { describe: 'hunt the spider' },
+        expandStorage: { anchor: { x: 5, y: 9 }, describe: 'more storage' },
+      }),
+      '',
+      'coarse',
+    );
+    for (const [id, q] of Object.entries(enc.questions)) {
+      expect(id).toMatch(JEV_ID_PATTERN);
+      for (const key of Object.keys(q.criteria)) expect(key).toMatch(JEV_ID_PATTERN);
+    }
+    // v2: the proxy derives its questions from the candidate keys, so those are
+    // the ids that actually go over the wire and have to pass its validation.
+    const candidates = enc.state.candidates as Record<string, unknown>;
+    expect(Object.keys(candidates).length).toBeLessThanOrEqual(JEV_MAX_QUESTIONS);
+    for (const [id, group] of Object.entries(candidates)) {
+      expect(id).toMatch(JEV_ID_PATTERN);
+      if (typeof group === 'string') continue; // yes/no question
+      for (const key of Object.keys(group as Record<string, string>)) {
+        expect(key).toMatch(JEV_ID_PATTERN);
+      }
+    }
+  });
+
+  it('army_vs_ours is theirs ÷ ours, with the zero cases of workers_vs_ours', () => {
+    const vs = (own: number, opp: number, mode: 'coarse' | 'fine' = 'coarse'): string => {
+      const f = makeFacts({ ownArmy: own, oppArmy: opp });
+      const enc = encodeBeat(f, makeCandidates(f), '', mode);
+      return (enc.state.opponent_colony as Record<string, string>).army_vs_ours!;
+    };
+    expect(vs(10, 20)).toBe('far_more');
+    expect(vs(21, 10)).toBe('far_fewer');
+    expect(vs(20, 20, 'fine')).toBe('equal');
+    expect(vs(0, 5)).toBe('far_more');
+    expect(vs(5, 0)).toBe('far_fewer');
+    expect(vs(0, 0)).toBe('similar');
+  });
+
+  it('queen_health agrees with the wound caption at the 1/2 and 3/4 boundaries', () => {
+    // 50 max: wounded below 25 (24 or less), healed from 38.
+    expect(queenHealth(24, 50)).toBe('badly_wounded');
+    expect(queenHealth(25, 50)).toBe('wounded');
+    expect(queenHealth(37, 50)).toBe('wounded');
+    expect(queenHealth(38, 50)).toBe('unhurt');
+    expect(queenHealth(50, 50)).toBe('unhurt');
+    expect(queenHealth(0, 50)).toBe('badly_wounded');
+    expect(queenHealth(0, 0)).toBe('badly_wounded');
+  });
+
+  it('encodes army, both queens and invaders in both bucket modes', () => {
+    const f = makeFacts({
+      ownArmy: 25,
+      ownQueenHp: 30,
+      oppQueenHp: 10,
+      oppFightersInOurNest: 4,
+    });
+    for (const mode of ['coarse', 'fine'] as const) {
+      const T = tablesFor(mode);
+      const state = encodeBeat(f, makeCandidates(f), '', mode).state;
+      const own = state.our_colony as Record<string, string>;
+      const opp = state.opponent_colony as Record<string, string>;
+      expect(own.army).toBe(bucket(25, T.workers));
+      expect(own.queen_health).toBe('wounded');
+      expect(opp.queen_health).toBe('badly_wounded');
+      expect(opp.fighters_in_our_nest).toBe(bucket(4, T.count));
+    }
+  });
+
+  it('workers_vs_ours is theirs ÷ ours, as the key reads (playtest 5, #436)', () => {
+    const vs = (own: number, opp: number, mode: 'coarse' | 'fine' = 'coarse'): string => {
+      const f = makeFacts({ ownWorkers: own, oppWorkers: opp });
+      const enc = encodeBeat(f, makeCandidates(f), '', mode);
+      return (enc.state.opponent_colony as Record<string, string>).workers_vs_ours!;
+    };
+    // They have twice our workers: `far_more` (the old code said `far_fewer`).
+    expect(vs(10, 20)).toBe('far_more');
+    expect(vs(21, 10)).toBe('far_fewer');
+    expect(vs(10, 13)).toBe('more');
+    expect(vs(13, 10)).toBe('fewer');
+    expect(vs(20, 20)).toBe('similar');
+    expect(vs(20, 20, 'fine')).toBe('equal');
+    expect(vs(10, 13, 'fine')).toBe('more');
+    // Edge cases: we have none (they overwhelmingly outnumber us), neither has any.
+    expect(vs(0, 5)).toBe('far_more');
+    expect(vs(0, 5, 'fine')).toBe('overwhelmingly_more');
+    expect(vs(5, 0)).toBe('far_fewer');
+    expect(vs(0, 0)).toBe('similar');
+    expect(vs(0, 0, 'fine')).toBe('equal');
+    expect(theirsVsOurs(30, 20)).toBe(1.5);
+  });
+
+  it('brood_vs_workers stays brood ÷ workers (it already read the right way round)', () => {
+    const f = makeFacts({ ownBrood: 40, ownWorkers: 10 });
+    const enc = encodeBeat(f, makeCandidates(f), '', 'coarse');
+    expect((enc.state.our_colony as Record<string, string>).brood_vs_workers).toBe('far_more');
+  });
+
+  it('a spider within SPIDER_NEAR_TILES is prowling_near_us in both bucket modes', () => {
+    for (const mode of ['coarse', 'fine'] as const) {
+      const threat = (distOwn: number): string => {
+        const f = makeFacts({
+          spider: { state: 'Patrolling', distOwn, distOpp: 80, targetingUs: false },
+        });
+        const enc = encodeBeat(f, makeCandidates(f), '', mode);
+        return (enc.state.spider as Record<string, string>).threat!;
+      };
+      expect(threat(SPIDER_NEAR_TILES)).toBe('prowling_near_us');
+      expect(threat(13)).toBe('prowling_near_us');
+      expect(threat(SPIDER_NEAR_TILES + 1)).toBe('distant');
+    }
+  });
+
+  it('omits unavailable dig directions from candidates AND from the question', () => {
+    const enc = encodeBeat(facts, cands, '', 'coarse');
+    const digCandidates = (enc.state.candidates as { dig: Record<string, string> }).dig;
+    expect(Object.keys(digCandidates)).not.toContain('toward_surface');
+    expect(Object.keys(enc.questions.dig!.criteria)).not.toContain('toward_surface');
+    expect(Object.keys(enc.questions.dig!.criteria)).toContain('hold');
+  });
+
+  it('reports trends against the previous beat, and "unknown" on the first one', () => {
+    const first = encodeBeat(facts, cands, '', 'coarse');
+    const own = first.state.our_colony as Record<string, string>;
+    expect(own.food_trend).toBe('unknown');
+    expect(own.workers_trend).toBe('unknown');
+    expect(own.brood_vs_workers).toBeTypeOf('string');
+
+    const later = encodeBeat(
+      makeFacts({ foodTotal: 3000, ownWorkers: 12 }),
+      cands,
+      '',
+      'coarse',
+      facts,
+    );
+    const ownLater = later.state.our_colony as Record<string, string>;
+    expect(ownLater.food_trend).toBe('rising');
+    expect(ownLater.workers_trend).toBe('falling');
+  });
+
+  it('worst case (spider rampaging, stores full, orders maxed) stays digit-free and small', () => {
+    const worst = makeFacts({
+      spider: { state: 'Rampaging', distOwn: 3, distOpp: 90, targetingUs: true },
+      foodTotal: 4000,
+      ownLossesRecent: 12,
+      oppLossesRecent: 40,
+      ownKillsRecent: 7,
+    });
+    const c = makeCandidates(worst, {
+      spiderPriority: { describe: 'hunt the spider' },
+      expandStorage: { anchor: { x: 5, y: 9 }, describe: 'more storage' },
+    });
+    const enc = encodeBeat(worst, c, 'x'.repeat(300), 'fine');
+    expect(containsDigits(enc.state)).toBe(false);
+    expect(enc.estimatedTokens).toBeLessThan(3000);
+    expect(enc.questions.spider_priority?.type).toBe('noul');
+    expect(enc.questions.expand_storage?.type).toBe('noul');
+    expect((enc.state.spider as Record<string, string>).threat).toBe('rampaging_against_us');
+  });
+});
+
+describe('decodeAnswers', () => {
+  const facts = makeFacts();
+  const cands = makeCandidates(facts);
+
+  it('decodes valid answers and falls back on invalid ones', () => {
+    const q = buildQuestions(cands, false);
+    expect(Object.keys(q)).toContain('posture');
+    const answers: JevAnswerMap = {
+      ratio: {
+        type: 'choice',
+        choice: 'military',
+        confidence: 0.9,
+        probabilities: { military: 0.9 },
+      },
+      posture: { type: 'choice', choice: 'not_an_option', confidence: 0.5, probabilities: {} },
+      dig: { type: 'choice', choice: 'deeper', confidence: 0.5, probabilities: {} },
+      food_priority: { type: 'choice', choice: 'pile_b', confidence: 0.5, probabilities: {} },
+    };
+    const { decision, invalid } = decodeAnswers(answers, cands, facts);
+    expect(decision.ratio).toBe('military');
+    expect(decision.dig).toBe('deeper');
+    expect(decision.foodPriority).toBe('pile_b');
+    expect(decision.posture).toBe('recall'); // fell back — current posture
+    expect(decision.spiderPriority).toBeNull();
+    expect(decision.expandStorage).toBeNull();
+    expect(invalid).toEqual(['posture']);
+  });
+
+  it('accepts the ratio answer under the candidate id the proxy builds its question from', () => {
+    // The proxy names each question after the `state.candidates` key it came
+    // from, so the split of workers answers as `fight_ratio` while this module's
+    // own question map calls it `ratio`. Both have to decode.
+    const answers: JevAnswerMap = {
+      fight_ratio: {
+        type: 'choice',
+        choice: 'military',
+        confidence: 0.9,
+        probabilities: { military: 0.9 },
+      },
+    };
+    const { decision, invalid } = decodeAnswers(answers, cands, facts);
+    expect(decision.ratio).toBe('military');
+    expect(invalid).not.toContain('ratio');
+    expect(invalid).not.toContain('fight_ratio');
+  });
+
+  it('never picks an unavailable dig direction, even if asked to', () => {
+    const answers: JevAnswerMap = {
+      dig: { type: 'choice', choice: 'toward_surface', confidence: 1, probabilities: {} },
+    };
+    const { decision, invalid } = decodeAnswers(answers, cands, facts);
+    expect(decision.dig).toBe('hold');
+    expect(invalid).toContain('dig');
+  });
+
+  it('treats a missing answer as invalid and keeps the current ratio', () => {
+    const { decision, invalid } = decodeAnswers({}, cands, facts);
+    expect(decision.ratio).toBe('economy'); // the 7:3 the facts already carry
+    expect(invalid).toEqual(['ratio', 'posture', 'dig', 'food_priority']);
+  });
+
+  it('thresholds a noul at 0.5 (expand_storage: 0.4) and counts a wrong-typed noul as invalid', () => {
+    const c = makeCandidates(facts, {
+      spiderPriority: { describe: 'hunt the spider' },
+      expandStorage: { anchor: { x: 5, y: 9 }, describe: 'more storage' },
+    });
+    const yes = decodeAnswers(
+      {
+        spider_priority: { type: 'noul', noul: 0.5 },
+        expand_storage: { type: 'noul', noul: 0.39 },
+      },
+      c,
+      facts,
+    );
+    expect(yes.decision.spiderPriority).toBe(true);
+    expect(yes.decision.expandStorage).toBe(false);
+
+    const wrongType = decodeAnswers(
+      { spider_priority: { type: 'choice', choice: 'true', confidence: 1, probabilities: {} } },
+      c,
+      facts,
+    );
+    expect(wrongType.decision.spiderPriority).toBe(false);
+    expect(wrongType.invalid).toContain('spider_priority');
+  });
+
+  it('accepts expand_storage from JEV_EXPAND_STORAGE_NOUL_MIN, spider_priority from 0.5', () => {
+    expect(JEV_EXPAND_STORAGE_NOUL_MIN).toBe(0.4);
+    const c = makeCandidates(facts, {
+      spiderPriority: { describe: 'hunt the spider' },
+      expandStorage: { anchor: { x: 5, y: 9 }, describe: 'more storage' },
+    });
+    const ask = (spider: number, storage: number) =>
+      decodeAnswers(
+        {
+          spider_priority: { type: 'noul', noul: spider },
+          expand_storage: { type: 'noul', noul: storage },
+        },
+        c,
+        facts,
+      ).decision;
+    expect(ask(0.45, 0.45)).toMatchObject({ spiderPriority: false, expandStorage: true });
+    expect(ask(0.5, 0.39)).toMatchObject({ spiderPriority: true, expandStorage: false });
+    expect(ask(0.5, 0.4).expandStorage).toBe(true);
+  });
+
+  it('a posture fallback for a current posture that is no candidate prefers guard_home', () => {
+    const odd = makeFacts({ currentPosture: 'assault' });
+    const noAssault = makeCandidates(odd);
+    delete (noAssault.posture as Record<string, unknown>).assault;
+    expect(decodeAnswers({}, noAssault, odd).decision.posture).toBe('guard_home');
+    delete (noAssault.posture as Record<string, unknown>).guard_home;
+    expect(decodeAnswers({}, noAssault, odd).decision.posture).toBe('recall');
+  });
+
+  it('falls back to `economy` when the colony is on a ratio with no candidate key', () => {
+    const odd = makeFacts({ currentRatio: { forage: 4, fight: 6 } });
+    const { decision } = decodeAnswers({}, makeCandidates(odd), odd);
+    expect(decision.ratio).toBe('economy');
+  });
+});
