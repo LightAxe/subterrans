@@ -2599,12 +2599,11 @@ describe('#371 (V62) — the AI defends its own nest', () => {
   });
 
   it('#426 (V75): the controller itself never commits a cohort below the need (guard on the 18b ordering)', () => {
-    const { world, colony } = setup(AI_INVADING_MIN_TICK + 100, 64);
+    const { world } = setup(AI_INVADING_MIN_TICK + 100, 64);
     const rec = createDefaultAIStateRecord(AI);
     rec.state = 'Invading'; // hand-set: the sim would already have stood this colony down
     rec.invasionStartTick = world.tick;
     world.aiState.push(rec);
-    setPoolFoodForTest(world, colony, colonyFoodCapacity(colony));
     const need = invasionFighterNeed(world, rec);
     for (let i = 0; i < need - 1; i++) ant(world, AI, DOOR_X + 1, 5, AI);
     world.commandQueue.length = 0;
