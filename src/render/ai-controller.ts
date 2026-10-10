@@ -40,7 +40,7 @@ import {
   colonyPoolTileX,
 } from '../sim/food/food-api.js';
 import { eggReserveFp } from '../sim/colony/lifecycle-system.js';
-import { aiFighterCount, opponentColonyId } from '../sim/ai-state.js';
+import { aiFighterCount, invasionFighterNeed, opponentColonyId } from '../sim/ai-state.js';
 import { isEntranceTileOfAnyColony } from '../sim/raid-order.js';
 
 import { AntTask } from '../sim/enums.js';
@@ -829,9 +829,11 @@ export const AI_DEFENCE_HOME_RADIUS_TILES = 40 as const;
  * a colony that enters Invading as parked raiders arrive still commits its cohort
  * (600 ticks of its shared pre-cohort + invasion budget left if the raid began as it
  * entered Invading, more if earlier, less if later; one that runs out goes to
- * Recovery, and the next Invading, the clock still running, commits at once). After it, two enemy fighters parked by the door no longer stop probes and
- * invasions; the colony keeps defending (ratio 2:8 included). An enemy inside always
- * holds.
+ * Recovery, and the next Invading, the clock still running, commits at once) — if it
+ * still has its need of fighters then: a raid that thinned it below the need stands it
+ * down to WarFooting instead (#426, V75). After it, two enemy fighters parked by the
+ * door no longer stop probes and invasions; the colony keeps defending (ratio 2:8
+ * included). An enemy inside always holds.
  */
 export const AI_DEFENCE_OPS_HOLD_LIMIT_TICKS = 1200 as const;
 /**
@@ -1393,7 +1395,9 @@ function aiInvasionTick(world: WorldState, aiColonyId: ColonyId, defending = fal
   // Retry every tick while operationKind is None — entrance may be unavailable on entry tick.
   if (aiState.operationKind === 'None') {
     // #371 (V62): a colony defending its own nest commits no cohort yet; the
-    // invasion goes ahead once the raiders are gone (within its timeout budget).
+    // invasion goes ahead once the raiders are gone (within its timeout budget) if the
+    // colony still has its need; #426 (V75): otherwise advanceAIState stands it down to
+    // WarFooting, so a cohort is never committed below the need.
     if (defending) return;
     const targetEntrance = _selectInvasionEntrance(world, aiState);
     if (targetEntrance === null) return;
@@ -1403,6 +1407,9 @@ function aiInvasionTick(world: WorldState, aiColonyId: ColonyId, defending = fal
     // tick.ts rejects Invasion StartAIOperation with fighterIds.length < 3; skip early and
     // avoid pushing a SetRallyPoint that routes uncohorted fighters toward the enemy entrance.
     if (fighters.length < 3) return;
+    // #426 (V75): never commit a cohort below the need. A colony thinned below it stands
+    // down to WarFooting instead (_checkInvadingToRecovery, sim/ai-state.ts).
+    if (fighters.length < invasionFighterNeed(world, aiState)) return;
 
     // Push StartAIOperation so tick.ts applies setAIRallyOperation sim-side (ADR-0007).
     pushCommand(

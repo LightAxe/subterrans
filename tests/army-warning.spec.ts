@@ -270,6 +270,7 @@ async function seedNearDoorSave(page: Page, launched = false): Promise<number> {
       };
       const ai = (await import(/* @vite-ignore */ aiPath)) as {
         createDefaultAIStateRecord: (cid: number) => Record<string, unknown>;
+        invasionFighterNeed: (w: unknown, rec: unknown) => number;
       };
       const r = utils.raidWorld(3000);
       const grid = r.world.undergroundGrids[k.PLAYER_COLONY_ID];
@@ -289,7 +290,10 @@ async function seedNearDoorSave(page: Page, launched = false): Promise<number> {
       state.operationTargetTileY = near.tileY;
       r.world.aiState.push(state);
       const ids: number[] = [];
-      for (let i = 0; i < 12; i++) {
+      // At least the colony's need (#426, V75: below it nothing launches), and no fewer
+      // than the 12 this fixture always had.
+      const n = Math.max(12, ai.invasionFighterNeed(r.world, state));
+      for (let i = 0; i < n; i++) {
         ids.push(utils.addFighter(r.world, k.ENEMY_COLONY_ID, 100 + (i % 4), 58 + (i >> 2), null));
       }
       if (launched) {

@@ -423,7 +423,31 @@ function _checkInvadingToRecovery(
   // 1. Queen kill → game ends; AI stays Invading (Q-6: aiStateAtTime = "Invading")
   // 2. Cohort alive < 3 (only once a cohort has been committed)
   // 3. Timeout (only once a cohort has been committed, so entrance-retry ticks don't burn the budget)
+  // 4. #426 (V75): before a cohort is committed, fighters below the launch need → stand
+  //    down to WarFooting (nothing launched, no Recovery)
   if (aiState.operationFighterCount === 0) {
+    // #426 (V75) — an invasion is not launched below its need. The WarFooting → Invading
+    // gate counts nest defenders, so a colony defending a player raid can enter Invading
+    // at its need; the controller then defers the cohort while it defends (#371), and the
+    // raid thins the army before the cohort commits. The cohort takes every surviving
+    // fighter (>= 3), so it launched 3-13 fighters against a need of 12-18 (Hard 12,
+    // Normal 15, Easy 18), which the player reads as the full "enemy army" warning and
+    // routes. So while no cohort is committed, fighters below the current need stand the
+    // invasion down to WarFooting. Nothing launched (no invasion_start), so no
+    // invasion_end, no ClearRallyPoint, no invasionFloor raise and recoveryEndTick is
+    // untouched. Once the colony is back at its need (and fed, per the gate) WarFooting →
+    // Invading fires again and commits a full cohort. _selectAllFighters commits every
+    // alive Fighting ant (up to AI_MAX_OPERATION_FIGHTERS) and this reads the same count,
+    // so a cohort is never committed below the need (when the need is within the cap).
+    if (aiFighterCount(world, aiColonyId) < invasionFighterNeed(world, aiState)) {
+      aiState.state = 'WarFooting';
+      aiState.enteredTick = world.tick;
+      aiState.invasionStartTick = 0;
+      aiState.invasionRallyTileX = -1;
+      aiState.invasionRallyTileY = -1;
+      _clearOperationFields(aiState);
+      return;
+    }
     // No cohort committed yet (entrance-retry window). Use invasionStartTick so
     // entrance unavailability can't lock the AI in Invading indefinitely.
     // Guard against save-restored state with invasionStartTick=0 (mirrors the guard in

@@ -562,7 +562,7 @@ _Avoid_: "attack" used alone (ambiguous); don't conflate the operation kind
 An invasion that ends without killing the queen after its cohort was committed: a
 **fighter rout** (fewer than 3 of the cohort alive) or the **timeout**. An invasion
 that times out before any cohort is committed (no entrance found, or the AI held it
-to defend its own nest) is not repelled, nor is one that ends in a queen kill.
+to defend its own nest, or that stood down to WarFooting under the need, #426) is not repelled, nor is one that ends in a queen kill.
 _Avoid_: "failed invasion" (ambiguous with the pre-cohort timeout).
 
 **Launch gate** (WarFooting → Invading):
@@ -576,7 +576,11 @@ stores, so up to V72 it could sit at home, growing, and never launch. It now
 enters Invading as soon as the gate sees 32 or more; when the cohort commits, every
 fighter it has then answers the rally; in playtest 4 a held army only grew, so the wave leaves
 sooner and smaller. Below 32 the gate is unchanged, and so is Peacetime → WarFooting
-(50 % food). The AI's raid hold defers an invasion's cohort, not the launch.
+(50 % food). The AI's raid hold defers an invasion's cohort, not the launch. The gate
+counts nest defenders, so a colony defending a raid can pass it and then be thinned
+before the cohort commits; since **#426 (simVersion V75)** an invasion with no cohort
+committed yet stands down to WarFooting (no Recovery, no floor raise) when its fighters
+fall below the need, and launches only once the gate passes again.
 _Avoid_: "food gate" for the whole launch gate (the food check is one of its three
 tests).
 
