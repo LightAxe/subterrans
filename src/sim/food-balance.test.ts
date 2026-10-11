@@ -95,13 +95,19 @@ function openWorld(seed = 1): WorldState {
 /**
  * A world whose only walkable ground is the row y = 64 from x = 10 to x = 120: each
  * path distance from a colony at either end has exactly one tile, so what a tile
- * rules out (spacing, the colony clearance) can be placed to the tile.
+ * rules out (spacing, the colony clearance) can be placed to the tile. `spurX` adds a
+ * branch going up from the corridor at that x.
  */
-function corridorWorld(): WorldState {
+function corridorWorld(spurX?: number): WorldState {
   const world = createWorldState(1);
   world.bakedSurfaceEffect.fill(SurfaceMovementEffect.HardBlock);
   for (let x = 10; x <= 120; x++) {
     world.bakedSurfaceEffect[64 * SURFACE_GRID_WIDTH + x] = SurfaceMovementEffect.Cosmetic;
+  }
+  if (spurX !== undefined) {
+    for (let y = 40; y < 64; y++) {
+      world.bakedSurfaceEffect[y * SURFACE_GRID_WIDTH + spurX] = SurfaceMovementEffect.Cosmetic;
+    }
   }
   world.surfaceComponentMask = null;
   world.surfaceGoalFields = null;
@@ -296,10 +302,31 @@ describe('#403 balanceHomeFood on hand-built worlds', () => {
     const m1 = piles.find((p) => p.foodPileId === p1.foodPileId)!;
     const m2 = piles.find((p) => p.foodPileId === p2.foodPileId)!;
     expect(colonyDist(world, 1, m1.tileX, m1.tileY)).toBe(29);
+    expect(m1.tileX).toBe(10 + 29);
     expect(colonyDist(world, 2, m2.tileX, m2.tileY)).toBe(34);
     expect(m1.pickupsRemaining).toBe(60);
     expect(m2.pickupsRemaining).toBe(60);
     expectSpacing(world);
+    assertFoodStoreInvariants(world);
+  });
+
+  it('keeps the fallback on the set side of the scent/fairness/balance edges when it can (#403 review)', () => {
+    const world = corridorWorld(40);
+    addColony(world, 1, 10, 64);
+    addColony(world, 2, 120, 64);
+    // D = (22 + 30) / 2 = 26, just past the 25 edge. A corpse at d = 37 (x = 47) rules
+    // out d = 26..48 along the corridor, so 26..29 has no tile and the nearest valid
+    // distance is 25, across the edge. The spur up from x = 40 (d = 30) has tiles
+    // clear of the corpse from d = 35: the same side of the edge, so the pile goes there.
+    const corpse: TestPile = { ...pile(10 + 37, 64, 25), isCorpse: true };
+    const p1 = pile(10 + 22, 64, 50);
+    const p2 = pile(120 - 30, 64, 70);
+    setPilesForTest(world, [p1, p2, corpse]);
+    balanceHomeFood(world, new Rng(10));
+    const m1 = pilesForTest(world).find((p) => p.foodPileId === p1.foodPileId)!;
+    expect([m1.tileX, m1.tileY]).toEqual([40, 59]);
+    expect(colonyDist(world, 1, m1.tileX, m1.tileY)).toBe(35);
+    expect(m1.pickupsRemaining).toBe(60);
     assertFoodStoreInvariants(world);
   });
 
@@ -315,6 +342,11 @@ describe('#403 balanceHomeFood on hand-built worlds', () => {
     const piles = pilesForTest(world);
     const m1 = piles.find((p) => p.foodPileId === p1.foodPileId)!;
     expect([m1.tileX, m1.tileY, m1.pickupsRemaining, m1.pickupsInitial]).toEqual([14, 64, 50, 50]);
+    const m2 = piles.find((p) => p.foodPileId === p2.foodPileId)!;
+    // p2 is dealt by the fallback: colony 2's nearest valid tile is 8 from its entrance.
+    expect([m2.tileX, m2.tileY, m2.pickupsRemaining]).toEqual([28, 64, 60]);
+    expect(colonyDist(world, 2, m2.tileX, m2.tileY)).toBe(8);
+    assertFoodStoreInvariants(world);
   });
 
   it('forms no set from fewer piles than colonies: a lone near pile stays put (#403 review S2)', () => {

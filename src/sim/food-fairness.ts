@@ -373,11 +373,15 @@ export function ensureFoodNearEachColony(world: WorldState, rng: Rng): void {
 //      that colony (D ± FOOD_BALANCE_BAND_TILES, path) and keeps the scatter's
 //      spacing; otherwise it moves to a tile drawn uniformly (one rng draw) from
 //      every tile that is. With no such tile the band widens a tile each side, up to
-//      BAND_WIDEN_STEPS; with none even then the pile stays where it is (never seen on
-//      Normal seeds 0-199, where every set matched exactly). The band never straddles
-//      FOOD_SCENT_RADIUS_TILES, FOOD_FAIRNESS_RADIUS_TILES or FOOD_BALANCE_RADIUS_TILES,
-//      so a matched pile is smelled from home, or within the first leash, for every
-//      colony or for none. Each pile is then resized to S.
+//      BAND_WIDEN_STEPS; with none even then the pile moves to the valid tile on its
+//      side nearest D (one draw), preferring D's side of the three edges below, and
+//      stays where it is, unresized, only if its colony has no valid tile at all
+//      (neither fallback ever fires on Normal seeds 0-199, where every set matched
+//      exactly). The band never straddles FOOD_SCENT_RADIUS_TILES,
+//      FOOD_FAIRNESS_RADIUS_TILES or FOOD_BALANCE_RADIUS_TILES, so a matched pile is
+//      smelled from home, or within the first leash, for every colony or for none
+//      (the fallback crosses an edge only when D's side holds no tile). Each pile
+//      that was dealt is then resized to S.
 //   4. The pool's last piles (fewer than N) move to a tile farther than
 //      FOOD_BALANCE_RADIUS_TILES from every colony, as near equally far from each as
 //      the map allows (one draw each).
@@ -528,7 +532,8 @@ const BAND_WIDEN_STEPS = 3;
  * uniformly (one draw) from those that are, widening the band a tile at a time up to
  * BAND_WIDEN_STEPS. If no tile fits even then, fall back to a tile drawn uniformly
  * (one draw) from the valid tiles on colony h's side (every rule but the band) whose
- * path distance is nearest `d`. Returns false (no draw, no move) only when there is no
+ * path distance is nearest `d`, preferring tiles on d's side of the three edges and
+ * crossing one only when no tile is there. Returns false (no draw, no move) only when there is no
  * valid tile at all; the pile is then not dealt.
  */
 function dealPile(
@@ -570,9 +575,34 @@ function dealPile(
     }
     return true;
   }
-  // No tile in even the widest band: the nearest valid distance to d, any distance.
+  // No tile in even the widest band: the nearest valid distance to d, on d's side of
+  // the three edges if any tile is there, else on either.
+  const [sideLo, sideHi] = setBand(d, FAR);
+  return (
+    dealNearest(world, homes, entrances, lifted, rng, h, slot, d, sideLo, sideHi) ||
+    dealNearest(world, homes, entrances, lifted, rng, h, slot, d, 0, FAR)
+  );
+}
+
+/**
+ * Move the pile in `slot` to a tile drawn uniformly (one draw) from the valid tiles
+ * on colony h's side at path distance lo..hi whose distance is nearest `d`. Returns
+ * false (no draw, no move) when there is no such tile.
+ */
+function dealNearest(
+  world: WorldState,
+  homes: readonly Home[],
+  entrances: readonly (readonly [number, number])[],
+  lifted: ReadonlySet<number>,
+  rng: Rng,
+  h: number,
+  slot: number,
+  d: number,
+  lo: number,
+  hi: number,
+): boolean {
   const valid = (x: number, y: number): boolean =>
-    isBalancedTile(world, homes, entrances, lifted, h, x, y, 0, FAR, slot);
+    isBalancedTile(world, homes, entrances, lifted, h, x, y, lo, hi, slot);
   let bestGap = FAR;
   let count = 0;
   for (let y = 0; y < SURFACE_GRID_HEIGHT; y++) {

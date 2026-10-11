@@ -699,8 +699,8 @@ export const FOOD_FAIRNESS_MIN_PICKUPS = 40;
  * #403 — the path distance (tiles) within which a searching forager smells a food pile
  * and walks straight to it (ant-foraging.ts `findReachableScentPile`). A pile this
  * near an entrance is found by the first forager out; one past it has to be stumbled
- * on. Map generation's food balance (food-fairness.ts `balanceHomeFood`) never lets a
- * matched pile straddle it.
+ * on. Map generation's food balance (food-fairness.ts `balanceHomeFood`) lets a
+ * matched pile straddle it only when its colony has no valid tile on the set's side.
  */
 export const FOOD_SCENT_RADIUS_TILES = 15;
 
