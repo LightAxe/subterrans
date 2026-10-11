@@ -199,8 +199,8 @@ export interface ArmyWarningState {
   /** That invasion was launched while armed and nothing has warned of its wave
    *  yet: the fallback warning is due. */
   invasionUnwarned: boolean;
-  /** #366 — the raid type the noted invasion carries, read off its attacker's rally the
-   *  first frame after it is noted (null: not read yet) and kept until the invasion is
+  /** #366 — the raid type the noted invasion carries, read off its attacker's committed
+   *  AI record (lastRaidType; else its rally) the first frame after it is noted (null: not read yet) and kept until the invasion is
    *  forgotten, so a rally cleared before the queue took the warning cannot turn its
    *  text into the plain Loot one. */
   invasionRaidTypeSeen: RaidType | null;
@@ -456,7 +456,15 @@ export function nextArmyWarning(
     forgetInvasion(state);
   }
   if (state.invasionAttacker >= 0 && state.invasionRaidTypeSeen === null) {
-    state.invasionRaidTypeSeen = invasionRaidType(world, state.invasionAttacker, viewer);
+    // The attacker's committed record, not its rally: the sim sets lastRaidType in the
+    // same apply that emits invasion_start, whereas the SetRallyPoint behind it can be
+    // dropped by the per-batch command cap. The rally is the fallback for an attacker
+    // with no AI record (a human one).
+    const record = world.aiState.find((r) => r.colonyId === state.invasionAttacker);
+    state.invasionRaidTypeSeen =
+      record !== undefined
+        ? record.lastRaidType
+        : invasionRaidType(world, state.invasionAttacker, viewer);
   }
   const quiet = !invading && !gatheringRemains(g) && !marchRemains(m) && state.invasionAttacker < 0;
 

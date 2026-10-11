@@ -956,6 +956,21 @@ describe('nextArmyWarning — the invasion fallback (#404 review)', () => {
     expect(run(s, w, 1)).toEqual([blockade]);
   });
 
+  it('#366: the warning reads the attacker’s committed lastRaidType, not a rally that was dropped', () => {
+    const { world: w, enemy } = nearDoorWorld();
+    // The SetRallyPoint behind the commit was dropped by the batch cap: no rally.
+    enemy.rallyPoint = null;
+    enemy.raidType = RaidType.Loot;
+    const rec = createDefaultAIStateRecord(E);
+    rec.lastRaidType = RaidType.Blockade;
+    w.aiState.push(rec);
+    const s = createArmyWarningState();
+    noteArmyWarningEvent(s, start(w, NEAR), P);
+    expect(run(s, w, 1)).toEqual([
+      `An enemy army is marching to blockade your east entrance. ${BLOCKADE_WARNING_HINT}`,
+    ]);
+  });
+
   it('#366: the raid-type wording keeps the one-door and unnamed forms', () => {
     const r = raidWorld();
     const door = r.player.entrances[0]!;
