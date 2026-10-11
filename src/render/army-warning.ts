@@ -200,9 +200,9 @@ export interface ArmyWarningState {
    *  yet: the fallback warning is due. */
   invasionUnwarned: boolean;
   /** #366 — the raid type the noted invasion carries, read off its attacker's committed
-   *  AI record (lastRaidType; else its rally) the first frame after it is noted (null: not read yet) and kept until the invasion is
-   *  forgotten, so a rally cleared before the queue took the warning cannot turn its
-   *  text into the plain Loot one. */
+   *  AI record (lastRaidType; else its rally) the first frame after it is noted (null:
+   *  not read yet) and kept until the invasion is forgotten, so a rally cleared before
+   *  the queue took the warning cannot turn its text into the plain Loot one. */
   invasionRaidTypeSeen: RaidType | null;
 }
 
