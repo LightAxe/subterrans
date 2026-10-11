@@ -119,7 +119,9 @@ function saveLoad(world: WorldState): WorldState {
 
 describe('#376 V67 — a match has no time limit (whole tick)', () => {
   it('a new world plays through the old cap with no outcome, then ends when a queen starves', () => {
-    const world = worldNearOldCap(7);
+    // Seed 8 since #403 (V76) balanced the starting food: on seed 7's new map the
+    // starved enemy's foragers keep feeding her past the 400-tick deadline.
+    const world = worldNearOldCap(8);
     expect(world.simVersion).toBe(LATEST_SIM_VERSION);
     // Through the old cap and well past it: nothing ends the match.
     while (world.tick < OLD_MATCH_CAP_TICKS + 200) {

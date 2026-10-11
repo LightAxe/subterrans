@@ -740,6 +740,24 @@ export function movePile(world: WorldState, slot: number, x: number, y: number):
 }
 
 /**
+ * #403 — set the pile in `slot` to hold `amountFp` (floored to whole pickups, at
+ * least one pickup, at most a scatter pile's largest), as if it had been made that
+ * size: its initial size is set with it. For world generation only (food-fairness.ts
+ * `balanceHomeFood`), before any pile has been drained. Returns false, changing
+ * nothing, when `slot` holds no pile.
+ */
+export function resizePile(world: WorldState, slot: number, amountFp: number): boolean {
+  const store = world.food;
+  if (slot < 0 || slot >= store.kind.length || store.kind[slot] !== FoodKind.Pile) return false;
+  let fp = wholePickupsFp(amountFp);
+  if (fp < FOOD_PICKUP_AMOUNT) fp = FOOD_PICKUP_AMOUNT;
+  if (fp > PILE_MAX_FP) fp = PILE_MAX_FP;
+  store.amountFp[slot] = fp;
+  store.initialFp[slot] = fp;
+  return true;
+}
+
+/**
  * #352 — the food a `topUpOrSpawnCorpsePile` at surface tile (x, y) would keep, at
  * most: the room left in the pile there (PILE_MAX_FP less its initial size), or,
  * with none, a whole new pile's worth when a pile may be made there (under

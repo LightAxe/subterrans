@@ -27,6 +27,7 @@ import {
   EXCURSION_WOBBLE_PERCENT,
   FOOD_PICKUP_AMOUNT,
   FOOD_PILE_PICKUP_DRAIN,
+  FOOD_SCENT_RADIUS_TILES,
   LEASH_HYSTERESIS_TILES,
   SEARCH_LEASH_MAX_WAVE,
   SEARCH_LEASH_RADII,
@@ -1051,7 +1052,7 @@ export function tickExcursionBoundary(world: WorldState): void {
  * few tiles of approach determinism without making food designation irrelevant
  * — piles beyond this radius still require trail-following or exploration.
  */
-const FOOD_SCENT_RADIUS = 15;
+const FOOD_SCENT_RADIUS = FOOD_SCENT_RADIUS_TILES;
 
 /**
  * PR 5 Fix-A scent selection: among food piles within FOOD_SCENT_RADIUS

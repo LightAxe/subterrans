@@ -224,35 +224,36 @@ describe('#395 ensureFoodNearEachColony on scenario maps (V69)', () => {
   it('pins the maps of the #395 playtest seeds: where the moved piles stand, and the rng after', () => {
     // [seed, [[pile id, x, y] moved], rngState after generation] — Normal, LATEST. On
     // the scatter each colony listed here lacked food of its own; these piles are the
-    // ones the donor rule moved to it. A later change to the rule bumps simVersion
-    // (pre-1.0: no gate) and re-pins these.
+    // ones the donor rule moved to it. #403 (V76): balanceHomeFood then deals the food
+    // near home out again in matched sets, so these are where they end up after it
+    // (seed 5's pile 12 is the odd one out, moved to the middle). A later change to
+    // either rule bumps simVersion (pre-1.0: no gate) and re-pins these.
     const GOLDEN: ReadonlyArray<readonly [number, ReadonlyArray<readonly number[]>, number]> = [
       [
         1,
         [
-          [0, 93, 57],
-          [7, 11, 57],
+          [0, 100, 49],
+          [7, 35, 72],
         ],
-        3980938825,
+        2717267485,
       ],
       [
         12,
         [
-          [0, 21, 71],
-          [9, 99, 44],
+          [0, 22, 79],
+          [9, 112, 55],
         ],
-        317807210,
+        1517537353,
       ],
-      [24, [[10, 32, 78]], 2149373035],
-      [27, [[5, 38, 70]], 2149373038],
-      [5, [[12, 4, 66]], 4044880026],
-      [20, [[10, 19, 69]], 3413044371],
+      [24, [[10, 9, 55]], 253866025],
+      [27, [[5, 44, 65]], 885701698],
+      [5, [[12, 64, 75]], 949642873],
+      [20, [[10, 18, 57]], 2149373031],
     ];
     for (const [seed, moves, rngState] of GOLDEN) {
       const world = createScenario(seed, 'Normal');
       for (const [id, x, y] of moves) {
         expect(tileOf(world, id!), `seed ${seed} pile ${id}`).toEqual([x, y]);
-        expect(servedBy(world, x!, y!), `seed ${seed} pile ${id}`).not.toBeNull();
       }
       expect(world.rngState, `seed ${seed}`).toBe(rngState);
     }

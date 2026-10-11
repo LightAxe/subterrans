@@ -595,15 +595,18 @@ describe('#392 (V74) — a civilian does not climb out onto the spider blockade'
     for (let t = 0; t < 40; t++) tick(world, []);
     expect(world.ants.fleeShelterUntilTick[ids[0]!]).toBeGreaterThan(0);
     const loaded = deserializeWorldState(serializeWorldState(world));
+    const surfaced = new Set<number>();
     for (let t = 0; t < 400; t++) {
       tick(world, []);
       tick(loaded, []);
+      for (const id of ids) if (world.ants.zone[id] === Zone.Surface) surfaced.add(id);
     }
     expect(JSON.stringify(serializeWorldState(loaded))).toBe(
       JSON.stringify(serializeWorldState(world)),
     );
-    // The run did go through the end of the camp: both are out.
-    for (const id of ids) expect(world.ants.zone[id]).toBe(Zone.Surface);
+    // The run did go through the end of the camp: both came out (#403 V76: on the
+    // balanced map one may already be home again with food by the last tick).
+    for (const id of ids) expect(surfaced.has(id), `ant ${id}`).toBe(true);
   });
 });
 
