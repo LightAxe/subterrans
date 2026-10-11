@@ -696,6 +696,15 @@ It replaced the one-time "The enemy is attacking your hive." invasion caption.
 _Avoid_: "gathering warning" for a warning that may be about a march; "invasion
 caption".
 
+**Blockade caption** (#366, render-only; `src/render/blockade-caption.ts`):
+The one-time caption "Your entrance is blockaded. Fighters waiting in the tunnel can't
+reach the ring: rally just outside the door to break it." Shown once per match, when
+the ring actually forms: another colony's **Blockade** rally is on one of the player's
+open entrances and at least 3 of its Fighting ants stand on the surface within
+`BLOCKADE_RADIUS_TILES` (Manhattan) of it. Held back, still armed, while the player's
+rally is already on a surface tile within that radius that is not the entrance itself.
+Polled per frame; a recurring caption, so it waits for an idle queue.
+
 **Counter-attack caption** (playtest 4, render-only):
 The caption that tells the player to strike back after a **fighter rout**: "Their
 army is broken — strike their nest now! Assault: right-click or long-press their

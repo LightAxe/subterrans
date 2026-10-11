@@ -240,6 +240,11 @@ import {
   offerStoresFillingCaption,
 } from './stores-filling-caption.js';
 import {
+  createBlockadeCaptionState,
+  offerBlockadeCaption,
+  resetBlockadeCaptionState,
+} from './blockade-caption.js';
+import {
   counterAttackCaptionOwed,
   createCounterAttackCaptionState,
   noteCounterAttackEvent,
@@ -1242,6 +1247,8 @@ export class GameScene extends Phaser.Scene {
   // queue took this round (__phase9_test.getCounterAttackCaption).
   private counterAttackCaption = createCounterAttackCaptionState();
   private counterAttackCaptionLog: { routTick: number; tick: number }[] = [];
+  // #366: the one-time "Your entrance is blockaded" caption (blockade-caption.ts).
+  private blockadeCaption = createBlockadeCaptionState();
   private renderFrame = 0; // frame counter for glow fade maps
   private readonly contestedGlowFrames: Map<number, number> = new Map(); // surface glow fade
   private readonly undergroundGlowFrames: Map<number, number> = new Map(); // underground glow fade
@@ -1967,6 +1974,7 @@ export class GameScene extends Phaser.Scene {
     this.rampageWarningTicks = [];
     this.counterAttackCaption = createCounterAttackCaptionState();
     this.counterAttackCaptionLog = [];
+    this.blockadeCaption = createBlockadeCaptionState();
     // Stage 3b (#3): reset the per-session first-world-input latch so the
     // proactive [Tab] nudge can re-evaluate on a fresh round (the cross-session
     // shown-flags persist in settings and are NOT cleared here).
@@ -2315,6 +2323,22 @@ export class GameScene extends Phaser.Scene {
       );
     }
 
+    // #366 — "Your entrance is blockaded …", once per match, when an enemy Blockade ring
+    // (at least three of its fighters round the entrance) stands on the player's door
+    // (blockade-caption.ts). Polled per frame: a ring persists for many ticks, and a busy
+    // queue only delays it. On the projected world, so a rally the player has just picked
+    // already counts. Advice: it makes no long caption give way.
+    if (uiScene) {
+      offerBlockadeCaption(
+        this.blockadeCaption,
+        this.projection.get(this.world),
+        PLAYER_COLONY_ID,
+        uiScene,
+        this.layout.w / 2,
+        60,
+      );
+    }
+
     // #395 (V70) — the queen lays only while stores cover the egg reserve, which the
     // entrance pool alone never can, and (#413) one larder only up to about 3 brood:
     // tell the player when storage capacity is what stops her
@@ -2569,6 +2593,7 @@ export class GameScene extends Phaser.Scene {
     // review) an invasion a loaded save was taken in the middle of is warned of,
     // since its launch event was not saved.
     resetArmyWarningState(this.armyWarning);
+    resetBlockadeCaptionState(this.blockadeCaption);
     noteInvasionUnderWay(this.armyWarning, this.world, PLAYER_COLONY_ID);
     // Stage 2 §B: a fresh/loaded world must rebake every allocated terrain RT (the prior
     // session's RTs are stale). Optional chaining — finishBoot can run before create() has
