@@ -489,10 +489,13 @@ describe('food-api — piles', () => {
     expect(size((FOOD_PILE_INITIAL_PICKUPS_MAX + 1) * P)).toBe(FOOD_PILE_INITIAL_PICKUPS_MAX * P);
   });
 
-  it('resizePile refuses a slot with no pile, changing nothing (#403)', () => {
-    const { world, tiles } = emptyPileWorld(1);
+  it('resizePile refuses a slot with no pile, or a corpse pile, changing nothing (#403)', () => {
+    const { world, tiles } = emptyPileWorld(2);
     spawnPile(world, 83, tiles[0]!.x, tiles[0]!.y, 40 * P, 0);
+    const corpse = spawnPile(world, 84, tiles[1]!.x, tiles[1]!.y, 3 * P, FOOD_FLAG_CORPSE);
+    // The snapshot holds each pile's tile, sizes and corpse flag.
     const before = JSON.stringify(pilesForTest(world));
+    expect(resizePile(world, corpse, 60 * P)).toBe(false); // a corpse pile, under a natural one's least
     const poolSlot = world.colonies[1]!.poolSlot;
     const poolBefore = world.food.amountFp[poolSlot];
     expect(resizePile(world, -1, 60 * P)).toBe(false);

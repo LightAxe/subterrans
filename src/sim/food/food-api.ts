@@ -746,12 +746,13 @@ export function movePile(world: WorldState, slot: number, x: number, y: number):
  * natural pile's initial size, at most a scatter pile's largest), as if it had been
  * made that size: its initial size is set with it. For world generation only, and
  * natural piles only (food-fairness.ts `balanceHomeFood`), before any pile has been
- * drained. Returns false, changing
- * nothing, when `slot` holds no pile.
+ * drained. Returns false, changing nothing, when `slot` holds no pile or holds a
+ * corpse pile (a corpse pile may hold less than a natural one's least).
  */
 export function resizePile(world: WorldState, slot: number, amountFp: number): boolean {
   const store = world.food;
   if (slot < 0 || slot >= store.kind.length || store.kind[slot] !== FoodKind.Pile) return false;
+  if (pileIsCorpse(world, slot)) return false;
   let fp = wholePickupsFp(amountFp);
   const minFp = FOOD_PILE_INITIAL_PICKUPS_MIN * FOOD_PICKUP_AMOUNT;
   if (fp < minFp) fp = minFp;
