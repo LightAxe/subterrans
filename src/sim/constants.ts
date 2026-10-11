@@ -695,6 +695,34 @@ export const FOOD_FAIRNESS_RADIUS_TILES = 25;
  */
 export const FOOD_FAIRNESS_MIN_PICKUPS = 40;
 
+/**
+ * #403 — the path distance (tiles) within which a searching forager smells a food pile
+ * and walks straight to it (ant-foraging.ts `findReachableScentPile`). A pile this
+ * near an entrance is found by the first forager out; one past it has to be stumbled
+ * on. Map generation's food balance (food-fairness.ts `balanceHomeFood`) lets a
+ * matched pile straddle it only when its colony has no valid tile on the set's side.
+ */
+export const FOOD_SCENT_RADIUS_TILES = 15;
+
+/**
+ * #403 — map generation deals every natural pile within this many tiles (surface path)
+ * of a colony's open entrances out again in matched sets, one pile per colony at the
+ * same distance from home and the same size (food-fairness.ts `balanceHomeFood`), so
+ * no colony starts with nearer or more food than another. 40 is the second search
+ * wave's leash (`SEARCH_LEASH_RADII[1]`). Measured on V75 maps (Normal seeds 0-199,
+ * both colonies on the rule-based AI): one colony had twice the other's workers at
+ * 5:00 on 69 maps unbalanced, 17 balanced within 30 tiles and 9 within 40; at 10:00,
+ * on 108, 67 and 46.
+ */
+export const FOOD_BALANCE_RADIUS_TILES = 40;
+
+/**
+ * #403 — a matched pile lands within this many tiles (surface path) of its set's
+ * distance from home, either side, when a tile that near exists (the band widens a
+ * tile at a time, up to three, when none does).
+ */
+export const FOOD_BALANCE_BAND_TILES = 0;
+
 // ---------------------------------------------------------------------------
 // Issue #112 — Food pile depletion + respawn (strategic survival mechanic)
 // ---------------------------------------------------------------------------

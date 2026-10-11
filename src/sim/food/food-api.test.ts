@@ -26,6 +26,7 @@ import {
   drainPile,
   forEachPile,
   movePile,
+  resizePile,
   freeChamberStock,
   isFoodChamberDepositable,
   naturalPileCount,
@@ -55,6 +56,7 @@ import {
   setColonyFoodForTest,
   type TestChamber,
 } from './food-test-utils.js';
+import { FoodKind } from './food-store.js';
 import { createWorldState } from '../types.js';
 import type { WorldState } from '../types.js';
 import { createColonyRecord } from '../colony/colony-store.js';
@@ -69,6 +71,7 @@ import {
   FOOD_PICKUP_AMOUNT,
   FOOD_PILE_HARD_CAP,
   FOOD_PILE_INITIAL_PICKUPS_MAX,
+  FOOD_PILE_INITIAL_PICKUPS_MIN,
   FOOD_PILE_SOFT_CEILING,
   MAX_ENTITIES,
   STARTING_FOOD,
@@ -452,6 +455,56 @@ describe('food-api — piles', () => {
     expect(movePile(world, world.colonies[1]!.poolSlot, tiles[2]!.x, tiles[2]!.y)).toBe(false);
     expect(JSON.stringify(pilesForTest(world))).toBe(before);
     expect(pileAtTile(world, tiles[0]!.x, tiles[0]!.y)).toBe(a);
+    assertFoodStoreInvariants(world);
+  });
+
+  it('resizePile sets a pile size and its initial size together, keeping its tile, id and order (#403)', () => {
+    const { world, tiles } = emptyPileWorld(2);
+    const a = spawnPile(world, 80, tiles[0]!.x, tiles[0]!.y, 90 * P, 0);
+    const b = spawnPile(world, 81, tiles[1]!.x, tiles[1]!.y, 30 * P, 0);
+    expect(resizePile(world, a, 60 * P)).toBe(true);
+    expect(pileAmountFp(world, a)).toBe(60 * P);
+    expect(pileInitialFp(world, a)).toBe(60 * P);
+    expect([pileTileX(world, a), pileTileY(world, a)]).toEqual([tiles[0]!.x, tiles[0]!.y]);
+    expect(pileFoodId(world, a)).toBe(80);
+    expect([pileSlotAt(world, 0), pileSlotAt(world, 1)]).toEqual([a, b]);
+    expect(pileAmountFp(world, b)).toBe(30 * P);
+    assertFoodStoreInvariants(world);
+  });
+
+  it('resizePile floors to whole pickups and clamps to the natural pile range (#403)', () => {
+    const { world, tiles } = emptyPileWorld(1);
+    const a = spawnPile(world, 82, tiles[0]!.x, tiles[0]!.y, 50 * P, 0);
+    const size = (fp: number): number => {
+      expect(resizePile(world, a, fp)).toBe(true);
+      expect(pileInitialFp(world, a)).toBe(pileAmountFp(world, a));
+      assertFoodStoreInvariants(world);
+      return pileAmountFp(world, a);
+    };
+    expect(size(37 * P + P - 1)).toBe(37 * P); // a part pickup is dropped
+    expect(size(FOOD_PILE_INITIAL_PICKUPS_MIN * P)).toBe(FOOD_PILE_INITIAL_PICKUPS_MIN * P);
+    expect(size((FOOD_PILE_INITIAL_PICKUPS_MIN - 1) * P)).toBe(FOOD_PILE_INITIAL_PICKUPS_MIN * P);
+    expect(size(0)).toBe(FOOD_PILE_INITIAL_PICKUPS_MIN * P);
+    expect(size(FOOD_PILE_INITIAL_PICKUPS_MAX * P)).toBe(FOOD_PILE_INITIAL_PICKUPS_MAX * P);
+    expect(size((FOOD_PILE_INITIAL_PICKUPS_MAX + 1) * P)).toBe(FOOD_PILE_INITIAL_PICKUPS_MAX * P);
+  });
+
+  it('resizePile refuses a slot with no pile, or a corpse pile, changing nothing (#403)', () => {
+    const { world, tiles } = emptyPileWorld(2);
+    spawnPile(world, 83, tiles[0]!.x, tiles[0]!.y, 40 * P, 0);
+    const corpse = spawnPile(world, 84, tiles[1]!.x, tiles[1]!.y, 3 * P, FOOD_FLAG_CORPSE);
+    // The snapshot holds each pile's tile, sizes and corpse flag.
+    const before = JSON.stringify(pilesForTest(world));
+    expect(resizePile(world, corpse, 60 * P)).toBe(false); // a corpse pile, under a natural one's least
+    const poolSlot = world.colonies[1]!.poolSlot;
+    const poolBefore = world.food.amountFp[poolSlot];
+    expect(resizePile(world, -1, 60 * P)).toBe(false);
+    expect(resizePile(world, world.food.kind.length, 60 * P)).toBe(false);
+    expect(world.food.kind[world.food.kind.length - 1]).toBe(FoodKind.None);
+    expect(resizePile(world, world.food.kind.length - 1, 60 * P)).toBe(false); // a free slot
+    expect(resizePile(world, poolSlot, 60 * P)).toBe(false); // a colony's pool
+    expect(JSON.stringify(pilesForTest(world))).toBe(before);
+    expect(world.food.amountFp[poolSlot]).toBe(poolBefore);
     assertFoodStoreInvariants(world);
   });
 

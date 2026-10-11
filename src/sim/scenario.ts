@@ -41,7 +41,7 @@ import {
 } from './surface-features.js';
 import { Rng } from './rng.js';
 import { FP_SHIFT } from './fixed.js';
-import { ensureFoodNearEachColony } from './food-fairness.js';
+import { balanceHomeFood, ensureFoodNearEachColony } from './food-fairness.js';
 import { AntTask, PheromoneType } from './enums.js';
 import { ensureSurfaceGoalField, SURFACE_GOAL_UNREACHED } from './surface-routing.js';
 import {
@@ -483,6 +483,10 @@ export function createScenario(
   // Moves at most one pile (or, with none to move, makes at most one) per colony that
   // lacks it, drawing from the same rng.
   ensureFoodNearEachColony(world, rng);
+  // --- Step 7c (#403): the food near every colony's home is the same. ---
+  // Deals the piles within FOOD_BALANCE_RADIUS_TILES out again in matched sets (same
+  // distance from home, same size per colony), drawing once per pile it moves.
+  balanceHomeFood(world, rng);
 
   // PR 4 — assert the connectivity invariant AT WORLD-GEN (not only on save
   // load): every colony entrance (initColony places one at each root start tile,

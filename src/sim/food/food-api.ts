@@ -40,6 +40,7 @@ import {
   FOOD_CHAMBER_DEPOSIT_HYSTERESIS_FP,
   FOOD_PICKUP_AMOUNT,
   FOOD_PILE_HARD_CAP,
+  FOOD_PILE_INITIAL_PICKUPS_MIN,
   FOOD_PILE_INITIAL_PICKUPS_MAX,
   FOOD_PILE_SOFT_CEILING,
   MAX_ENTITIES,
@@ -736,6 +737,28 @@ export function movePile(world: WorldState, slot: number, x: number, y: number):
   store.tileX[slot] = x;
   store.tileY[slot] = y;
   store.surfacePileAt[y * SURFACE_GRID_WIDTH + x] = slot + 1;
+  return true;
+}
+
+/**
+ * #403 — set the pile in `slot` to hold `amountFp` (floored to whole pickups, at
+ * least FOOD_PILE_INITIAL_PICKUPS_MIN, which assertFoodStoreInvariants requires of a
+ * natural pile's initial size, at most a scatter pile's largest), as if it had been
+ * made that size: its initial size is set with it. For world generation only, and
+ * natural piles only (food-fairness.ts `balanceHomeFood`), before any pile has been
+ * drained. Returns false, changing nothing, when `slot` holds no pile or holds a
+ * corpse pile (a corpse pile may hold less than a natural one's least).
+ */
+export function resizePile(world: WorldState, slot: number, amountFp: number): boolean {
+  const store = world.food;
+  if (slot < 0 || slot >= store.kind.length || store.kind[slot] !== FoodKind.Pile) return false;
+  if (pileIsCorpse(world, slot)) return false;
+  let fp = wholePickupsFp(amountFp);
+  const minFp = FOOD_PILE_INITIAL_PICKUPS_MIN * FOOD_PICKUP_AMOUNT;
+  if (fp < minFp) fp = minFp;
+  if (fp > PILE_MAX_FP) fp = PILE_MAX_FP;
+  store.amountFp[slot] = fp;
+  store.initialFp[slot] = fp;
   return true;
 }
 

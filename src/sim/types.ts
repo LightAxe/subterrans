@@ -1822,7 +1822,19 @@ export const SIM_VERSION_V74_NO_ASCENT_ONTO_BLOCKADE = 74 as const;
  * with it.
  */
 export const SIM_VERSION_V75_INVASION_NEED_STANDDOWN = 75 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V75_INVASION_NEED_STANDDOWN;
+
+/**
+ * #403 (V76) — map generation balances the food near home: after #395's guarantee,
+ * every natural pile within FOOD_BALANCE_RADIUS_TILES (surface path) of a colony is
+ * dealt out again in matched sets, one pile per colony at the same path distance from
+ * home and the same size (food-fairness.ts `balanceHomeFood`). Up to V75 a colony
+ * could start with a pile 9 tiles out while the other's nearest was 18-22, which
+ * decided the opening whoever played. World generation only: new world.rngState
+ * draws (one per pile moved) and resized piles; no tick-order change, no new field.
+ * Pre-1.0 policy: no version gate; MIN_ACCEPTED is raised to V76 with it.
+ */
+export const SIM_VERSION_V76_BALANCED_HOME_FOOD = 76 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V76_BALANCED_HOME_FOOD;
 
 /**
  * S2 — AI colony state machine states.

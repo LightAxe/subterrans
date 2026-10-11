@@ -65,7 +65,10 @@ interface TestHook {
   isPaused?: () => boolean;
 }
 
-const SEED = 4242;
+/** A map whose food is far from the strips (#403's matched home piles put one 10
+ *  tiles from them on 4242), with workers up on the surface by the nest when the
+ *  spec pauses, so the ants-above-the-overlay check has one on show. */
+const SEED = 4262;
 /** A full-strength trail (well above PHEROMONE_VISUAL_MAX) and a weak one (just
  *  under the visibility floor, PHEROMONE_VISUAL_MIN 1024; it only decays). */
 const STRONG = 60_000;
