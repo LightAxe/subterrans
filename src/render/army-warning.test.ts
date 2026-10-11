@@ -941,6 +941,21 @@ describe('nextArmyWarning — the invasion fallback (#404 review)', () => {
     expect(invasionRaidType(w, E, player)).toBe(RaidType.Loot);
   });
 
+  it('#366: an owed invasion warning keeps the raid type it was noted with', () => {
+    const { world: w, enemy } = nearDoorWorld();
+    enemy.rallyPoint = { tileX: NEAR.x, tileY: NEAR.y };
+    enemy.raidType = RaidType.Blockade;
+    const s = createArmyWarningState();
+    noteArmyWarningEvent(s, start(w, NEAR), P);
+    // The queue is busy: the warning is owed, not taken.
+    const blockade = `An enemy army is marching to blockade your east entrance. ${BLOCKADE_WARNING_HINT}`;
+    expect(run(s, w, 1, false)).toEqual([blockade]);
+    // The attacker's rally is cleared before the queue drains: still the Blockade text.
+    enemy.rallyPoint = null;
+    enemy.raidType = RaidType.Loot;
+    expect(run(s, w, 1)).toEqual([blockade]);
+  });
+
   it('#366: the raid-type wording keeps the one-door and unnamed forms', () => {
     const r = raidWorld();
     const door = r.player.entrances[0]!;

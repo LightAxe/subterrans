@@ -1446,9 +1446,10 @@ function aiInvasionTick(world: WorldState, aiColonyId: ColonyId, defending = fal
   }
 
   // Re-emit rally only if rally is active in sim-state but colony.rallyPoint is null:
-  // the first post-load tick if world.rallyPoint was somehow cleared, or once a #371
-  // defence rally that took the colony's rally mid-wave is cleared. #366: with the
-  // wave's own raid type, kept by the sim since the commit (lastRaidType).
+  // a defensive / after-load path (a save whose rally was lost mid-invasion). A
+  // committed invasion's rally is never taken by #371: aiNestDefence stands aside while
+  // an invasion runs. #366: with the wave's own raid type, kept by the sim since the
+  // commit (lastRaidType).
   if (aiState.invasionRallyTileX !== -1) {
     const colony = world.colonies[aiColonyId];
     if (colony !== undefined && colony.rallyPoint === null) {

@@ -199,6 +199,11 @@ export interface ArmyWarningState {
   /** That invasion was launched while armed and nothing has warned of its wave
    *  yet: the fallback warning is due. */
   invasionUnwarned: boolean;
+  /** #366 — the raid type the noted invasion carries, read off its attacker's rally the
+   *  first frame after it is noted (null: not read yet) and kept until the invasion is
+   *  forgotten, so a rally cleared before the queue took the warning cannot turn its
+   *  text into the plain Loot one. */
+  invasionRaidTypeSeen: RaidType | null;
 }
 
 export function createArmyWarningState(): ArmyWarningState {
@@ -215,6 +220,7 @@ export function createArmyWarningState(): ArmyWarningState {
     invasionRallyY: 0,
     invasionSinceTick: -Infinity,
     invasionUnwarned: false,
+    invasionRaidTypeSeen: null,
   };
 }
 
@@ -247,6 +253,7 @@ function forgetInvasion(state: ArmyWarningState): void {
   state.invasionAttacker = -1;
   state.invasionSinceTick = -Infinity;
   state.invasionUnwarned = false;
+  state.invasionRaidTypeSeen = null;
 }
 
 /**
@@ -313,6 +320,7 @@ function noteLaunch(
   state.invasionRallyY = y;
   state.invasionSinceTick = tick;
   state.invasionUnwarned = state.armed;
+  state.invasionRaidTypeSeen = null;
 }
 
 /** The viewer's open entrance nearest the noted invasion's rally tile (the one it
@@ -447,6 +455,9 @@ export function nextArmyWarning(
   ) {
     forgetInvasion(state);
   }
+  if (state.invasionAttacker >= 0 && state.invasionRaidTypeSeen === null) {
+    state.invasionRaidTypeSeen = invasionRaidType(world, state.invasionAttacker, viewer);
+  }
   const quiet = !invading && !gatheringRemains(g) && !marchRemains(m) && state.invasionAttacker < 0;
 
   if (state.armed) {
@@ -503,11 +514,7 @@ export function nextArmyWarning(
       state.owedSinceTick = -Infinity;
       return null;
     }
-    return invasionWarningText(
-      viewer,
-      target,
-      invasionRaidType(world, state.invasionAttacker, viewer),
-    );
+    return invasionWarningText(viewer, target, state.invasionRaidTypeSeen ?? RaidType.Loot);
   }
   // Broken up by much the same test that re-arms (at most ARMY_REARM_MAX_FIGHTERS
   // marching — chasing counts for a march warning outside an invasion — and near),

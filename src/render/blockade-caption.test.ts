@@ -151,6 +151,16 @@ describe('blockade caption', () => {
     expect(blockadeCaptionCondition(r.world, PLAYER_COLONY_ID)).toBe(false);
   });
 
+  it('is not shown for a Blockade on another colony’s entrance (a third colony)', () => {
+    const { r } = ringWorld();
+    expect(blockadeCaptionCondition(r.world, PLAYER_COLONY_ID)).toBe(true);
+    // The ring's target is not one of the viewer's entrances: it is a third colony's.
+    const third = { ...r.player, colonyId: 3, entrances: r.player.entrances };
+    (r.world.colonies as Record<number, unknown>)[3] = third;
+    r.player.entrances = [];
+    expect(blockadeCaptionCondition(r.world, PLAYER_COLONY_ID)).toBe(false);
+  });
+
   it('is not shown when the ant is dead or below ground', () => {
     const { r, ids } = ringWorld();
     despawnAnt(r.world, ids[0]!, { cause: 'starvation' });

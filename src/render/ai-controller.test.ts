@@ -3287,8 +3287,8 @@ describe('#366 (V77) — the invasion’s raid type', () => {
     expect(rally).not.toHaveProperty('raidType');
   });
 
-  it('a rally given back mid-wave (after a #371 defence rally) carries the wave’s own type', () => {
-    // A Blockade wave under way whose rally was taken by a defence rally and cleared;
+  it('defensive: a committed invasion whose rally was lost (a hand-edited save) gets its stored type back, not a fresh choice', () => {
+    // A Blockade wave under way whose rally is gone (null);
     // the situation now reads as an Assault (30 v 5), but the wave stays a Blockade.
     const { world, colony, rec } = setup(30, 5);
     rec.operationKind = 'Invasion';

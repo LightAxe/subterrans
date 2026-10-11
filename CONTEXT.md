@@ -605,7 +605,8 @@ the base threshold once patience runs out).
 
 **AI raid choice** (#366, simVersion V77; `aiInvasionRaidType`, `src/render/ai-controller.ts`):
 The raid type an AI invasion carries, chosen as its cohort commits from its **army**
-(its living fighters: every one answers the rally), the opponent's fighters, its
+(its living fighters: every one answers the rally; the whole uncapped fighter count,
+`aiFighterCount`, not the ≤32 cohort, so the siege rule must not be "fixed" to the cohort size), the opponent's fighters, its
 **invasion floor** and its **last wave's type** (`AIStateRecord.lastRaidType`, kept by
 the sim from each cohort commit, whose `StartAIOperation` carries the type; Loot before
 any). The first wave (floor 0) is a Loot
@@ -614,8 +615,9 @@ raid. After that: an **Assault** when the army is at least `AI_RAID_ASSAULT_RATI
 wave was one, a **Blockade** when the opponent has more fighters than the army
 (`AI_RAID_BLOCKADE_RATIO_X100`) or when a full-strength army (`AI_RAID_SIEGE_ARMY`,
 32) follows a repelled Loot raid (a **siege**); otherwise Loot. The type holds for the
-whole wave: a #371 defence rally that takes the colony's rally mid-wave gives it back
-with the same type. The **army warning** names the type at the launch.
+whole wave: on the defensive / after-load path, a committed invasion whose rally is
+gone is given it back with the same type (#371's defence rally never takes a committed
+invasion's rally: `aiNestDefence` stands aside while an invasion runs). The **army warning** names the type at the launch.
 _Avoid_: "AI raid mode", "AI stance".
 
 **Gathering (enemy army)** (#372, render-only):

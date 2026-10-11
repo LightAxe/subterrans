@@ -1962,7 +1962,8 @@ export interface AIStateRecord {
    * #366 (V77) — the raid type of this colony's latest invasion: the one under way, or
    * the last one. Set as the cohort commits (StartAIOperation's raidType, via
    * setAIRallyOperation); Loot until the first. The AI controller re-sends it with the
-   * invasion's rally when a #371 defence rally gave the rally back mid-wave, and its
+   * invasion's rally on the defensive / after-load path (a committed invasion whose
+   * rally is gone; #371 never takes a committed invasion's rally), and its
    * next wave's choice reads it so that it does not lay siege twice running, and lays
    * siege after a Loot raid (ai-controller.ts aiInvasionRaidType). Serialized only when
    * not Loot.
