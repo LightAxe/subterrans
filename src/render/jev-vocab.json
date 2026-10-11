@@ -1,0 +1,103 @@
+{
+  "buckets": {
+    "fraction": [
+      "empty",
+      "low",
+      "half",
+      "high",
+      "full",
+      "very_low",
+      "below_half",
+      "above_half",
+      "nearly_full"
+    ],
+    "ratioVs": [
+      "far_fewer",
+      "fewer",
+      "similar",
+      "more",
+      "far_more",
+      "overwhelmingly_fewer",
+      "much_fewer",
+      "slightly_fewer",
+      "equal",
+      "slightly_more",
+      "much_more",
+      "overwhelmingly_more"
+    ],
+    "count": ["none", "few", "many", "one", "a_couple", "several"],
+    "workers": [
+      "tiny",
+      "small",
+      "medium",
+      "large",
+      "huge",
+      "minuscule",
+      "very_small",
+      "below_medium",
+      "very_large"
+    ],
+    "brood": ["none", "few", "some", "many", "one", "a_couple", "several"],
+    "distance": ["near", "mid", "far", "very_near", "mid_near", "mid_far"],
+    "pileSize": ["small", "medium", "large", "scraps", "modest", "huge"]
+  },
+  "gamePhase": ["opening", "early", "mid", "late"],
+  "trend": ["unknown", "falling", "steady", "rising"],
+  "queenHealth": ["unhurt", "wounded", "badly_wounded"],
+  "wordCount": ["none", "one", "two", "several"],
+  "yesNo": ["yes", "no"],
+  "ratioKeys": ["all_in_economy", "economy", "balanced", "military", "all_in_war"],
+  "postureKeys": [
+    "recall",
+    "guard_home",
+    "hold_midfield",
+    "assault",
+    "contest_pile_a",
+    "contest_pile_b",
+    "contest_pile_c"
+  ],
+  "digKeys": ["deeper", "wider_left", "wider_right", "toward_surface", "hold"],
+  "foodPriorityKeys": ["none", "pile_a", "pile_b", "pile_c"],
+  "pileNames": ["pile_a", "pile_b", "pile_c"],
+  "spiderBehavior": [
+    "patrolling",
+    "hunting",
+    "chasing",
+    "striking",
+    "feeding",
+    "rampaging",
+    "retreating"
+  ],
+  "spiderThreat": [
+    "absent",
+    "rampaging_against_us",
+    "rampaging_against_opponent",
+    "prowling_near_us",
+    "distant"
+  ],
+  "currentFightRatio": [
+    "all_in_economy",
+    "economy",
+    "balanced",
+    "military",
+    "all_in_war",
+    "custom"
+  ],
+  "descriptions": {
+    "fight_ratio": {
+      "all_in_economy": "almost everyone forages; a token guard fights",
+      "economy": "mostly forage, a modest share of fighters",
+      "balanced": "an even split between foraging and fighting",
+      "military": "mostly fighters, a thin foraging crew",
+      "all_in_war": "almost everyone fights; foraging nearly stops"
+    },
+    "dig": {
+      "deeper": "extend our tunnels downward, away from the surface",
+      "wider_left": "extend our tunnels sideways to the left",
+      "wider_right": "extend our tunnels sideways to the right",
+      "toward_surface": "extend our tunnels upward toward the surface",
+      "hold": "stop marking new tiles to dig for now"
+    }
+  },
+  "standingOrdersMaxChars": 300
+}
