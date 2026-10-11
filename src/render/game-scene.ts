@@ -2298,7 +2298,8 @@ export class GameScene extends Phaser.Scene {
     // Economy captions — "Your stores are nearly full — build another Food Storage …":
     // the stores three-quarters full, no Food Storage designated, for the dwell (decided
     // per sim tick: beforeSimTick, and here for the frame's last tick). Advice, not a
-    // threat: a recurring caption offered after every other caption, so it takes only an
+    // threat: a recurring caption offered after every other caption but the #366
+    // Blockade caption and the storage hint, so it takes only an
     // idle queue, and an owed one makes no long caption give way. On the projected
     // world, so a Food Storage the player has ordered, still queued, drops it. It is not
     // owed within its cooldown of the storage hint's last offer (the same advice); the

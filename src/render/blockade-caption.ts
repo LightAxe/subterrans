@@ -7,7 +7,9 @@
 // entrances (blockadedEntrance: its rally sits on that entrance with raid type
 // Blockade), AND at least BLOCKADE_CAPTION_MIN_FIGHTERS of that colony's living
 // Fighting ants are on the surface within BLOCKADE_RADIUS_TILES (Manhattan, as the
-// sim's blockade scan measures it) of that entrance tile: the ring has formed.
+// sim's blockade scan measures it) of that entrance tile: the ring is forming (the
+// fighters pass through that radius a few ticks before they take their posts at
+// BLOCKADE_POST_RADIUS_TILES).
 //
 // SUPPRESSED while the viewer's rally is already on a surface tile within
 // BLOCKADE_RADIUS_TILES of that entrance that is not the entrance tile itself (the
@@ -103,7 +105,7 @@ export function blockadeCaptionCondition(world: WorldState, viewerColonyId: Colo
     if (ent === null || !ent.isOpen || !viewer.entrances.includes(ent)) continue;
     if (ringFighters(world, other.colonyId, ent) < BLOCKADE_CAPTION_MIN_FIGHTERS) continue;
     const sallying =
-      rp != null &&
+      rp !== null &&
       nearEntrance(ent, rp.tileX, rp.tileY) &&
       (rp.tileX !== ent.surfaceTileX || rp.tileY !== ent.surfaceTileY);
     if (!sallying) return true;

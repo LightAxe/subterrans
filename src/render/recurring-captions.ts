@@ -38,9 +38,10 @@
 //
 // GameScene offers the owed rampage warning before raid news each frame, so a
 // rampage outranks raid news when both wait on the same idle queue; the
-// counter-attack caption comes between them. The stores-filling caption is advice:
-// offered after every other caption but the storage hint, and, owed, it makes no long
-// caption give way (it is not part of recurringCaptionStillOwed).
+// counter-attack caption comes between them. The stores-filling caption and, after it,
+// the first-Blockade caption (blockade-caption.ts, #366) are advice: offered after
+// every other caption but the storage hint, and, owed, neither makes a long caption
+// give way (neither is part of recurringCaptionStillOwed).
 //
 // Pure + Phaser-free: GameScene owns the state and passes its UIScene in.
 
