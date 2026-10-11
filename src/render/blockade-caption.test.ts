@@ -161,7 +161,7 @@ describe('blockade caption', () => {
     expect(blockadeCaptionCondition(r.world, PLAYER_COLONY_ID)).toBe(false);
   });
 
-  it('is not shown when the ant is dead or below ground', () => {
+  it('is not shown when a ring fighter is dead', () => {
     const { r, ids } = ringWorld();
     despawnAnt(r.world, ids[0]!, { cause: 'starvation' });
     expect(blockadeCaptionCondition(r.world, PLAYER_COLONY_ID)).toBe(false);
