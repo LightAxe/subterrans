@@ -15,7 +15,7 @@ import type { ClearRallyPointCommand } from './commands.js';
 import { pushCommand } from './commands.js';
 import { colonyFoodCapacity, colonyFoodTotal } from './food/food-api.js';
 import { emitEvent } from './telemetry.js';
-import { AntTask } from './enums.js';
+import { AntTask, RaidType } from './enums.js';
 import { Zone } from './terrain.js';
 import {
   PLAYER_COLONY_ID,
@@ -80,6 +80,7 @@ export function createDefaultAIStateRecord(colonyId: ColonyId): AIStateRecord {
     operationDefenderDeaths: 0,
     raidSinceTick: -1,
     invasionFloor: 0,
+    lastRaidType: RaidType.Loot,
   };
 }
 
@@ -562,7 +563,8 @@ function _clearOperationFields(aiState: AIStateRecord): void {
  * Atomically writes rally/operation state and transitions to Probing or Invading.
  * Emits invasion_start for Invasion operations.
  * Applied by tick.ts's StartAIOperation command handler; render-side ai-controller.ts
- * selects the target and pushes the command (ADR-0007).
+ * selects the target and pushes the command (ADR-0007). #366 (V77): an Invasion keeps
+ * its `raidType` as lastRaidType (a Probe ignores it).
  */
 export function setAIRallyOperation(
   world: WorldState,
@@ -571,6 +573,7 @@ export function setAIRallyOperation(
   rallyTileY: number,
   committedFighterIds: readonly number[],
   operationKind: 'Probe' | 'Invasion',
+  raidType: RaidType = RaidType.Loot,
 ): void {
   let aiState = getAIStateForColony(world, aiColonyId);
   if (aiState === null) return;
@@ -624,6 +627,9 @@ export function setAIRallyOperation(
     // Invasion
     aiState.invasionRallyTileX = rallyTileX;
     aiState.invasionRallyTileY = rallyTileY;
+    // #366 (V77) — the wave's raid type, kept for the wave (a defence rally may take
+    // over the colony's rally meanwhile, #371) and after it (the next wave's choice).
+    aiState.lastRaidType = raidType;
     aiState.state = 'Invading';
     aiState.enteredTick = world.tick;
     // Preserve invasionStartTick set by _checkWarFootingToInvading (tick T) so that both

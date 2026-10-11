@@ -12,7 +12,7 @@
 //   6. Version-gated: bumping SAVE_FORMAT_VERSION invalidates old saves (intentional for beta)
 
 import type { WorldState, EntityId, AIStateRecord, SpiderState } from '../sim/types.js';
-import { LATEST_SIM_VERSION, SIM_VERSION_V76_BALANCED_HOME_FOOD } from '../sim/types.js';
+import { LATEST_SIM_VERSION, SIM_VERSION_V77_AI_RAID_TYPES } from '../sim/types.js';
 import {
   AI_INVASION_FLOOR_MAX,
   AI_MAX_OPERATION_FIGHTERS,
@@ -187,9 +187,11 @@ export class FutureSimVersionError extends Error {
  * `gameVersion` carries that build's git SHA, and scripts/analyze-snapshot.ts says
  * so instead of replaying.
  *
- * Why it is V76 today:
+ * Why it is V77 today:
+ *   - V77: #366, the rule-based AI chooses each invasion's raid type by the
+ *     situation (it always raided with Loot). Every pre-V77 save is rejected.
  *   - V76: #403, map generation balances the food near every colony's home (matched
- *     piles: same distance, same size). Every pre-V76 save is rejected.
+ *     piles: same distance, same size). Every pre-V76 save was rejected.
  *   - V75: #426, an AI invasion stands down to WarFooting if a raid thins its army
  *     below the launch need before the cohort commits. Every pre-V75 save was rejected.
  *   - V74: #392, no civilian climbs out of its shaft onto the spider's blockade, and
@@ -210,7 +212,7 @@ export class FutureSimVersionError extends Error {
  *     on #290, 2026-09-25).
  *   - Before that: V30 (PR 6-sim's underground-embedding guards).
  */
-export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V76_BALANCED_HOME_FOOD;
+export const MIN_ACCEPTED_SIM_VERSION = SIM_VERSION_V77_AI_RAID_TYPES;
 
 export class OldSimVersionError extends Error {
   // #229 — explicit field (see SaveVersionMismatchError): strip-only Node compat.
@@ -810,6 +812,9 @@ interface SerializedAIStateRecord {
   // #398 (V72) — the invasion floor, written only when non-zero (a colony whose
   // invasions were never repelled serializes as before); absent → 0 (none).
   invasionFloor?: number;
+  // #366 (V77) — the latest ended invasion's raid type, written only when not Loot;
+  // absent (or not a RaidType) → Loot.
+  lastRaidType?: number;
 }
 
 /**
@@ -1308,6 +1313,7 @@ export function serializeWorldState(world: WorldState): SerializedWorldState {
       operationDefenderDeaths: rec.operationDefenderDeaths,
       ...(rec.raidSinceTick !== -1 ? { raidSinceTick: rec.raidSinceTick } : {}),
       ...(rec.invasionFloor !== 0 ? { invasionFloor: rec.invasionFloor } : {}),
+      ...(rec.lastRaidType !== RaidType.Loot ? { lastRaidType: rec.lastRaidType } : {}),
     })),
   };
 }
@@ -1707,6 +1713,7 @@ function deserializeAIStateArray(
         r.invasionFloor >= 0
           ? Math.min(r.invasionFloor, invasionFloorCap)
           : 0,
+      lastRaidType: isRaidType(r.lastRaidType) ? r.lastRaidType : RaidType.Loot,
     });
   }
   return result;

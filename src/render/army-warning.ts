@@ -17,6 +17,8 @@ import type { ColonyId, ColonyRecord } from '../sim/colony/colony-store.js';
 import type { NestEntrance } from '../sim/colony/entrance.js';
 import { AI_INVADING_TIMEOUT_TICKS } from '../sim/constants.js';
 import { opponentColonyId } from '../sim/ai-state.js';
+import { RaidType } from '../sim/enums.js';
+import { rallyEnemyEntrance } from '../sim/raid-order.js';
 import {
   GATHER_DWELL_TICKS,
   enemyFightersInNest,
@@ -67,22 +69,24 @@ export const ARMY_WARNING_HINT = 'Train fighters and rally there.';
  * The army warning caption: an enemy army `doing` ("is gathering near", "is
  * marching on") `entrance` of `colony`, named by its compass direction — no name
  * with one open entrance, nor when the direction would not single it out. Then,
- * if `ringed`, it points to the minimap ring around the army instead.
+ * if `ringed`, it points to the minimap ring around the army instead. `aim` (#366)
+ * follows the entrance (" to kill your queen"), and `hint` ends the caption.
  */
 function armyWarningText(
   doing: string,
   colony: ColonyRecord,
   entrance: NestEntrance,
   ringed: boolean,
+  aim = '',
+  hint: string = ARMY_WARNING_HINT,
 ): string {
-  const hint = ARMY_WARNING_HINT;
   if (colony.entrances.filter((e) => e.isOpen).length < 2) {
-    return `An enemy army ${doing} your entrance. ${hint}`;
+    return `An enemy army ${doing} your entrance${aim}. ${hint}`;
   }
   const name = entranceDirectionName(colony, entrance);
-  if (name !== null) return `An enemy army ${doing} your ${name} entrance. ${hint}`;
+  if (name !== null) return `An enemy army ${doing} your ${name} entrance${aim}. ${hint}`;
   const ring = ringed ? ', ringed on the minimap' : '';
-  return `An enemy army ${doing} one of your entrances${ring}. ${hint}`;
+  return `An enemy army ${doing} one of your entrances${ring}${aim}. ${hint}`;
 }
 
 /** The warning caption naming `entrance` of `colony`, an army gathering near it. */
@@ -96,12 +100,59 @@ export function marchWarningText(colony: ColonyRecord, entrance: NestEntrance): 
 }
 
 /**
+ * #366 — the launch warning's hint for a Blockade. Its army never goes in, so a rally
+ * ON the entrance (tunnel defenders, who wait below) never meets it: the player's
+ * fighters have to come out to the ring.
+ */
+export const BLOCKADE_WARNING_HINT = 'Rally fighters just outside it to break the ring.';
+
+/**
  * #404 review — the fallback's caption, naming `entrance` of `colony`, which an
  * invasion has just set out for. As marchWarningText, but it never points to a
  * minimap ring: as the army sets out it may still read as at home (no ring).
+ * #366: it also says what the army means to do, by the raid type its rally carries
+ * (`raidType`): a Loot or Deny raid is the plain warning; a Spoil, an Assault and a
+ * Blockade each say so.
  */
-export function invasionWarningText(colony: ColonyRecord, entrance: NestEntrance): string {
-  return armyWarningText('is marching on', colony, entrance, false);
+export function invasionWarningText(
+  colony: ColonyRecord,
+  entrance: NestEntrance,
+  raidType: RaidType = RaidType.Loot,
+): string {
+  switch (raidType) {
+    case RaidType.Assault:
+      return armyWarningText('is marching on', colony, entrance, false, ' to kill your queen');
+    case RaidType.Spoil:
+      return armyWarningText('is marching on', colony, entrance, false, ' to spoil your stores');
+    case RaidType.Blockade:
+      return armyWarningText(
+        'is marching to blockade',
+        colony,
+        entrance,
+        false,
+        '',
+        BLOCKADE_WARNING_HINT,
+      );
+    default:
+      return armyWarningText('is marching on', colony, entrance, false);
+  }
+}
+
+/**
+ * #366 — the raid type of `attacker`'s rally when it is on an entrance (open or not)
+ * of `viewer`: what its invasion of the viewer means to do. Loot otherwise (no
+ * attacker, no rally, or a rally elsewhere).
+ */
+export function invasionRaidType(
+  world: WorldState,
+  attacker: number,
+  viewer: ColonyRecord,
+): RaidType {
+  const a = world.colonies[attacker];
+  if (a === undefined) return RaidType.Loot;
+  const ent = rallyEnemyEntrance(world, a);
+  if (ent === null || !viewer.entrances.includes(ent)) return RaidType.Loot;
+  return a.raidType;
 }
 
 // ---------------------------------------------------------------------------
@@ -452,7 +503,11 @@ export function nextArmyWarning(
       state.owedSinceTick = -Infinity;
       return null;
     }
-    return invasionWarningText(viewer, target);
+    return invasionWarningText(
+      viewer,
+      target,
+      invasionRaidType(world, state.invasionAttacker, viewer),
+    );
   }
   // Broken up by much the same test that re-arms (at most ARMY_REARM_MAX_FIGHTERS
   // marching — chasing counts for a march warning outside an invasion — and near),

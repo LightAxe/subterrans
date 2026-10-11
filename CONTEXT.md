@@ -404,7 +404,8 @@ take (Loot with full stores keeps hunting while the enemy still has food). On th
 way to her they fight only what they meet on their tile or what attacks them. While a
 friend already holds the queen's tile, a raider going for her takes on a free enemy
 worker in sight, if there is one, else it queues for the queen.
-The AI always raids with Loot.
+The AI raided only with Loot up to V76; since **#366 (simVersion V77)** it picks each
+invasion's type by the situation (**AI raid choice**, below).
 _Avoid_: **raid mode**, **stance** (stance = the colony alarm), **attack type**.
 
 **Blockade** (raid type, simVersion V60, #352):
@@ -602,6 +603,21 @@ both.
 _Avoid_: "wave size" for the floor (a wave can launch bigger than its floor, or at
 the base threshold once patience runs out).
 
+**AI raid choice** (#366, simVersion V77; `aiInvasionRaidType`, `src/render/ai-controller.ts`):
+The raid type an AI invasion carries, chosen as its cohort commits from its **army**
+(its living fighters: every one answers the rally), the opponent's fighters, its
+**invasion floor** and its **last wave's type** (`AIStateRecord.lastRaidType`, kept by
+the sim from each cohort commit, whose `StartAIOperation` carries the type; Loot before
+any). The first wave (floor 0) is a Loot
+raid. After that: an **Assault** when the army is at least `AI_RAID_ASSAULT_RATIO_X100`
+(4× Easy, 3× Normal, 2.5× Hard) the opponent's fighters; otherwise, unless the last
+wave was one, a **Blockade** when the opponent has more fighters than the army
+(`AI_RAID_BLOCKADE_RATIO_X100`) or when a full-strength army (`AI_RAID_SIEGE_ARMY`,
+32) follows a repelled Loot raid (a **siege**); otherwise Loot. The type holds for the
+whole wave: a #371 defence rally that takes the colony's rally mid-wave gives it back
+with the same type. The **army warning** names the type at the launch.
+_Avoid_: "AI raid mode", "AI stance".
+
 **Gathering (enemy army)** (#372, render-only):
 At least `GATHER_MIN_FIGHTERS` fighters of other colonies on the surface (moving
 or not) within `GATHER_RADIUS_TILES` of one of the viewing colony's open entrances,
@@ -671,6 +687,11 @@ warning stays owed until it is shown or its invasion ends. With three or more do
 where the direction would not single the target out, it names none and points to no
 ring (the army may still read as at home). While a launched invasion is under way
 (until its `invasion_end`) the wave does not end.
+Since #366 the launch warning also says what the invasion means to do, by the raid
+type its rally carries: "…marching on your east entrance to kill your queen." (an
+Assault), "…marching to blockade your east entrance. Rally fighters just outside it to
+break the ring." (a Blockade: a rally on the door makes tunnel defenders, who never meet
+it), "…to spoil your stores." (a Spoil); a Loot or Deny raid keeps the plain wording.
 It replaced the one-time "The enemy is attacking your hive." invasion caption.
 _Avoid_: "gathering warning" for a warning that may be about a march; "invasion
 caption".

@@ -167,6 +167,10 @@ export interface StartAIOperationCommand extends SimCommandBase {
   readonly rallyTileX: number;
   readonly rallyTileY: number;
   readonly fighterIds: readonly number[];
+  /** #366 (V77) — an Invasion's raid type (absent = Loot), kept as
+   *  AIStateRecord.lastRaidType; a Probe ignores it. A present value that is not a
+   *  RaidType drops the command. */
+  readonly raidType?: RaidType;
 }
 
 /**
