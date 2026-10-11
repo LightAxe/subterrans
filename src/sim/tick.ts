@@ -857,6 +857,8 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
         if (!Array.isArray(cmd.fighterIds) || cmd.fighterIds.length === 0) break;
         // Invasion cohorts < 3 fighters trigger immediate rout on first tick; reject them.
         if (cmd.kind === 'Invasion' && cmd.fighterIds.length < 3) break;
+        // #366 (V77): a present raid type that is not a RaidType is malformed.
+        if (cmd.raidType !== undefined && !isRaidType(cmd.raidType)) break;
         // V32 (#226): validate against the colony's current AI state. Reject a
         // malformed kind before the state ternary can mis-route it, then require the
         // legal source state — Probe launches only from WarFooting, Invasion
@@ -878,6 +880,7 @@ export function applyCommands(world: WorldState, commands: readonly SimCommand[]
           cmd.rallyTileY,
           cmd.fighterIds,
           cmd.kind,
+          cmd.raidType ?? RaidType.Loot,
         );
         break;
       }

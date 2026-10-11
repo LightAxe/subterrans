@@ -27,7 +27,7 @@ import { setPoolFoodForTest } from './food/food-test-utils.js';
 import { initAnt } from './ant/ant-store.js';
 import { createColonyRecord } from './colony/colony-store.js';
 import type { ColonyId } from './colony/colony-store.js';
-import { AntTask } from './enums.js';
+import { AntTask, RaidType } from './enums.js';
 import { FP_SHIFT } from './fixed.js';
 import {
   PLAYER_COLONY_ID,
@@ -700,6 +700,111 @@ describe('#371 — SetAIRaidClock (V62)', () => {
     expect(rec.raidSinceTick).toBe(-1);
     applyCommands(world, [{ ...clock(true), colonyId: 99 } as SimCommand]);
     expect(rec.raidSinceTick).toBe(-1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #366 (V77) — the wave's raid type: kept by the sim from the cohort commit
+// (StartAIOperation.raidType → AIStateRecord.lastRaidType).
+// ---------------------------------------------------------------------------
+
+describe('#366 — the wave’s raid type, kept from the commit (V77)', () => {
+  const E = ENEMY_COLONY_ID as ColonyId;
+
+  /** An Invading record with no cohort yet, and `n` living fighters to commit. */
+  function preCohort(n: number): { world: WorldState; rec: AIStateRecord; ids: number[] } {
+    const world = makeMinimalWorld();
+    world.tick = 9000;
+    const rec = getAIStateForColony(world, E)!;
+    rec.state = 'Invading';
+    rec.enteredTick = world.tick;
+    rec.invasionStartTick = world.tick;
+    return { world, rec, ids: spawnFighters(world, ENEMY_COLONY_ID, n, 100) };
+  }
+
+  function commit(ids: number[], extra: Record<string, unknown> = {}): SimCommand {
+    return {
+      type: 'StartAIOperation',
+      colonyId: E,
+      kind: 'Invasion',
+      rallyTileX: 30,
+      rallyTileY: 5,
+      fighterIds: ids,
+      issuedAtTick: 9000,
+      ...extra,
+    } as SimCommand;
+  }
+
+  it('starts as Loot', () => {
+    expect(createDefaultAIStateRecord(E).lastRaidType).toBe(RaidType.Loot);
+  });
+
+  it('the cohort commit keeps its raid type (absent = Loot)', () => {
+    const typed = preCohort(18);
+    typed.rec.lastRaidType = RaidType.Assault; // the last wave's
+    applyCommands(typed.world, [commit(typed.ids, { raidType: RaidType.Blockade })]);
+    expect(typed.rec.operationKind).toBe('Invasion');
+    expect(typed.rec.lastRaidType).toBe(RaidType.Blockade);
+
+    const plain = preCohort(18);
+    plain.rec.lastRaidType = RaidType.Blockade;
+    applyCommands(plain.world, [commit(plain.ids)]);
+    expect(plain.rec.operationKind).toBe('Invasion');
+    expect(plain.rec.lastRaidType).toBe(RaidType.Loot);
+  });
+
+  it('a raid type that is not a RaidType drops the commit whole', () => {
+    for (const junk of [9, -1, Number.NaN, 'Blockade', null]) {
+      const { world, rec, ids } = preCohort(18);
+      rec.lastRaidType = RaidType.Assault;
+      applyCommands(world, [commit(ids, { raidType: junk })]);
+      expect(rec.operationKind, String(junk)).toBe('None');
+      expect(rec.lastRaidType, String(junk)).toBe(RaidType.Assault);
+    }
+  });
+
+  it('a Probe ignores it', () => {
+    const world = makeMinimalWorld();
+    const rec = getAIStateForColony(world, E)!;
+    rec.state = 'WarFooting';
+    rec.lastRaidType = RaidType.Blockade;
+    const ids = spawnFighters(world, ENEMY_COLONY_ID, 6, 100);
+    applyCommands(world, [commit(ids, { kind: 'Probe', raidType: RaidType.Assault })]);
+    expect(rec.operationKind).toBe('Probe');
+    expect(rec.lastRaidType).toBe(RaidType.Blockade);
+  });
+
+  it('it holds to the wave’s end and after, whatever the rally carries then', () => {
+    // Routed while a #371 defence rally (Loot) holds the colony's rally.
+    const routed = preCohort(0);
+    const dead: number[] = [];
+    for (let i = 0; i < 18; i++) dead.push(100 + i); // never initialised: dead
+    setAIRallyOperation(routed.world, E, 30, 5, dead, 'Invasion', RaidType.Blockade);
+    routed.world.colonies[E]!.raidType = RaidType.Loot;
+    advanceAIState(routed.world, E);
+    expect(routed.rec.state).toBe('Recovery');
+    expect(routed.rec.lastRaidType).toBe(RaidType.Blockade);
+
+    const timedOut = preCohort(16);
+    setAIRallyOperation(timedOut.world, E, 30, 5, timedOut.ids, 'Invasion', RaidType.Assault);
+    timedOut.world.tick = timedOut.rec.invasionStartTick + AI_INVADING_TIMEOUT_TICKS;
+    advanceAIState(timedOut.world, E);
+    expect(timedOut.rec.state).toBe('Recovery');
+    expect(timedOut.rec.lastRaidType).toBe(RaidType.Assault);
+  });
+
+  it('an invasion that never launched (pre-cohort timeout) leaves it alone', () => {
+    const world = makeMinimalWorld();
+    const rec = getAIStateForColony(world, E)!;
+    rec.lastRaidType = RaidType.Blockade;
+    rec.state = 'Invading';
+    rec.invasionStartTick = 9000;
+    world.colonies[E]!.raidType = RaidType.Assault; // no wave carried it
+    world.tick = 9000 + AI_INVADING_TIMEOUT_TICKS;
+    spawnFighters(world, ENEMY_COLONY_ID, 20, 100);
+    advanceAIState(world, E);
+    expect(rec.state).toBe('Recovery');
+    expect(rec.lastRaidType).toBe(RaidType.Blockade);
   });
 });
 

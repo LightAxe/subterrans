@@ -13,9 +13,10 @@ import type {
   PlaceChamberCommand,
   DesignateEntranceCommand,
   SetBehaviorRatioCommand,
+  SetRallyPointCommand,
 } from '../sim/commands.js';
 import { pushCommand } from '../sim/commands.js';
-import { ChamberType } from '../sim/enums.js';
+import { ChamberType, RaidType } from '../sim/enums.js';
 import { UndergroundTileState, ugGet } from '../sim/terrain.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
@@ -40,7 +41,12 @@ import {
   colonyPoolTileX,
 } from '../sim/food/food-api.js';
 import { eggReserveFp } from '../sim/colony/lifecycle-system.js';
-import { aiFighterCount, invasionFighterNeed, opponentColonyId } from '../sim/ai-state.js';
+import {
+  aiFighterCount,
+  invasionFighterNeed,
+  opponentColonyId,
+  tierIndex,
+} from '../sim/ai-state.js';
 import { isEntranceTileOfAnyColony } from '../sim/raid-order.js';
 
 import { AntTask } from '../sim/enums.js';
@@ -1411,6 +1417,9 @@ function aiInvasionTick(world: WorldState, aiColonyId: ColonyId, defending = fal
     // down to WarFooting instead (_checkInvadingToRecovery, sim/ai-state.ts).
     if (fighters.length < invasionFighterNeed(world, aiState)) return;
 
+    // #366 (V77): the wave's raid type, chosen once, as the cohort commits. The sim
+    // keeps it (AIStateRecord.lastRaidType) and the rally carries it.
+    const raidType = aiInvasionRaidType(world, aiState);
     // Push StartAIOperation so tick.ts applies setAIRallyOperation sim-side (ADR-0007).
     pushCommand(
       world,
@@ -1422,19 +1431,35 @@ function aiInvasionTick(world: WorldState, aiColonyId: ColonyId, defending = fal
         rallyTileY: targetEntrance.surfaceTileY,
         fighterIds: fighters,
         issuedAtTick: world.tick,
+        ...(raidType === RaidType.Loot ? {} : { raidType }),
       },
       'ai',
     );
-    _emitSetRallyPoint(world, aiColonyId, targetEntrance.surfaceTileX, targetEntrance.surfaceTileY);
+    _emitSetRallyPoint(
+      world,
+      aiColonyId,
+      targetEntrance.surfaceTileX,
+      targetEntrance.surfaceTileY,
+      raidType,
+    );
     return;
   }
 
-  // Re-emit rally only if rally is active in sim-state but colony.rallyPoint is null
-  // (handles first post-load tick when world.rallyPoint was somehow cleared).
+  // Re-emit rally only if rally is active in sim-state but colony.rallyPoint is null:
+  // a defensive / after-load path (a save whose rally was lost mid-invasion). A
+  // committed invasion's rally is never taken by #371: aiNestDefence stands aside while
+  // an invasion runs. #366: with the wave's own raid type, kept by the sim since the
+  // commit (lastRaidType).
   if (aiState.invasionRallyTileX !== -1) {
     const colony = world.colonies[aiColonyId];
     if (colony !== undefined && colony.rallyPoint === null) {
-      _emitSetRallyPoint(world, aiColonyId, aiState.invasionRallyTileX, aiState.invasionRallyTileY);
+      _emitSetRallyPoint(
+        world,
+        aiColonyId,
+        aiState.invasionRallyTileX,
+        aiState.invasionRallyTileY,
+        aiState.lastRaidType,
+      );
     }
   }
 
@@ -1590,21 +1615,90 @@ function _selectInvasionEntrance(
   return best;
 }
 
-/** Emit SetRallyPoint command for the AI colony. */
+/**
+ * Emit SetRallyPoint command for the AI colony. `raidType` (#366) is given only for an
+ * invasion's rally, and sent only when it is not Loot: every other AI rally (probe,
+ * defence) and a Loot invasion omit it, which the sim reads as Loot, as before.
+ */
 function _emitSetRallyPoint(
   world: WorldState,
   aiColonyId: ColonyId,
   tileX: number,
   tileY: number,
+  raidType: RaidType = RaidType.Loot,
 ): void {
-  const cmd = {
-    type: 'SetRallyPoint' as const,
+  const cmd: SetRallyPointCommand = {
+    type: 'SetRallyPoint',
     colonyId: aiColonyId,
     tileX,
     tileY,
     issuedAtTick: world.tick,
+    ...(raidType === RaidType.Loot ? {} : { raidType }),
   };
   pushCommand(world, cmd, 'ai');
+}
+
+// ---------------------------------------------------------------------------
+// #366 — the invasion's raid type, chosen as its cohort commits
+// ---------------------------------------------------------------------------
+//
+// Up to V76 every AI invasion was a Loot raid. From V77 the wave's type is read off
+// the situation as its cohort commits, so a wave says what it is for and a long match
+// does not repeat one wave for ever:
+//   1. The first wave (no wave repelled yet: invasionFloor 0) is a Loot raid.
+//   2. An Assault when the AI's army outnumbers the opponent's fighters heavily
+//      (AI_RAID_ASSAULT_RATIO_X100): it goes straight for the queen.
+//   3. A Blockade — never two running — when the opponent has more fighters than its
+//      army (AI_RAID_BLOCKADE_RATIO_X100), or when it brings a full-strength army
+//      (AI_RAID_SIEGE_ARMY) after a Loot raid was repelled: it holds their door
+//      instead of storming it.
+//   4. Otherwise a Loot raid.
+// The launch warning names the type (army-warning.ts). Measured in #366: Easy and the
+// scripted players' Normal wins unchanged; long stalemates vary (raid, siege, raid) and
+// more of them end.
+
+/**
+ * #366 — an invasion is an Assault when the AI's army is at least this many times
+ * (×100) the opponent's fighters, by tier [Easy, Normal, Hard]. Bare balance value.
+ */
+export const AI_RAID_ASSAULT_RATIO_X100 = [400, 300, 250] as const;
+
+/**
+ * #366 — an invasion is a Blockade (unless the last one was) when the AI's army is
+ * less than this many times (×100) the opponent's fighters: at 100, when they have
+ * more fighters than it has. Bare balance value.
+ */
+export const AI_RAID_BLOCKADE_RATIO_X100 = 100 as const;
+
+/**
+ * #366 — an army of at least this many fighters at the commit, whose last wave was a
+ * Loot raid (repelled: the match goes on), lays siege (a Blockade) instead of raiding
+ * again. The cohort cap (AI_MAX_OPERATION_FIGHTERS): a full-strength wave.
+ */
+export const AI_RAID_SIEGE_ARMY = AI_MAX_OPERATION_FIGHTERS;
+
+/**
+ * #366 (V77) — the raid type an AI colony's invasion carries, chosen as its cohort
+ * commits (see the section comment). Reads, as its probes would have seen: its own
+ * army (every fighter answers an invasion rally), the opponent's fighters, its
+ * invasion floor and the type of its last wave (AIStateRecord.lastRaidType: called
+ * before this wave's commit is applied). A pure function of WorldState: a loaded save
+ * chooses the same. Read-only.
+ */
+export function aiInvasionRaidType(world: WorldState, aiState: AIStateRecord): RaidType {
+  if (aiState.invasionFloor === 0) return RaidType.Loot;
+  const oppId = opponentColonyId(world, aiState.colonyId);
+  if (oppId === null || world.colonies[oppId] === undefined) return RaidType.Loot;
+  const army = aiFighterCount(world, aiState.colonyId);
+  const defenders = aiFighterCount(world, oppId);
+  if (army * 100 >= defenders * AI_RAID_ASSAULT_RATIO_X100[tierIndex(world.difficulty)]) {
+    return RaidType.Assault;
+  }
+  const last = aiState.lastRaidType;
+  if (last === RaidType.Blockade) return RaidType.Loot;
+  if (army * 100 < defenders * AI_RAID_BLOCKADE_RATIO_X100) return RaidType.Blockade;
+  if (army >= AI_RAID_SIEGE_ARMY && last === RaidType.Loot) return RaidType.Blockade;
+  return RaidType.Loot;
 }
 
 // --- Helpers ---

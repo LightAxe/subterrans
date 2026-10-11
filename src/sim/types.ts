@@ -1834,7 +1834,22 @@ export const SIM_VERSION_V75_INVASION_NEED_STANDDOWN = 75 as const;
  * Pre-1.0 policy: no version gate; MIN_ACCEPTED is raised to V76 with it.
  */
 export const SIM_VERSION_V76_BALANCED_HOME_FOOD = 76 as const;
-export const LATEST_SIM_VERSION = SIM_VERSION_V76_BALANCED_HOME_FOOD;
+
+/**
+ * #366 (V77) — the rule-based AI chooses its invasion's raid type by the situation
+ * (src/render/ai-controller.ts `aiInvasionRaidType`), sent with the invasion's rally
+ * as its cohort commits: up to V76 every AI invasion was a Loot raid. The first wave
+ * is still Loot; after that it is an Assault when its army outnumbers the opponent's
+ * fighters heavily, a Blockade (never two running) when they have more fighters than
+ * it has or when a full-strength army follows a repelled Loot raid, and Loot
+ * otherwise. New AIStateRecord.lastRaidType (the raid type of the colony's latest
+ * invasion, set by its cohort commit: StartAIOperation gains an optional raidType;
+ * serialized only when not Loot). The raid orders themselves are #352's, unchanged.
+ * No new command, no world.rngState draw, no tick-order change. Pre-1.0 policy: no
+ * version gate; MIN_ACCEPTED is raised to V77 with it.
+ */
+export const SIM_VERSION_V77_AI_RAID_TYPES = 77 as const;
+export const LATEST_SIM_VERSION = SIM_VERSION_V77_AI_RAID_TYPES;
 
 /**
  * S2 — AI colony state machine states.
@@ -1943,6 +1958,17 @@ export interface AIStateRecord {
    * recoveryEndTick (invasionFighterNeed, ai-state.ts). Serialized only when non-zero.
    */
   invasionFloor: number;
+  /**
+   * #366 (V77) — the raid type of this colony's latest invasion: the one under way, or
+   * the last one. Set as the cohort commits (StartAIOperation's raidType, via
+   * setAIRallyOperation); Loot until the first. The AI controller re-sends it with the
+   * invasion's rally on the defensive / after-load path (a committed invasion whose
+   * rally is gone; #371 never takes a committed invasion's rally), and its
+   * next wave's choice reads it so that it does not lay siege twice running, and lays
+   * siege after a Loot raid (ai-controller.ts aiInvasionRaidType). Serialized only when
+   * not Loot.
+   */
+  lastRaidType: RaidType;
 }
 
 export interface WorldState {
@@ -2318,6 +2344,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
       d.operationDefenderDeaths = s.operationDefenderDeaths;
       d.raidSinceTick = s.raidSinceTick;
       d.invasionFloor = s.invasionFloor;
+      d.lastRaidType = s.lastRaidType;
     } else {
       // Grow: push a new deep copy.
       dst.aiState.push({
@@ -2341,6 +2368,7 @@ export function copyWorldState(src: WorldState, dst: WorldState): void {
         operationDefenderDeaths: s.operationDefenderDeaths,
         raidSinceTick: s.raidSinceTick,
         invasionFloor: s.invasionFloor,
+        lastRaidType: s.lastRaidType,
       });
     }
   }

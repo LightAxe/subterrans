@@ -43,6 +43,10 @@ import {
   raidScanWeightBufferForTests,
   AI_DEFENCE_HOME_RADIUS_TILES,
   AI_DEFENCE_SALLY_KEEP_TILES,
+  AI_RAID_ASSAULT_RATIO_X100,
+  AI_RAID_BLOCKADE_RATIO_X100,
+  AI_RAID_SIEGE_ARMY,
+  aiInvasionRaidType,
 } from './ai-controller.js';
 
 import { createWorldState, allocateEntityId } from '../sim/types.js';
@@ -52,7 +56,7 @@ import type { ColonyRecord } from '../sim/colony/colony-store.js';
 import { createUndergroundGrid, ugSet, UndergroundTileState, Zone } from '../sim/terrain.js';
 import { FP_SHIFT } from '../sim/fixed.js';
 import { CHAMBER_DIMENSIONS } from '../sim/colony/chamber.js';
-import { AntTask, ChamberType } from '../sim/enums.js';
+import { AntTask, ChamberType, RaidType } from '../sim/enums.js';
 import type { AIStateRecord, WorldState } from '../sim/types.js';
 import type { ColonyId } from '../sim/colony/colony-store.js';
 import { createScenario } from '../sim/scenario.js';
@@ -3097,6 +3101,228 @@ describe('#371 (V62) — the AI defends its own nest', () => {
       runAIController(world, AI);
       expect(world.commandQueue.some((c) => c.type === 'StartAIOperation')).toBe(false);
       expect(world.commandQueue).toContainEqual(setAt(DOOR_X, 0));
+    }
+  });
+});
+
+describe('#366 (V77) — the invasion’s raid type', () => {
+  const AI = 2 as ColonyId;
+  const FOE = 1 as ColonyId;
+  const AI_DOOR_X = 40;
+  const FOE_DOOR = { x: 5, y: 0 };
+
+  /** Two colonies with a door each; `army` AI fighters at home, `foes` FOE fighters. */
+  function setup(
+    army: number,
+    foes: number,
+    difficulty: WorldState['difficulty'] = 'Normal',
+  ): { world: WorldState; colony: ColonyRecord; rec: AIStateRecord } {
+    const base = createWorldState(42, 128);
+    const world = {
+      ...base,
+      tick: AI_INVADING_MIN_TICK + 100,
+      difficulty,
+    } as unknown as WorldState;
+    const foe = addColony(world, FOE, allocateEntityId(world));
+    const colony = addColony(world, AI, allocateEntityId(world));
+    addUndergroundGrid(world, AI);
+    addUndergroundGrid(world, FOE);
+    colony.entrances = [{ entranceId: 7, surfaceTileX: AI_DOOR_X, surfaceTileY: 0, isOpen: true }];
+    foe.entrances = [{ entranceId: 3, surfaceTileX: FOE_DOOR.x, surfaceTileY: 0, isOpen: true }];
+    const fighter = (colonyId: ColonyId, x: number, grid: ColonyId): void => {
+      const id = allocateEntityId(world);
+      initAnt(world.ants, id, {
+        colonyId,
+        posX: x << FP_SHIFT,
+        posY: 5 << FP_SHIFT,
+        task: AntTask.Fighting,
+        subTask: 0,
+      });
+      world.ants.zone[id] = Zone.Underground;
+      world.ants.currentGridColonyId[id] = grid;
+      world.colonies[colonyId]!.workers.push(id);
+    };
+    for (let i = 0; i < army; i++) fighter(AI, AI_DOOR_X, AI);
+    for (let i = 0; i < foes; i++) fighter(FOE, FOE_DOOR.x, FOE);
+    const rec = createDefaultAIStateRecord(AI);
+    rec.state = 'Invading';
+    rec.invasionStartTick = world.tick;
+    rec.invasionFloor = 21; // a repelled wave already: not the first
+    world.aiState.push(rec);
+    return { world, colony, rec };
+  }
+
+  const NORMAL = 1;
+  const assaultAt = AI_RAID_ASSAULT_RATIO_X100[NORMAL];
+
+  it('the first wave (no repelled wave yet: invasionFloor 0) is always Loot', () => {
+    for (const [army, foes] of [
+      [30, 0],
+      [9, 10],
+      [32, 12],
+      [20, 10],
+    ] as const) {
+      const { world, rec } = setup(army, foes);
+      rec.invasionFloor = 0;
+      expect(aiInvasionRaidType(world, rec), `${army}v${foes}`).toBe(RaidType.Loot);
+    }
+  });
+
+  it('later: Assault when the army is the tier’s ratio of the opponent’s fighters or more (none: Assault)', () => {
+    expect(assaultAt).toBe(300);
+    const at = setup(30, 10);
+    expect(aiInvasionRaidType(at.world, at.rec)).toBe(RaidType.Assault);
+    const below = setup(29, 10);
+    expect(aiInvasionRaidType(below.world, below.rec)).toBe(RaidType.Loot);
+    const none = setup(16, 0);
+    expect(aiInvasionRaidType(none.world, none.rec)).toBe(RaidType.Assault);
+  });
+
+  it('later: Blockade when the opponent has more fighters than the army; not two running', () => {
+    expect(AI_RAID_BLOCKADE_RATIO_X100).toBe(100);
+    const more = setup(9, 10);
+    expect(aiInvasionRaidType(more.world, more.rec)).toBe(RaidType.Blockade);
+    const even = setup(10, 10); // not fewer: a raid
+    expect(aiInvasionRaidType(even.world, even.rec)).toBe(RaidType.Loot);
+    // The last wave a Blockade: this one raids instead.
+    more.rec.lastRaidType = RaidType.Blockade;
+    expect(aiInvasionRaidType(more.world, more.rec)).toBe(RaidType.Loot);
+    // An Assault is not held back by it.
+    const strong = setup(30, 10);
+    strong.rec.lastRaidType = RaidType.Blockade;
+    expect(aiInvasionRaidType(strong.world, strong.rec)).toBe(RaidType.Assault);
+  });
+
+  it('later: a full-strength army lays siege after a repelled Loot raid (raid, siege, raid…)', () => {
+    expect(AI_RAID_SIEGE_ARMY).toBe(32);
+    const full = setup(32, 12); // 2.7x: not an Assault on Normal
+    expect(full.rec.lastRaidType).toBe(RaidType.Loot);
+    expect(aiInvasionRaidType(full.world, full.rec)).toBe(RaidType.Blockade);
+    full.rec.lastRaidType = RaidType.Blockade;
+    expect(aiInvasionRaidType(full.world, full.rec)).toBe(RaidType.Loot);
+    full.rec.lastRaidType = RaidType.Assault;
+    expect(aiInvasionRaidType(full.world, full.rec)).toBe(RaidType.Loot);
+    const short = setup(31, 12);
+    expect(aiInvasionRaidType(short.world, short.rec)).toBe(RaidType.Loot);
+    // The first wave is a Loot raid whatever its size.
+    full.rec.lastRaidType = RaidType.Loot;
+    full.rec.invasionFloor = 0;
+    expect(aiInvasionRaidType(full.world, full.rec)).toBe(RaidType.Loot);
+  });
+
+  it('the Assault ratio is by tier: Easy 4x, Normal 3x, Hard 2.5x', () => {
+    expect([...AI_RAID_ASSAULT_RATIO_X100]).toEqual([400, 300, 250]);
+    const cases: [WorldState['difficulty'], number, number, RaidType][] = [
+      ['Easy', 19, 5, RaidType.Loot],
+      ['Easy', 20, 5, RaidType.Assault],
+      ['Normal', 29, 10, RaidType.Loot],
+      ['Hard', 25, 10, RaidType.Assault],
+      ['Hard', 24, 10, RaidType.Loot],
+    ];
+    for (const [d, army, foes, want] of cases) {
+      const { world, rec } = setup(army, foes, d);
+      expect(aiInvasionRaidType(world, rec), `${d} ${army}v${foes}`).toBe(want);
+    }
+  });
+
+  it('only living fighters count, on both sides (workers on other tasks do not)', () => {
+    const { world, rec } = setup(30, 10);
+    // Ten foe workers that are not fighters: still 3x, still an Assault.
+    for (let i = 0; i < 10; i++) {
+      const id = allocateEntityId(world);
+      initAnt(world.ants, id, {
+        colonyId: FOE,
+        posX: FOE_DOOR.x << FP_SHIFT,
+        posY: 5 << FP_SHIFT,
+        task: AntTask.Foraging,
+        subTask: 0,
+      });
+    }
+    expect(aiInvasionRaidType(world, rec)).toBe(RaidType.Assault);
+    // One AI fighter dead: 29 v 10, no longer 3x.
+    for (let i = 0; i < world.nextEntityId; i++) {
+      if (world.ants.colonyId[i] === AI && world.ants.task[i] === AntTask.Fighting) {
+        world.ants.alive[i] = 0;
+        break;
+      }
+    }
+    expect(aiInvasionRaidType(world, rec)).toBe(RaidType.Loot);
+  });
+
+  it('the cohort commit sends the raid type with the commit and the rally; the sim keeps it', () => {
+    const { world, rec } = setup(30, 5);
+    world.commandQueue.length = 0;
+    runAIController(world, AI);
+    const start = world.commandQueue.find((c) => c.type === 'StartAIOperation');
+    const rally = world.commandQueue.find((c) => c.type === 'SetRallyPoint');
+    expect(start).toEqual(
+      expect.objectContaining({ kind: 'Invasion', raidType: RaidType.Assault }),
+    );
+    expect(rally).toEqual(
+      expect.objectContaining({
+        colonyId: AI,
+        tileX: FOE_DOOR.x,
+        tileY: FOE_DOOR.y,
+        raidType: RaidType.Assault,
+      }),
+    );
+    // Applied, the sim stores it with the rally (the fighters raid as an Assault) and
+    // keeps it for the wave.
+    applyCommands(world, world.commandQueue.splice(0));
+    expect(world.colonies[AI]!.raidType).toBe(RaidType.Assault);
+    expect(world.colonies[AI]!.rallyPoint).toEqual({ tileX: FOE_DOOR.x, tileY: FOE_DOOR.y });
+    expect(rec.operationKind).toBe('Invasion');
+    expect(rec.lastRaidType).toBe(RaidType.Assault);
+  });
+
+  it('a Loot wave sends no raid type at all (its commands are as before #366)', () => {
+    const { world } = setup(20, 10); // 2x: a raid
+    world.commandQueue.length = 0;
+    runAIController(world, AI);
+    const start = world.commandQueue.find((c) => c.type === 'StartAIOperation');
+    const rally = world.commandQueue.find((c) => c.type === 'SetRallyPoint');
+    expect(start).toBeDefined();
+    expect(rally).toBeDefined();
+    expect(start).not.toHaveProperty('raidType');
+    expect(rally).not.toHaveProperty('raidType');
+  });
+
+  it('defensive: a committed invasion whose rally was lost (a hand-edited save) gets its stored type back, not a fresh choice', () => {
+    // A Blockade wave under way whose rally is gone (null);
+    // the situation now reads as an Assault (30 v 5), but the wave stays a Blockade.
+    const { world, colony, rec } = setup(30, 5);
+    rec.operationKind = 'Invasion';
+    rec.operationFighterCount = 20;
+    rec.operationStartFighterCount = 20;
+    rec.invasionRallyTileX = FOE_DOOR.x;
+    rec.invasionRallyTileY = FOE_DOOR.y;
+    rec.lastRaidType = RaidType.Blockade;
+    colony.rallyPoint = null;
+    colony.raidType = RaidType.Loot;
+    expect(aiInvasionRaidType(world, rec)).toBe(RaidType.Assault);
+    world.commandQueue.length = 0;
+    runAIController(world, AI);
+    expect(world.commandQueue.some((c) => c.type === 'StartAIOperation')).toBe(false);
+    expect(world.commandQueue.find((c) => c.type === 'SetRallyPoint')).toEqual(
+      expect.objectContaining({
+        colonyId: AI,
+        tileX: FOE_DOOR.x,
+        tileY: FOE_DOOR.y,
+        raidType: RaidType.Blockade,
+      }),
+    );
+  });
+
+  it('a save round trip gives the same choice (it reads WorldState only, lastRaidType included)', () => {
+    for (const last of [RaidType.Loot, RaidType.Blockade]) {
+      const world = createScenario(7, 'Normal');
+      const rec = world.aiState.find((r) => r.colonyId === ENEMY_COLONY_ID)!;
+      rec.invasionFloor = 21;
+      rec.lastRaidType = last;
+      const loaded = deserializeWorldState(serializeWorldState(world));
+      const rec2 = loaded.aiState.find((r) => r.colonyId === ENEMY_COLONY_ID)!;
+      expect(rec2.lastRaidType).toBe(last);
+      expect(aiInvasionRaidType(loaded, rec2)).toBe(aiInvasionRaidType(world, rec));
     }
   });
 });

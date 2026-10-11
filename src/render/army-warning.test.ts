@@ -7,11 +7,13 @@ import {
   ARMY_REARM_MAX_FIGHTERS,
   ARMY_REARM_QUIET_TICKS,
   ARMY_WARNING_HINT,
+  BLOCKADE_WARNING_HINT,
   INVASION_NEST_MIN_FIGHTERS,
   INVASION_WATCH_TICKS,
   armyWarningLogEntry,
   createArmyWarningState,
   gatheringWarningText,
+  invasionRaidType,
   invasionWarningText,
   marchWarningText,
   markArmyWarningShown,
@@ -28,6 +30,7 @@ import {
   measureEnemyGathering,
 } from './enemy-gathering.js';
 import { createDefaultAIStateRecord } from '../sim/ai-state.js';
+import { RaidType } from '../sim/enums.js';
 import type { SimEvent } from '../sim/telemetry.js';
 import { AI_PROBE_FIGHTER_COUNT, ENEMY_COLONY_ID, PLAYER_COLONY_ID } from '../sim/constants.js';
 import { allocateEntityId, type WorldState } from '../sim/types.js';
@@ -908,6 +911,80 @@ describe('nextArmyWarning — the invasion fallback (#404 review)', () => {
     const s3 = createArmyWarningState();
     noteArmyWarningEvent(s3, start(r.world, { x: 91, y: 64 }), P);
     expect(run(s3, r.world, 1)).toEqual([unnamed]);
+  });
+
+  it('#366: the launch warning says what the invasion means to do, by its raid type', () => {
+    const { world: w, player, enemy, near } = nearDoorWorld();
+    expect(invasionWarningText(player, near)).toBe(EAST);
+    const warnFor = (raidType: RaidType | null): string[] => {
+      enemy.rallyPoint = raidType === null ? null : { tileX: NEAR.x, tileY: NEAR.y };
+      enemy.raidType = raidType ?? RaidType.Loot;
+      const s = createArmyWarningState();
+      noteArmyWarningEvent(s, start(w, NEAR), P);
+      return run(s, w, 1);
+    };
+    expect(warnFor(RaidType.Loot)).toEqual([EAST]);
+    expect(warnFor(RaidType.Deny)).toEqual([EAST]);
+    expect(warnFor(RaidType.Spoil)).toEqual([
+      `An enemy army is marching on your east entrance to spoil your stores. ${HINT}`,
+    ]);
+    expect(warnFor(RaidType.Assault)).toEqual([
+      `An enemy army is marching on your east entrance to kill your queen. ${HINT}`,
+    ]);
+    expect(warnFor(RaidType.Blockade)).toEqual([
+      `An enemy army is marching to blockade your east entrance. ${BLOCKADE_WARNING_HINT}`,
+    ]);
+    // No rally (or a rally off the viewer's doors): the plain warning.
+    expect(warnFor(null)).toEqual([EAST]);
+    enemy.rallyPoint = { tileX: 104, tileY: 64 }; // the enemy's own door
+    enemy.raidType = RaidType.Assault;
+    expect(invasionRaidType(w, E, player)).toBe(RaidType.Loot);
+  });
+
+  it('#366: an owed invasion warning keeps the raid type it was noted with', () => {
+    const { world: w, enemy } = nearDoorWorld();
+    enemy.rallyPoint = { tileX: NEAR.x, tileY: NEAR.y };
+    enemy.raidType = RaidType.Blockade;
+    const s = createArmyWarningState();
+    noteArmyWarningEvent(s, start(w, NEAR), P);
+    // The queue is busy: the warning is owed, not taken.
+    const blockade = `An enemy army is marching to blockade your east entrance. ${BLOCKADE_WARNING_HINT}`;
+    expect(run(s, w, 1, false)).toEqual([blockade]);
+    // The attacker's rally is cleared before the queue drains: still the Blockade text.
+    enemy.rallyPoint = null;
+    enemy.raidType = RaidType.Loot;
+    expect(run(s, w, 1)).toEqual([blockade]);
+  });
+
+  it('#366: the warning reads the attacker’s committed lastRaidType, not a rally that was dropped', () => {
+    const { world: w, enemy } = nearDoorWorld();
+    // The SetRallyPoint behind the commit was dropped by the batch cap: no rally.
+    enemy.rallyPoint = null;
+    enemy.raidType = RaidType.Loot;
+    const rec = createDefaultAIStateRecord(E);
+    rec.lastRaidType = RaidType.Blockade;
+    w.aiState.push(rec);
+    const s = createArmyWarningState();
+    noteArmyWarningEvent(s, start(w, NEAR), P);
+    expect(run(s, w, 1)).toEqual([
+      `An enemy army is marching to blockade your east entrance. ${BLOCKADE_WARNING_HINT}`,
+    ]);
+  });
+
+  it('#366: the raid-type wording keeps the one-door and unnamed forms', () => {
+    const r = raidWorld();
+    const door = r.player.entrances[0]!;
+    expect(invasionWarningText(r.player, door, RaidType.Assault)).toBe(
+      `An enemy army is marching on your entrance to kill your queen. ${HINT}`,
+    );
+    expect(invasionWarningText(r.player, door, RaidType.Blockade)).toBe(
+      `An enemy army is marching to blockade your entrance. ${BLOCKADE_WARNING_HINT}`,
+    );
+    const a = addEntrance(r.world, r.player, 90, 64);
+    addEntrance(r.world, r.player, 96, 64);
+    expect(invasionWarningText(r.player, a, RaidType.Spoil)).toBe(
+      `An enemy army is marching on one of your entrances to spoil your stores. ${HINT}`,
+    );
   });
 
   it('CLNY-08: the enemy as viewer is warned of the player’s invasion of its door', () => {
