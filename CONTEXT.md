@@ -305,7 +305,11 @@ open entrance is as near it. A colony short of that has a pile moved into that r
 the nearest pile of at least 40 pickups that is no colony's own, preferring one nearer
 it than any other colony (its own side of the map) — same pile, same size, so the
 map's pile count and food total do not change; only if there is no such pile is a new
-one made. Piles that spawn during play are placed as before.
+one made. Since **#403 (V76)** each colony's home food (the natural piles within
+`FOOD_BALANCE_RADIUS_TILES` (40) tiles, by surface path, of a colony) is dealt out in
+matched sets, so every colony gets the same piles at the same path distances and
+sizes; a leftover pile goes to the middle of the map, more than 40 tiles from every
+colony. Piles that spawn during play are placed as before.
 _Avoid_: food node, resource, deposit.
 
 **Flow field**:

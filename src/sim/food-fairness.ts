@@ -1,4 +1,5 @@
 // food-fairness.ts — #395 (V69): every colony starts with food of its own near home.
+// It also hosts #403's matched-set balance of the home food (V76): balanceHomeFood, below.
 //
 // The scenario scatter (scenario.ts generateFoodPiles) places FOOD_PILE_COUNT piles
 // at random, so on some maps a colony has no pile anywhere near its entrance, or only
@@ -525,7 +526,10 @@ const BAND_WIDEN_STEPS = 3;
  * Deal the pile in `slot` to colony `homes[h]` at a tile in the set band round `d`:
  * keep it where it is if its tile is in the band, else move it to a tile drawn
  * uniformly (one draw) from those that are, widening the band a tile at a time up to
- * BAND_WIDEN_STEPS. Returns false (no draw, no move) when no tile fits even then.
+ * BAND_WIDEN_STEPS. If no tile fits even then, fall back to a tile drawn uniformly
+ * (one draw) from the valid tiles on colony h's side (every rule but the band) whose
+ * path distance is nearest `d`. Returns false (no draw, no move) only when there is no
+ * valid tile at all; the pile is then not dealt.
  */
 function dealPile(
   world: WorldState,
@@ -566,7 +570,37 @@ function dealPile(
     }
     return true;
   }
-  return false;
+  // No tile in even the widest band: the nearest valid distance to d, any distance.
+  const valid = (x: number, y: number): boolean =>
+    isBalancedTile(world, homes, entrances, lifted, h, x, y, 0, FAR, slot);
+  let bestGap = FAR;
+  let count = 0;
+  for (let y = 0; y < SURFACE_GRID_HEIGHT; y++) {
+    for (let x = 0; x < SURFACE_GRID_WIDTH; x++) {
+      if (!valid(x, y)) continue;
+      const gap = Math.abs(homeDistance(homes[h]!, tileIndex(x, y)) - d);
+      if (gap < bestGap) {
+        bestGap = gap;
+        count = 0;
+      }
+      if (gap === bestGap) count++;
+    }
+  }
+  if (count === 0) return false;
+  let k = rng.nextInt(count);
+  for (let y = 0; y < SURFACE_GRID_HEIGHT; y++) {
+    for (let x = 0; x < SURFACE_GRID_WIDTH; x++) {
+      if (!valid(x, y)) continue;
+      if (Math.abs(homeDistance(homes[h]!, tileIndex(x, y)) - d) !== bestGap) continue;
+      if (k > 0) {
+        k--;
+        continue;
+      }
+      if (!movePile(world, slot, x, y)) throw new Error('balanceHomeFood: fallback move refused');
+      return true;
+    }
+  }
+  throw new Error('balanceHomeFood: fallback pass disagrees');
 }
 
 /**
@@ -658,6 +692,10 @@ export function balanceHomeFood(world: WorldState, rng: Rng): void {
   const lifted = new Set<number>();
   for (const p of pool) lifted.add(p.slot);
 
+  // Fewer piles than colonies: no set can be formed, so nothing is dealt (a leftover
+  // dealt to the middle would take a colony's only near pile away).
+  if (pool.length < n) return;
+
   let next = 0;
   let setIndex = 0;
   while (pool.length - next >= n) {
@@ -691,9 +729,10 @@ export function balanceHomeFood(world: WorldState, rng: Rng): void {
       }
       taken[pick] = 1;
       const slot = set[pick]!.slot;
-      dealPile(world, homes, entrances, lifted, rng, h, slot, d);
+      const dealt = dealPile(world, homes, entrances, lifted, rng, h, slot, d);
       lifted.delete(slot);
-      resizePile(world, slot, size * FOOD_PICKUP_AMOUNT);
+      // A pile that found no tile at all stays where it is, at its own size.
+      if (dealt) resizePile(world, slot, size * FOOD_PICKUP_AMOUNT);
     }
     setIndex++;
   }
