@@ -4315,7 +4315,7 @@ export class UIScene extends Phaser.Scene {
       // assistive tech cannot see at all — to a screen reader this input would
       // otherwise be an unlabelled box asking for an email address. Reuse the
       // same string, which already carries both the purpose limitation and the
-      // 90-day retention, so the accessible name cannot drift from the drawn
+      // 1-year retention, so the accessible name cannot drift from the drawn
       // one. aria-label rather than aria-describedby: one attribute, no extra
       // DOM node and no lifecycle to tear down.
       el.setAttribute('aria-label', SURVEY_EMAIL_LABEL);
