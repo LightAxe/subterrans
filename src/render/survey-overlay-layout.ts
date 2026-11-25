@@ -96,7 +96,7 @@ export const SURVEY_EMAIL_INPUT_Y = SURVEY_EMAIL_LABEL_Y + 14;
  *  {@link SURVEY_CONSENT_DISCLOSURE}: the purpose limitation is a privacy
  *  promise, so it changes only via this module. */
 export const SURVEY_EMAIL_LABEL =
-  'Email (optional) — only used to reply about this report; deleted after 90 days';
+  'Email (optional) — only used to reply about this report; deleted after 1 year';
 
 /** Email input rect — a single-line affordance. The DOM <input type="email">
  *  is positioned over this rect at runtime by UIScene, exactly the way the

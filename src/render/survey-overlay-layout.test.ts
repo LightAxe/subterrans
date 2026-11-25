@@ -177,9 +177,10 @@ describe('optional email row — issue #303', () => {
     // "optional" and the follow-up-only purpose are the promise being made.
     expect(SURVEY_EMAIL_LABEL.toLowerCase()).toContain('optional');
     expect(SURVEY_EMAIL_LABEL.toLowerCase()).toMatch(/follow up|follow-up|reply/);
-    // ...and the retention promise (ADR 0013 amendment 2026-09-20: the address is
-    // deleted with the rest of the submission by the 90-day lifecycle rule).
-    expect(SURVEY_EMAIL_LABEL).toMatch(/90 days/);
+    // ...and the retention promise (ADR 0013 amendments 2026-09-20 and 2026-11-24:
+    // the address is deleted with the rest of the submission by the 365-day
+    // lifecycle rule on the playtrace bucket).
+    expect(SURVEY_EMAIL_LABEL).toMatch(/1 year/);
   });
 });
 
